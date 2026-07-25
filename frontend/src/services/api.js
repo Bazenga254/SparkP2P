@@ -217,6 +217,13 @@ export const getCbAutoWithdraw = () => api.get('/traders/cb-auto-withdraw');
 export const setCbAutoWithdraw = (enabled, threshold) => api.post('/traders/cb-auto-withdraw', { enabled, threshold });
 // Choice Bank account statement — generate (returns a job) then poll for the URL.
 export const generateChoiceStatement = (start, end, file_type = 'pdf') => api.post('/traders/choice/statement/generate', { start, end, file_type });
+// Check whether a payment reached the merchant's Choice account (live bank query).
+export const checkChoiceTransaction = ({ ref = '', amount } = {}) => {
+  const p = new URLSearchParams();
+  if (ref) p.set('ref', ref);
+  if (amount) p.set('amount', amount);
+  return api.get(`/traders/choice/check-transaction?${p.toString()}`);
+};
 export const choiceStatementStatus = (jobId) => api.get(`/traders/choice/statement/status?job_id=${encodeURIComponent(jobId)}`);
 export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });

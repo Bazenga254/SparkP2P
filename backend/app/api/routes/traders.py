@@ -2938,6 +2938,25 @@ async def choice_statement_generate(
     }
 
 
+@router.get("/choice/check-transaction")
+async def choice_check_transaction(
+    ref: str = "",
+    amount: float | None = None,
+    days: int = 30,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Look up a transaction on the merchant's Choice account by M-Pesa code / bank
+    reference / txId (and/or amount) — querying Choice live, so it finds a payment
+    even when the Transactions page hasn't listed it yet (webhook lag)."""
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked.")
+    if not (ref or amount):
+        raise HTTPException(status_code=400, detail="Enter an M-Pesa code, bank reference, or amount to check.")
+    from app.services.choice_bank.lookup import find_transaction
+    return await find_transaction(db, trader, query=ref.strip(), amount=amount, days=days)
+
+
 @router.get("/choice/statement/status")
 async def choice_statement_status(
     job_id: str,

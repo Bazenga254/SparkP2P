@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
@@ -905,6 +905,12 @@ export default function Dashboard() {
   const [stmtUrl, setStmtUrl] = useState('');
   const [stmtPwHint, setStmtPwHint] = useState('');
   const stmtTimer = useRef(null);
+  // Check-a-payment (did my money arrive?)
+  const [showCheckModal, setShowCheckModal] = useState(false);
+  const [checkRef, setCheckRef] = useState('');
+  const [checkAmount, setCheckAmount] = useState('');
+  const [checkLoading, setCheckLoading] = useState(false);
+  const [checkResult, setCheckResult] = useState(null);   // null | {found, ...}
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
@@ -2865,8 +2871,16 @@ export default function Dashboard() {
               ))}
               {profile?.choice_account_id && (
                 <button
+                  onClick={() => { setCheckResult(null); setCheckRef(''); setCheckAmount(''); setShowCheckModal(true); }}
+                  style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid rgba(59,130,246,0.4)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                >
+                  🔎 Check payment
+                </button>
+              )}
+              {profile?.choice_account_id && (
+                <button
                   onClick={() => { setStmtState(''); setStmtMsg(''); setStmtUrl(''); setShowStmtModal(true); }}
-                  style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                  style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
                 >
                   📄 Statement
                 </button>
@@ -4828,6 +4842,59 @@ export default function Dashboard() {
       )}
 
       {/* Choice Bank → Bank Withdrawal Modal */}
+      {/* Check a payment — did my money arrive? (live bank query) */}
+      {showCheckModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setShowCheckModal(false)}>
+          <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 26, width: 380, maxWidth: '92vw', border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>🔎 Check a payment</h3>
+              <button onClick={() => setShowCheckModal(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
+            </div>
+            <p style={{ color: '#9ca3af', fontSize: 12, margin: '0 0 16px', lineHeight: 1.5 }}>
+              Money arrived but not on your Transactions page yet? Check it live against Choice Bank. The <b style={{ color: '#e5e7eb' }}>amount</b> is the most reliable — the bank doesn't store the buyer's M-Pesa code.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 5 }}>Amount (KES)</label>
+            <input type="number" value={checkAmount} onChange={e => setCheckAmount(e.target.value)} placeholder="e.g. 13056"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box', marginBottom: 12 }} />
+            <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 5 }}>or M-Pesa code / bank reference</label>
+            <input type="text" value={checkRef} onChange={e => setCheckRef(e.target.value.toUpperCase())} placeholder="e.g. UGP5N0ICZ3"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box', marginBottom: 14 }} />
+
+            {checkResult && (
+              checkResult.found ? (
+                <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 10, padding: '12px 14px', marginBottom: 14, fontSize: 13 }}>
+                  <div style={{ color: '#10b981', fontWeight: 700, marginBottom: 6 }}>✅ Received</div>
+                  <div style={{ color: '#e5e7eb' }}>KES {Number(checkResult.amount).toLocaleString()}</div>
+                  {checkResult.counterparty && <div style={{ color: '#9ca3af', fontSize: 12 }}>From: {checkResult.counterparty}</div>}
+                  {checkResult.time && <div style={{ color: '#9ca3af', fontSize: 12 }}>{new Date(checkResult.time).toLocaleString('en-KE')}</div>}
+                </div>
+              ) : (
+                <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 10, padding: '12px 14px', marginBottom: 14, fontSize: 13, color: '#f59e0b', lineHeight: 1.5 }}>
+                  Not on your Choice Bank account yet. If you paid recently it may still be settling — try again in a few minutes. If it still doesn't show, tap the chat to reach support.
+                </div>
+              )
+            )}
+
+            <button
+              disabled={checkLoading || (!checkAmount && !checkRef)}
+              onClick={async () => {
+                setCheckLoading(true); setCheckResult(null);
+                try {
+                  const r = await checkChoiceTransaction({ ref: checkRef.trim(), amount: checkAmount ? Number(checkAmount) : undefined });
+                  setCheckResult(r.data);
+                } catch (e) { setCheckResult({ found: false }); }
+                setCheckLoading(false);
+              }}
+              style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: (checkAmount || checkRef) ? 'linear-gradient(135deg,#3b82f6,#2563eb)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: (checkAmount || checkRef) ? 'pointer' : 'not-allowed' }}
+            >
+              {checkLoading ? 'Checking the bank…' : 'Check now'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Choice Bank statement generation */}
       {showStmtModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}

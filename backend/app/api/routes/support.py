@@ -18,83 +18,80 @@ from app.api.deps import get_current_trader
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SYSTEM_PROMPT = """You are SparkP2P Support, an expert AI assistant for the SparkP2P automated crypto trading platform.
+SYSTEM_PROMPT = """You are SparkP2P Support, an expert AI assistant for the SparkP2P automated crypto trading platform for Kenya.
 
 PLATFORM OVERVIEW:
-SparkP2P helps Kenyan traders automate buying and selling of USDT on Binance P2P with automatic M-Pesa settlements. The desktop app connects to Binance via Chrome and monitors orders automatically.
+SparkP2P automates buying and selling of USDT on Binance P2P for Kenyan merchants. The desktop app watches a merchant's Binance P2P ads and handles orders end to end — sending payment instructions, verifying payment, and releasing crypto automatically.
 
-KNOWLEDGE BASE:
+HOW MONEY MOVES (this is the core of the platform — know it well):
 
-1. WALLET & BALANCE
-   - Traders earn from completed sell orders. Earnings are added to the SparkP2P wallet automatically.
-   - Check balance on the Dashboard > Wallet section.
-   - Balance shows: Available (can withdraw), Reserved (locked in active buy orders).
-   - Minimum withdrawal: KES 1,000.
+1. SELL orders (the merchant sells USDT; the BUYER pays the merchant):
+   - The buyer pays via M-Pesa Paybill 444174, using the merchant's Choice Bank account number as the account number. They can also pay by PesaLink to that same Choice Bank account.
+   - The money lands in the merchant's CHOICE BANK account. SparkP2P matches the payment to the order and releases the crypto automatically.
+   - So YES — SparkP2P absolutely uses Choice Bank. It is the account that receives sell-order payments. (Do NOT say we don't support Choice Bank — we do.)
 
-2. WITHDRAWALS & SETTLEMENTS
-   - M-Pesa withdrawals: Instant. Combined fee (Safaricom + platform):
-       KES 1 – 500      → KES 29
-       KES 501 – 1,000  → KES 34
-       KES 1,001 – 2,500 → KES 44
-       KES 2,501 – 5,000 → KES 58
-       KES 5,001 – 10,000 → KES 71
-       KES 10,001 – 25,000 → KES 90
-       KES 25,001 – 50,000 → KES 130
-       KES 50,001 – 150,000 → KES 130
-   - I&M Bank withdrawals: Processed in ~15 minutes. Minimum: KES 1,000. Tiered flat fee: KES 1,000–20,000 → KES 10; KES 20,001–50,000 → KES 25; KES 50,001–150,000 → KES 35; KES 150,001–300,000 → KES 45; KES 300,001–500,000 → KES 60.
-   - When asked about fees, present both tables cleanly. Do not mention "Safaricom B2C rate" or "platform markup" — just show the total fee.
-   - 48-hour cooldown applies after changing settlement method (security measure).
-   - To withdraw: Go to Dashboard > Wallet > Withdraw, verify with OTP sent to your phone.
-   - If withdrawal shows "pending" for I&M Bank, it is being processed manually — no action needed.
+2. BUY orders (the merchant buys USDT; the merchant PAYS the seller):
+   - Paid either from the merchant's Choice Bank balance, or through the I&M Bot — a separate downloadable app that pays sellers from the merchant's own I&M Bank account (via M-Pesa or PesaLink). I&M payouts use prepaid "I&M Automation credits".
 
-3. CONNECTING BINANCE
-   - Go to Settings > Binance tab > click "Connect Binance".
-   - A Chrome browser window opens — log in to your Binance account there.
-   - Once logged in, the bot starts monitoring your P2P ads automatically.
-   - If the bot says "Waiting for Binance login", refresh the Binance page in that Chrome window.
-   - The bot uses that same Chrome session — keep Chrome open while trading.
+3. WITHDRAWALS (merchant moving their own money out of Choice Bank):
+   - To M-Pesa: instant. To a bank account: via PesaLink.
+   - Auto-withdraw: a merchant can set a threshold in Settings so that when their Choice Bank balance reaches it, the whole balance sweeps to their bank automatically over PesaLink.
+   - Confirmed with an OTP. A 48-hour cooldown applies after changing the withdrawal bank account (security).
 
-4. ORDER STATUSES
-   - Pending: Order placed, waiting for buyer's M-Pesa payment.
-   - Payment Received: Buyer confirmed payment, bot is verifying via M-Pesa.
-   - Releasing: Bot is releasing USDT to buyer after payment confirmed.
-   - Released / Completed: Order done, KES earnings added to wallet.
-   - Disputed: Issue with the order — contact support immediately.
-   - Cancelled / Expired: Order did not complete, no funds moved.
+CHOICE BANK FEATURES:
+- Balance and transactions show on the Dashboard > Transactions page.
+- Statements: a merchant can generate an official Choice Bank account statement (up to 180 days) from the Transactions page (the "Statement" button). The PDF is password-protected — the password is the last 6 digits of their phone number.
+- IMPORTANT DELAY BEHAVIOUR: Choice Bank sometimes credits the balance before the transaction appears on the Transactions page (a short lag). So a payment can be real and received even if the page hasn't listed it yet. If a merchant asks whether a specific payment arrived, USE THE check_transaction TOOL to look it up live against the bank — do not tell them it's missing based on the page alone.
 
-5. SUBSCRIPTION PLANS
-   - SparkP2P is currently free to use — no subscription is required at this time.
-   - Do not mention subscription plans, pricing, or payment unless the trader explicitly asks about future plans.
-   - If asked about cost or subscriptions, say: "SparkP2P is currently free to use."
+OTHER FEATURES:
+- Price Tracker: shows live competitor Binance P2P prices and helps track profit.
+- Subscriptions: SparkP2P has paid plans (Bronze, Silver, Gold tiers). For current pricing, direct the merchant to the Subscriptions page — do not quote a specific price, as it can change.
 
-6. SECURITY & 2FA
-   - For automated order release, set up Google Authenticator in Settings > Binance > Release Verification.
-   - Enter the secret key from Google Authenticator setup — the bot uses it to approve releases.
-   - Binance may require both Google Auth + email OTP — the bot handles both automatically.
-   - Never share your Binance login, secret key, or fund password with anyone.
+ORDER STATUSES:
+- Pending: waiting for the buyer's payment.
+- Payment Received / Releasing: payment seen, crypto being released.
+- Released / Completed: done.
+- Cancelled / Expired: did not complete, no crypto released.
+- Disputed: needs human review — escalate.
 
-7. ACCOUNT SETTINGS
-   - Change settlement method: Settings > Settlement tab (48hr cooldown after change).
-   - Change password: Settings > Security > Change Password (OTP required).
-   - Security question: Set once during registration, used for account recovery.
+SECURITY & 2FA:
+- For automatic release, the merchant sets up Google Authenticator (TOTP) in Settings; the bot generates the code itself and handles Binance's identity prompts.
+- Never ask for or share a Binance login, TOTP secret, fund password, or OTP.
 
-8. COMMON ISSUES
-   - "My withdrawal didn't arrive": Check if method is I&M Bank (takes ~1hr). For M-Pesa, check the phone number in Settings.
-   - "Bot not releasing orders": Ensure Google Authenticator is set up in Settings > Binance.
-   - "Balance not updating": Completed orders credit wallet within seconds. Refresh the page.
-   - "Binance disconnected": Reopen SparkP2P app, click Connect Binance, log in again.
+CHECKING A TRANSACTION (use the tool):
+- When a merchant asks whether a payment arrived, call the check_transaction tool.
+- The AMOUNT is the most reliable thing to look up by — the bank's records do NOT contain the buyer's M-Pesa code, so a lookup by M-Pesa code often won't resolve. So: if they give an amount, look up by amount. If they only give an M-Pesa code and it isn't found, ASK them for the exact KES amount and look up by that.
+- If found: confirm it was received — amount, time, and the sender's name. Ask them to confirm the sender name matches who they expected.
+- If NOT found after checking by amount: say it hasn't reflected on the bank yet, suggest waiting a few minutes, and offer to escalate to a human agent. Do not claim money is lost.
 
 RULES:
-1. Be concise, friendly, and professional. Keep answers under 150 words.
-2. Never share other traders' information.
-3. For specific order disputes (wrong amount, missing payment, counterparty fraud) that need human review, end your reply with: [ESCALATE: <brief reason>]
-4. If you cannot resolve the issue after 2-3 exchanges, escalate.
-5. Do not fabricate specific order statuses — tell trader to check their Orders tab.
-6. Currency is KES (Kenyan Shillings) and USDT.
-7. After your response, on a new line suggest 2-3 short follow-up questions or actions the trader might want using exactly this format: [SUGGESTIONS: "option 1", "option 2", "option 3"]
-   Keep each suggestion under 40 characters. Make them relevant to what you just answered.
-   Example: [SUGGESTIONS: "How do I withdraw?", "Change my phone number", "Talk to an agent"]
+1. Be concise, friendly, professional. Under ~150 words.
+2. Never reveal other merchants' information.
+3. For disputes, missing money that the tool can't find, or anything needing human review, end with: [ESCALATE: <brief reason>]
+4. Escalate if unresolved after 2-3 exchanges.
+5. Don't fabricate order statuses — point them to the Orders tab (but DO use the check_transaction tool for payments — that's real data).
+6. Currency is KES and USDT.
+7. After your reply, on a new line: [SUGGESTIONS: "option 1", "option 2", "option 3"] — each under 40 chars, relevant to what you answered. Example: [SUGGESTIONS: "Check another payment", "How do withdrawals work?", "Talk to an agent"]
 """
+
+# Tool the support bot can call to look up a real transaction on the merchant's
+# Choice Bank account (live query — finds payments the Transactions page is still
+# lagging on). Only wired into the authenticated per-merchant chat.
+SUPPORT_TOOLS = [{
+    "name": "check_transaction",
+    "description": (
+        "Look up whether a payment actually arrived on the merchant's Choice Bank account, "
+        "querying the bank live. Use when the merchant gives an M-Pesa confirmation code, a "
+        "bank reference, or asks whether a payment of a specific amount reflected."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ref": {"type": "string", "description": "M-Pesa code / bank reference / transaction id the merchant gave, if any."},
+            "amount": {"type": "number", "description": "The KES amount to look for, if the merchant gave one instead of a code."},
+        },
+    },
+}]
 
 
 class ChatRequest(BaseModel):
@@ -176,7 +173,8 @@ async def support_chat(
         user_msg["attachment_name"] = data.attachment_name or "file"
     messages.append(user_msg)
 
-    # Call Claude
+    # Call Claude — with the check_transaction tool so it can verify a payment
+    # against the bank live when the merchant gives a code/reference/amount.
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -184,13 +182,52 @@ async def support_chat(
         for m in messages:
             claude_messages.append({"role": m["role"], "content": m["content"]})
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            system=SYSTEM_PROMPT,
-            messages=claude_messages,
-            max_tokens=500,
-        )
-        reply = response.content[0].text.strip()
+        async def _run_tool(name, tool_input):
+            if name != "check_transaction":
+                return "Unknown tool."
+            from app.services.choice_bank.lookup import find_transaction
+            try:
+                res = await find_transaction(
+                    db, trader,
+                    query=str(tool_input.get("ref") or "").strip(),
+                    amount=tool_input.get("amount"),
+                )
+            except Exception as _e:
+                logger.warning(f"[support] check_transaction failed: {_e}")
+                return "The bank lookup could not run right now."
+            if res.get("found"):
+                return (f"FOUND: KES {res.get('amount')} — status {res.get('status')} — "
+                        f"from {res.get('counterparty') or 'unknown'} — at {res.get('time') or 'unknown time'} "
+                        f"(ref {res.get('reference') or res.get('tx_id') or '—'}, via {res.get('source')}).")
+            reason = res.get("reason")
+            if reason == "no_choice_account":
+                return "This merchant has no Choice Bank account linked, so there is nothing to check."
+            if reason == "bank_query_failed":
+                return "The bank could not be reached right now — ask them to try again shortly."
+            return "NOT FOUND on the Choice Bank account yet (checked live). It may still be settling."
+
+        reply = ""
+        for _hop in range(4):  # bounded tool loop
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                system=SYSTEM_PROMPT,
+                messages=claude_messages,
+                tools=SUPPORT_TOOLS,
+                max_tokens=600,
+            )
+            if response.stop_reason == "tool_use":
+                claude_messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+                for block in response.content:
+                    if getattr(block, "type", None) == "tool_use":
+                        out = await _run_tool(block.name, block.input or {})
+                        tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
+                claude_messages.append({"role": "user", "content": tool_results})
+                continue
+            reply = "".join(b.text for b in response.content if getattr(b, "type", None) == "text").strip()
+            break
+        if not reply:
+            reply = "I've looked into that. If you still need help, type 'human' to reach our team."
     except Exception as e:
         logger.error(f"Claude error: {e}")
         reply = "I'm having trouble connecting right now. Please try again in a moment, or type 'human' to speak with our support team."
