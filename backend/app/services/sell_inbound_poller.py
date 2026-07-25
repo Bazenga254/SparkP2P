@@ -11,6 +11,7 @@ prevents double-recording.
 """
 import asyncio
 import logging
+from datetime import datetime, timezone
 from sqlalchemy import select, func
 
 from app.core.database import async_session
@@ -21,6 +22,10 @@ from app.models.trader import Trader
 logger = logging.getLogger(__name__)
 
 _CHECK_EVERY = 30  # seconds
+# If a sell order has waited this long with no matching payment, hand it to the
+# merchant: alert on Telegram and flip it to DISPUTED (manual mode) so it stops
+# blocking and a person confirms with the buyer. (Agreed formula.)
+_MATCH_TIMEOUT_S = 120
 
 # Choice txTypes that are OUTBOUND (money leaving) — never an incoming customer payment.
 _OUTBOUND_TX_TYPES = {
@@ -97,31 +102,75 @@ async def sell_inbound_poller():
                             continue
 
                         sender_name = tx.get("oppoAccountName") or ""
-                        amt_int = int(amount)
 
-                        # amount-match to a pending sell order for this trader
-                        matched = next((o for o in orders if o.status == OrderStatus.PENDING and int(o.fiat_amount) == amt_int), None)
-                        if matched is None:  # remaining-balance match (completes a partial)
-                            for o in orders:
-                                if o.status != OrderStatus.PENDING:
-                                    continue
-                                if int(o.fiat_amount) - int(await _received_for_order(db, o.id)) == amt_int:
-                                    matched = o
-                                    break
-                        if matched is None:
-                            continue  # no amount-appropriate order — likely a deposit or unrelated credit
+                        # Match to the RIGHT order by AMOUNT *and* payer NAME (the agreed
+                        # second factor). A wrong-name same-amount order is skipped, not
+                        # forced. Unknown Binance name falls back to amount-only (fail-safe).
+                        from app.services.sell_matching import pick_order
+                        awaiting = [o for o in orders if o.status == OrderStatus.PENDING]
+                        recv = {o.id: await _received_for_order(db, o.id) for o in awaiting}
+                        res = pick_order(awaiting, amount, sender_name, recv)
+                        if res.order is None:
+                            # Real credit, but not for any awaiting order (wrong name, or a
+                            # deposit/unrelated). The reconcile poller records it for the
+                            # Transactions page; we just don't release crypto on it.
+                            continue
 
+                        matched = res.order
                         db.add(Payment(
                             order_id=matched.id, trader_id=tid,
                             direction=PaymentDirection.INBOUND,
                             mpesa_transaction_id=tx_id, transaction_type="CHOICE_INBOUND",
                             amount=amount, sender_name=sender_name,
+                            mpesa_receipt_number=None,
                             status=PaymentStatus.COMPLETED,
                         ))
                         await db.commit()
                         logger.warning(
-                            f"[SellInbound] ACTIVE-DETECTED KES {amount:.0f} from {sender_name!r} → "
+                            f"[SellInbound] MATCHED ({res.verdict}) KES {amount:.0f} from {sender_name!r} → "
                             f"order {matched.binance_order_number} (txId {tx_id}) — recorded; release flow will proceed."
                         )
+
+                # ── Timeout → manual mode ──────────────────────────────────
+                # A sell order still waiting for its payment after the timeout,
+                # with nothing received, is handed to the merchant: alert + flip
+                # to DISPUTED so it stops blocking and a person confirms.
+                await _timeout_unpaid_orders(db)
         except Exception as e:
             logger.warning(f"[SellInbound] loop error: {e}")
+
+
+async def _timeout_unpaid_orders(db):
+    from app.api.routes.telegram import notify_trader
+    now = datetime.now(timezone.utc)
+    pend = (await db.execute(select(Order).where(
+        Order.side == OrderSide.SELL, Order.status == OrderStatus.PENDING,
+    ))).scalars().all()
+    for o in pend:
+        created = o.created_at
+        if not created:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if (now - created).total_seconds() < _MATCH_TIMEOUT_S:
+            continue
+        # Any money received against it? If so it's mid-payment — leave it.
+        if (await _received_for_order(db, o.id)) > 0:
+            continue
+        o.status = OrderStatus.DISPUTED          # manual mode (stops auto-matching it)
+        await db.commit()
+        try:
+            trader = (await db.execute(select(Trader).where(Trader.id == o.trader_id))).scalar_one_or_none()
+            if trader:
+                await notify_trader(trader,
+                    "⏱️ <b>Payment not found — please confirm with the buyer</b>\n\n"
+                    f"<b>Order:</b> {o.binance_order_number}\n"
+                    f"<b>Amount:</b> KES {int(o.fiat_amount or 0):,}\n"
+                    f"<b>Buyer:</b> {o.counterparty_name or '—'}\n\n"
+                    "We could not find a matching payment for this order within 2 minutes. "
+                    "It has moved to manual mode — check your Choice Bank account and, if the "
+                    "payment is there, release the crypto manually. If not, wait for the buyer or cancel."
+                )
+        except Exception as _e:
+            logger.warning(f"[SellInbound] timeout notify failed for order {o.id}: {_e}")
+        logger.warning(f"[SellInbound] TIMEOUT order {o.binance_order_number} → DISPUTED (manual mode)")

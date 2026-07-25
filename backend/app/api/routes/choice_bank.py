@@ -308,38 +308,26 @@ async def _handle_transaction_result(params: dict, raw: dict):
             ).order_by(Order.created_at.desc())
         )
         _pending = _pend_res.scalars().all()
-        _amt_int = int(amount)
-        order = None
-        # 1) exact full-amount match (fresh full payment)
+        # Match by AMOUNT *and* payer NAME (agreed formula). Same amount but a
+        # different name means the payment belongs to a DIFFERENT order — never
+        # force it onto the wrong one. Unknown Binance name falls back to
+        # amount-only (fail-safe). Shared with the active poller.
+        from app.services.sell_matching import pick_order
+        _recv_map = {}
         for _o in _pending:
-            if int(_o.fiat_amount) == _amt_int:
-                order = _o
-                break
-        # 2) exact remaining-balance match (payment completes a partially-paid order)
-        if order is None:
-            for _o in _pending:
-                _recv = (await db.execute(
-                    select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                        Payment.order_id == _o.id,
-                        Payment.direction == PaymentDirection.INBOUND,
-                        Payment.status == PaymentStatus.COMPLETED,
-                        Payment.transaction_type == "CHOICE_INBOUND",
-                    )
-                )).scalar() or 0
-                if int(_o.fiat_amount) - int(_recv) == _amt_int:
-                    order = _o
-                    break
-        # 3) partial toward an order the payment fits within (amount <= order total); oldest first
-        if order is None:
-            _fits = sorted([_o for _o in _pending if _amt_int <= int(_o.fiat_amount) + 5],
-                           key=lambda o: o.created_at)
-            if _fits:
-                order = _fits[0]
-        # If nothing matches by amount, treat as UNMATCHED (below) rather than force-matching a
-        # wrong-amount order — that avoids the discard-as-overpayment bug entirely.
+            _recv_map[_o.id] = (await db.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                    Payment.order_id == _o.id,
+                    Payment.direction == PaymentDirection.INBOUND,
+                    Payment.status == PaymentStatus.COMPLETED,
+                    Payment.transaction_type == "CHOICE_INBOUND",
+                )
+            )).scalar() or 0
+        _mr = pick_order(_pending, amount, sender_name, _recv_map)
+        order = _mr.order
         if order:
             logger.info(f"[ChoiceBank] Matched inbound KES {amount:.0f} → order {order.binance_order_number} "
-                        f"(order total KES {order.fiat_amount:.0f}) by amount")
+                        f"(order total KES {order.fiat_amount:.0f}) by amount+name [{_mr.verdict}]")
 
         if not order:
             logger.warning(
