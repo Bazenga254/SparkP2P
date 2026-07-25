@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
@@ -894,6 +894,17 @@ export default function Dashboard() {
   const [cbWithdrawBank, setCbWithdrawBank] = useState(null);
   const [allTxns, setAllTxns] = useState([]);
   const [allTxnsLoading, setAllTxnsLoading] = useState(false);
+  // Choice Bank statement generation
+  const [showStmtModal, setShowStmtModal] = useState(false);
+  const stmtToday = new Date().toISOString().slice(0, 10);
+  const stmt90 = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
+  const [stmtStart, setStmtStart] = useState(stmt90);
+  const [stmtEnd, setStmtEnd] = useState(stmtToday);
+  const [stmtState, setStmtState] = useState('');   // '' | building | ready | error
+  const [stmtMsg, setStmtMsg] = useState('');
+  const [stmtUrl, setStmtUrl] = useState('');
+  const [stmtPwHint, setStmtPwHint] = useState('');
+  const stmtTimer = useRef(null);
   const [expandedWithdrawals, setExpandedWithdrawals] = useState({});
   const [depositPage, setDepositPage] = useState(1);
   const [withdrawalPage, setWithdrawalPage] = useState(1);
@@ -2841,10 +2852,6 @@ export default function Dashboard() {
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Withdrawn</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#f59e0b' }}>{fmt(wdTotal)}</div>
                   </div>
-                  <div style={{ flex: 1, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 12, padding: '14px 18px' }}>
-                    <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Net</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: (inTotal - outTotal) >= 0 ? '#10b981' : '#ef4444' }}>{fmt(inTotal - outTotal)}</div>
-                  </div>
                 </div>
               );
             })()}
@@ -2856,9 +2863,17 @@ export default function Dashboard() {
                   {l}
                 </button>
               ))}
+              {profile?.choice_account_id && (
+                <button
+                  onClick={() => { setStmtState(''); setStmtMsg(''); setStmtUrl(''); setShowStmtModal(true); }}
+                  style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                >
+                  📄 Statement
+                </button>
+              )}
               <button
                 onClick={() => { setAllTxnsLoading(true); getMyTransactions(100).then(r => { if (r.data) setAllTxns(r.data); }).catch(() => {}).finally(() => setAllTxnsLoading(false)); }}
-                style={{ marginLeft: 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                style={{ marginLeft: profile?.choice_account_id ? 0 : 'auto', padding: '6px 14px', borderRadius: 20, border: '1px solid var(--border)', background: 'transparent', color: '#6b7280', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
               >
                 <RefreshCw size={12} className={allTxnsLoading ? 'spinning' : ''} /> Refresh
               </button>
@@ -4813,6 +4828,95 @@ export default function Dashboard() {
       )}
 
       {/* Choice Bank → Bank Withdrawal Modal */}
+      {/* Choice Bank statement generation */}
+      {showStmtModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { if (stmtTimer.current) clearInterval(stmtTimer.current); setShowStmtModal(false); }}>
+          <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 26, width: 380, maxWidth: '92vw', border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>📄 Choice Bank Statement</h3>
+              <button onClick={() => { if (stmtTimer.current) clearInterval(stmtTimer.current); setShowStmtModal(false); }} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
+            </div>
+            <p style={{ color: '#9ca3af', fontSize: 12, margin: '0 0 16px', lineHeight: 1.5 }}>
+              Generate an official Choice Bank account statement for a period (up to 180 days).
+            </p>
+
+            {stmtState !== 'ready' && (
+              <>
+                <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 5 }}>From</label>
+                    <input type="date" value={stmtStart} max={stmtEnd} onChange={e => setStmtStart(e.target.value)}
+                      style={{ width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ display: 'block', fontSize: 11, color: '#6b7280', marginBottom: 5 }}>To</label>
+                    <input type="date" value={stmtEnd} min={stmtStart} max={stmtToday} onChange={e => setStmtEnd(e.target.value)}
+                      style={{ width: '100%', padding: '9px 10px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, boxSizing: 'border-box' }} />
+                  </div>
+                </div>
+
+                {stmtMsg && (
+                  <p style={{ color: stmtState === 'error' ? '#ef4444' : '#9ca3af', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>{stmtMsg}</p>
+                )}
+
+                <button
+                  disabled={stmtState === 'building' || !stmtStart || !stmtEnd}
+                  onClick={async () => {
+                    setStmtState('building'); setStmtUrl(''); setStmtMsg('Requesting your statement from Choice Bank…');
+                    try {
+                      const r = await generateChoiceStatement(stmtStart, stmtEnd, 'pdf');
+                      const jobId = r.data.job_id;
+                      setStmtPwHint(r.data.password_hint || '');
+                      setStmtMsg('Choice Bank is generating your statement. This can take a few minutes — keep this open…');
+                      let tries = 0;
+                      if (stmtTimer.current) clearInterval(stmtTimer.current);
+                      stmtTimer.current = setInterval(async () => {
+                        tries++;
+                        try {
+                          const s = await choiceStatementStatus(jobId);
+                          if (s.data.status === 1 && s.data.url) {
+                            clearInterval(stmtTimer.current);
+                            setStmtUrl(s.data.url); setStmtState('ready');
+                            setStmtMsg('');
+                          } else if (tries >= 60) {   // ~10 min at 10s
+                            clearInterval(stmtTimer.current);
+                            setStmtState('error');
+                            setStmtMsg('Still generating after 10 minutes — please try again shortly.');
+                          }
+                        } catch (e) { /* keep polling through transient errors */ }
+                      }, 10000);
+                    } catch (e) {
+                      setStmtState('error');
+                      setStmtMsg(e.response?.data?.detail || 'Could not start the statement.');
+                    }
+                  }}
+                  style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: stmtState === 'building' ? '#374151' : 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#1a1206', fontWeight: 700, fontSize: 14, cursor: stmtState === 'building' ? 'wait' : 'pointer' }}
+                >
+                  {stmtState === 'building' ? '⏳ Generating…' : 'Generate statement'}
+                </button>
+              </>
+            )}
+
+            {stmtState === 'ready' && (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 40, marginBottom: 8 }}>✅</div>
+                <p style={{ color: '#10b981', fontWeight: 700, marginBottom: 6 }}>Your statement is ready</p>
+                <a href={stmtUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ display: 'block', padding: '11px 0', borderRadius: 8, background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 14, textDecoration: 'none', marginBottom: 12 }}>
+                  ⬇ Download statement (PDF)
+                </a>
+                {stmtPwHint && (
+                  <p style={{ color: '#f59e0b', fontSize: 12, lineHeight: 1.5, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: '10px 12px' }}>
+                    🔒 {stmtPwHint}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {showCbWithdrawModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
           <div style={{ background: '#1f2937', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>

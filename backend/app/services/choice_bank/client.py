@@ -313,6 +313,30 @@ async def get_transaction_result(tx_id: str) -> dict:
     return await _post("/query/getTransResult", {"txId": tx_id})
 
 
+# ── Account Statements ────────────────────────────────────────────────────────
+
+async def apply_account_statement(account_id: str, start_ms: int, end_ms: int, file_type: str = "pdf") -> dict:
+    """/statement/applyAccountStatement — schedule a downloadable statement.
+
+    Choice generates it asynchronously (up to ~15 min) and returns a jobId; poll
+    query_account_statement(jobId) for the download URL (status 1 = ready). The
+    period is capped at 180 days. The generated PDF is password-protected — the
+    password is the last 6 digits of the account owner's phone number (or, for a
+    business, of the incorporation number)."""
+    return await _post("/statement/applyAccountStatement", {
+        "accountId": account_id,
+        "startTime": int(start_ms),
+        "endTime": int(end_ms),
+        "fileType": file_type,
+    })
+
+
+async def query_account_statement(job_id: str) -> dict:
+    """/statement/queryAccountStatement — poll a statement job.
+    Returns {jobId, status (0=waiting, 1=completed), statementUrl}."""
+    return await _post("/statement/queryAccountStatement", {"jobId": job_id})
+
+
 async def wait_for_transfer_result(tx_id: str, timeout_s: int = 90, interval_s: int = 5) -> str:
     """Poll getTransResult until an outbound transfer settles. Returns 'success' | 'failed' | 'pending'
     (pending = still not settled when the timeout elapsed). Lets callers confirm a transfer ACTUALLY

@@ -2877,6 +2877,87 @@ async def verify_bank_account(
     return {"account_name": name}
 
 
+class CbStatementBody(BaseModel):
+    start: str | None = None   # ISO date (YYYY-MM-DD); default = 90 days ago
+    end:   str | None = None   # ISO date; default = today
+    file_type: str = "pdf"     # pdf | xlsx
+
+
+@router.post("/choice/statement/generate")
+async def choice_statement_generate(
+    body:   CbStatementBody,
+    trader: Trader = Depends(get_current_trader),
+    db:     AsyncSession = Depends(get_db),
+):
+    """Ask Choice Bank to generate this merchant's account statement.
+
+    Returns a jobId; Choice builds it asynchronously (up to ~15 min). The
+    frontend polls /choice/statement/status?job_id=… for the download URL.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.services.choice_bank import client as choice
+
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked.")
+
+    now = datetime.now(timezone.utc)
+    try:
+        end_dt = datetime.fromisoformat(body.end).replace(tzinfo=timezone.utc) if body.end else now
+        # include the whole end day
+        end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        start_dt = (datetime.fromisoformat(body.start).replace(tzinfo=timezone.utc)
+                    if body.start else (now - timedelta(days=90)))
+        start_dt = start_dt.replace(hour=0, minute=0, second=0)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date — use YYYY-MM-DD.")
+
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="Start date must be before the end date.")
+    if (end_dt - start_dt).days > 180:
+        raise HTTPException(status_code=400, detail="Statements cover at most 180 days. Choose a shorter range.")
+
+    ft = body.file_type if body.file_type in ("pdf", "xlsx") else "pdf"
+    result = await choice.apply_account_statement(
+        trader.choice_account_id, int(start_dt.timestamp() * 1000), int(end_dt.timestamp() * 1000), ft
+    )
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=502, detail=result.get("msg", "Choice Bank could not start the statement."))
+
+    job_id = (result.get("data") or {}).get("jobId") or ""
+    if not job_id:
+        raise HTTPException(status_code=502, detail="Choice Bank returned no job id.")
+
+    # The PDF is password-protected — surface the password so the merchant can open it.
+    pw_hint = (trader.phone or "")[-6:] if trader.phone else "last 6 digits of your phone"
+    return {
+        "job_id": job_id,
+        "file_type": ft,
+        "start": start_dt.date().isoformat(),
+        "end": end_dt.date().isoformat(),
+        "password_hint": f"The file is password-protected. Password: {pw_hint} (the last 6 digits of your phone number).",
+    }
+
+
+@router.get("/choice/statement/status")
+async def choice_statement_status(
+    job_id: str,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Poll a statement job. Returns status (0=building, 1=ready) and the URL."""
+    from app.services.choice_bank import client as choice
+    if not trader.choice_account_id:
+        raise HTTPException(status_code=400, detail="No Choice Bank account linked.")
+    result = await choice.query_account_statement(job_id)
+    if result.get("code") != "00000":
+        raise HTTPException(status_code=502, detail=result.get("msg", "Could not check the statement status."))
+    data = result.get("data") or {}
+    return {
+        "job_id": job_id,
+        "status": int(data.get("status", 0) or 0),   # 0 = building, 1 = ready
+        "url": data.get("statementUrl") or "",
+    }
+
+
 class CbAutoWithdrawBody(BaseModel):
     enabled:   bool
     threshold: float | None = None
