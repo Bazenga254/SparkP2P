@@ -24,8 +24,9 @@ logger = logging.getLogger(__name__)
 _CHECK_EVERY = 30  # seconds
 # If a sell order has waited this long with no matching payment, hand it to the
 # merchant: alert on Telegram and flip it to DISPUTED (manual mode) so it stops
-# blocking and a person confirms with the buyer. (Agreed formula.)
-_MATCH_TIMEOUT_S = 120
+# blocking and a person confirms with the buyer. (Agreed formula — 10 min, chosen
+# over 2 min so a genuinely slow buyer isn't forced into manual mode too early.)
+_MATCH_TIMEOUT_S = 600
 
 # Choice txTypes that are OUTBOUND (money leaving) — never an incoming customer payment.
 _OUTBOUND_TX_TYPES = {
@@ -167,7 +168,7 @@ async def _timeout_unpaid_orders(db):
                     f"<b>Order:</b> {o.binance_order_number}\n"
                     f"<b>Amount:</b> KES {int(o.fiat_amount or 0):,}\n"
                     f"<b>Buyer:</b> {o.counterparty_name or '—'}\n\n"
-                    "We could not find a matching payment for this order within 2 minutes. "
+                    "We could not find a matching payment for this order within 10 minutes. "
                     "It has moved to manual mode — check your Choice Bank account and, if the "
                     "payment is there, release the crypto manually. If not, wait for the buyer or cancel."
                 )

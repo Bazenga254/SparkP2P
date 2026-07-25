@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import api from '../services/api';
 import { usePlans } from '../services/plans';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getImRevenue, getImBotAccounts, getImTraders, getImCharges, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
@@ -1945,7 +1945,7 @@ export default function Admin() {
                               const typeLabel = isIn ? 'Transfer In' : 'Transfer Out';
                               const rowBg = open ? 'rgba(245,158,11,0.05)' : 'transparent';
                               return (
-                                <React.Fragment key={tx.id}>
+                                <Fragment key={tx.id}>
                                   <tr
                                     onClick={() => setExpandedFiatId(open ? null : tx.id)}
                                     style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: rowBg, cursor: 'pointer', transition: 'background .12s' }}
@@ -1996,7 +1996,7 @@ export default function Admin() {
                                       </td>
                                     </tr>
                                   )}
-                                </React.Fragment>
+                                </Fragment>
                               );
                             })}
                           </tbody>
