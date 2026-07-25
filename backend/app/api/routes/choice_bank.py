@@ -102,6 +102,8 @@ async def choice_bank_webhook(request: Request):
             await _handle_transaction_result(params, payload)
         elif notification_type == "0004":
             await _handle_bulk_transfer_result(params, payload)
+        elif notification_type == "0015":
+            _handle_statement_ready(params, payload)
         else:
             logger.info(f"[ChoiceBank] Unhandled notification type {notification_type!r}")
     except Exception as exc:
@@ -109,6 +111,25 @@ async def choice_bank_webhook(request: Request):
         logger.error(f"[ChoiceBank] Webhook error (type={notification_type}): {exc}", exc_info=True)
 
     return {"code": "00000", "msg": "Processed successfully"}
+
+
+def _handle_statement_ready(params: dict, raw: dict):
+    """Callback 0015 — Account Statement Ready.
+
+    Choice fires this when a statement job finishes, carrying the jobId and the
+    download URL. We cache it so the merchant's status poll returns instantly.
+    Field names aren't fully pinned in the docs, so read the URL/jobId from every
+    plausible key rather than assuming one.
+    """
+    from app.services.choice_bank import statement_store
+    job_id = (params.get("jobId") or params.get("jobID") or raw.get("jobId") or "")
+    url = (params.get("statementUrl") or params.get("statementURL") or
+           params.get("url") or params.get("fileUrl") or params.get("downloadUrl") or "")
+    if job_id and url:
+        statement_store.set_url(str(job_id), str(url))
+        logger.info(f"[ChoiceBank] 0015: statement ready for job {job_id}")
+    else:
+        logger.warning(f"[ChoiceBank] 0015 with no jobId/url — params={params}")
 
 
 async def _handle_transaction_result(params: dict, raw: dict):

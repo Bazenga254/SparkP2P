@@ -2943,10 +2943,21 @@ async def choice_statement_status(
     job_id: str,
     trader: Trader = Depends(get_current_trader),
 ):
-    """Poll a statement job. Returns status (0=building, 1=ready) and the URL."""
+    """Poll a statement job. Returns status (0=building, 1=ready) and the URL.
+
+    Checks the 0015 push callback first — if Choice already told us the statement
+    is ready, we return the URL instantly without hitting them again. Otherwise we
+    query Choice directly, so the endpoint works even if the callback never fires.
+    """
     from app.services.choice_bank import client as choice
+    from app.services.choice_bank import statement_store
     if not trader.choice_account_id:
         raise HTTPException(status_code=400, detail="No Choice Bank account linked.")
+
+    pushed = statement_store.get_url(job_id)
+    if pushed:
+        return {"job_id": job_id, "status": 1, "url": pushed, "via": "callback"}
+
     result = await choice.query_account_statement(job_id)
     if result.get("code") != "00000":
         raise HTTPException(status_code=502, detail=result.get("msg", "Could not check the statement status."))
@@ -2955,6 +2966,7 @@ async def choice_statement_status(
         "job_id": job_id,
         "status": int(data.get("status", 0) or 0),   # 0 = building, 1 = ready
         "url": data.get("statementUrl") or "",
+        "via": "poll",
     }
 
 
