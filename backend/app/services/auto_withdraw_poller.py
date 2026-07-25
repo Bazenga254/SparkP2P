@@ -53,25 +53,27 @@ _THRESHOLD_SLACK = 200
 
 
 def _plan_legs(balance: int, threshold: int):
-    """Withdraw in PesaLink legs (≤ cap each) WHILE the balance is still at/above
-    the merchant's threshold — then STOP and leave the remainder. The remainder
-    is NOT swept; it waits until fresh deposits push the balance back over the
-    threshold. (This is the merchant's rule: the threshold is the trigger AND the
-    floor, not just the trigger.)
+    """Withdraw one THRESHOLD-sized chunk at a time WHILE the balance is still
+    at/above the threshold — then STOP and leave the remainder to accumulate. The
+    threshold is both the trigger and the withdrawal amount: set it to 500k and
+    each sweep takes 500k, leaving anything under 500k to wait.
 
-    Each leg's amount + Choice's withheld fee never exceeds the money left, so a
-    leg can never fail for insufficient funds.
+    A chunk is capped at PesaLink's instant limit (so it never routes to RTGS); a
+    threshold above that cap is itself split into cap-sized legs. Each leg's
+    amount + Choice's withheld fee never exceeds the money left, so a leg can
+    never fail for insufficient funds.
 
-        590,000 / thr 500,000   -> [589,975]            (whole balance; 0 left)
+        900,000 / thr 500,000   -> [500,000]            (400k left, waits)
       1,200,000 / thr 900,000   -> [900,000]            (300k left, waits)
-      1,800,000 / thr 900,000   -> [900,000, 899,950]   (both legs ≥ threshold)
+      1,800,000 / thr 900,000   -> [900,000, 899,950]   (both chunks ≥ threshold)
     """
     from app.services.outbound_fees import outbound_fee
+    chunk = min(int(threshold), _LEG_CAP)   # amount taken per sweep (PesaLink-capped)
     legs, remaining = [], int(balance)
-    while remaining >= threshold - _THRESHOLD_SLACK and remaining >= MIN_SWEEP and len(legs) < 12:
-        gross = min(_LEG_CAP, remaining)
+    while remaining >= threshold - _THRESHOLD_SLACK and remaining >= MIN_SWEEP and len(legs) < 20:
+        gross = min(chunk, remaining)
         fee = int(outbound_fee("BANK", gross))
-        # If the leg + its fee wouldn't fit, shave the leg to leave room for the fee.
+        # If the chunk + its fee wouldn't fit, shave it to leave room for the fee.
         if gross + fee > remaining:
             gross = remaining - fee - FEE_BUFFER
         if gross < MIN_SWEEP:
