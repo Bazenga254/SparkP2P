@@ -141,18 +141,22 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [showChangeForm] = useState(false);
 
   // Binance verification method — pre-populate from profile
-  const [verifyMethod, setVerifyMethod] = useState(profile?.binance_verify_method || 'none');
+  // This card is TOTP-only, so the method is ALWAYS 'totp'. It used to default to
+  // 'none', and the secret-key help + the "current 6-digit code" field only
+  // rendered when it was 'totp' — so a client who had never set it up (method
+  // null/'none') saw a broken half-form with no code field and couldn't
+  // configure. Hard-wire 'totp' so every client always sees the full form.
+  const [verifyMethod] = useState('totp');
   const [verifyInput, setVerifyInput] = useState('');
   const [verifyCode, setVerifyCode] = useState('');   // current Binance 6-digit code, to confirm the secret
   const [verifySaved, setVerifySaved] = useState(
     !!(profile?.binance_verify_method && profile.binance_verify_method !== 'none')
   );
 
-  // Sync verification state when profile loads (profile starts null, arrives async)
+  // Sync the "Configured / Not set" badge when the profile loads (starts null, arrives async).
   useEffect(() => {
     if (!profile?.binance_verify_method) return;
     if (!verifySaved) {
-      setVerifyMethod(profile.binance_verify_method || 'none');
       setVerifySaved(profile.binance_verify_method !== 'none');
     }
   }, [profile?.binance_verify_method]);
