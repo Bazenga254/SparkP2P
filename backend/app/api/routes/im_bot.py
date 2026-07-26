@@ -542,26 +542,39 @@ async def poll(
                     # Equity/KCB/ABSA/Standard Chartered now resolve instead of arriving
                     # as generic "Bank Transfer"), AND the phone for M-Pesa. Each field
                     # is validated so a stray API value can't corrupt a good one.
-                    _method = (o.seller_payment_method or "").lower()
                     _api_bank = (det.get("bank_name") or "").strip()
                     _api_acct = (det.get("account_number") or "").strip()
                     _api_phone = (det.get("pay_account") or "").strip()
-                    # The desktop may never have reported this order (we now serve
-                    # the whole queue, not just desktop-reported ones), so INFER
-                    # the rail from the API detail. Getting this wrong sends an
-                    # M-Pesa payout down the bank wizard, so infer only from an
-                    # unambiguous signal: a KE mobile number means M-Pesa, a bank
-                    # name + account number means a bank transfer.
-                    if not _method:
-                        _d = "".join(ch for ch in _api_phone if ch.isdigit())
-                        if _d and 9 <= len(_d) <= 12 and _d.startswith(("07", "01", "2547", "2541", "7", "1")):
-                            _method = "mpesa"
-                        elif _api_acct:
-                            _method = "bank"
-                        if _method:
-                            o.seller_payment_method = _method
-                            logger.info("im-bot poll: order %s rail inferred from API as %s", o.binance_order_number, _method)
+                    # ── Rail (M-Pesa vs bank) is decided by Binance's payment METHOD
+                    # TYPE, never by the shape of the number. A KCB account like
+                    # 1258639270 is 10 digits and would otherwise be mistaken for an
+                    # 07/01 M-Pesa line, sending a bank transfer down the M-Pesa wizard
+                    # (fails every time). The API payType/tradeMethodName is authoritative
+                    # and OVERRIDES a stale DB method — the desktop DOM scrape mis-detects
+                    # it, and that wrong value used to stick because we only inferred the
+                    # rail when the stored method was EMPTY.
+                    _pt = f"{det.get('raw_pay_type') or ''} {det.get('method') or ''}".lower()
+                    _phone_digits = "".join(ch for ch in _api_phone if ch.isdigit())
+                    _phone_ok = 9 <= len(_phone_digits) <= 12 and _phone_digits.startswith(("07", "01", "2547", "2541", "7", "1"))
+                    if any(w in _pt for w in ("mpesa", "m-pesa", "m pesa", "safaricom", "airtel")):
+                        _api_rail = "mpesa"          # mobile money → the bot's M-Pesa wizard
+                    elif ("bank" in _pt) or _api_bank or _api_acct:
+                        _api_rail = "bank"
+                    elif _phone_ok:
+                        _api_rail = "mpesa"          # last resort: only a valid mobile number present
+                    else:
+                        _api_rail = None             # can't tell — leave the stored value as-is
+                    _method = (o.seller_payment_method or "").lower()
                     _changed = False
+                    if _api_rail and _api_rail != _method:
+                        logger.warning(
+                            "im-bot poll: order %s rail corrected %r -> %r (Binance payType=%r bank=%r acct=%r)",
+                            o.binance_order_number, _method or "(none)", _api_rail,
+                            det.get("raw_pay_type"), _api_bank, _api_acct,
+                        )
+                        _method = _api_rail
+                        o.seller_payment_method = _method
+                        _changed = True
                     if _method in ("mpesa", "m-pesa", "safaricom", "airtel"):
                         # M-Pesa: trust the API phone only if it looks like a KE mobile.
                         _digits = "".join(ch for ch in _api_phone if ch.isdigit())
