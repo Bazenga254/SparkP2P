@@ -21,13 +21,20 @@ INTERVAL = 60                       # snapshot cadence (s)
 WINDOW = 24 * 3600                  # rolling window
 OUT_PCT = 0.03                      # ignore ads >3% off the top-15 median (spoofs)
 MAX_FILL_PER_MIN = 50000.0         # cap a single ad's counted depletion/min (relist/edit guard)
+REFILL_WINDOW = 240                 # s: a drop that bounces back UP within this window was an edit/
+                                    # relist/reprice, not a real trade — reverse the counted fill
 FLOW_FILE = Path(__file__).resolve().parents[2] / "market_flow.json"
 
 _prev: dict[str, float] = {}        # advNo -> available (previous snapshot)
 _buckets: dict[str, dict] = {}      # str(hour_epoch) -> {buy, sell, m:{nick:{buy,sell}}, start_avail:{nick:av}, ts}
 _nick_first: dict[str, float] = {}  # nick -> first-seen ts
-_avail_now: dict[str, float] = {}   # nick -> current total advertised available
+_avail_now: dict[str, float] = {}   # nick -> LAST known advertised available (persists when ads off)
+_avail_seen: dict[str, float] = {}  # nick -> last ts seen advertising a sell ad (for live vs stale)
+_recent_fills: dict[str, list] = {} # advNo -> [{ts,nick,action,amt,kes,hk}] recent counted fills (reversal log)
 _started: float = 0.0
+
+AVAIL_STALE_AFTER = 180             # s: avail older than this = merchant's ads are OFF (persisted/stale)
+AVAIL_FORGET_AFTER = 48 * 3600     # s: drop a merchant's persisted avail after this long off the board
 
 
 def _median(vals) -> float:
@@ -50,7 +57,7 @@ def _hour(ts: float) -> str:
 
 
 def _load():
-    global _prev, _buckets, _nick_first, _avail_now, _started
+    global _prev, _buckets, _nick_first, _avail_now, _avail_seen, _recent_fills, _started
     try:
         if FLOW_FILE.exists():
             d = json.loads(FLOW_FILE.read_text("utf-8")) or {}
@@ -58,6 +65,8 @@ def _load():
             _buckets = d.get("buckets", {})
             _nick_first = d.get("nick_first", {})
             _avail_now = d.get("avail_now", {})
+            _avail_seen = d.get("avail_seen", {})
+            _recent_fills = d.get("recent_fills", {})
             _started = d.get("started", 0.0) or time.time()
             # Migrate legacy buckets (buy/sell keys) -> corrected bought/sold. The old 'buy' key
             # held sell-ad drops (= the merchant SOLD); 'sell' held buy-ad drops (= BOUGHT).
@@ -80,7 +89,8 @@ def _save():
         tmp = FLOW_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps({
             "prev": _prev, "buckets": _buckets, "nick_first": _nick_first,
-            "avail_now": _avail_now, "started": _started,
+            "avail_now": _avail_now, "avail_seen": _avail_seen,
+            "recent_fills": _recent_fills, "started": _started,
         }), "utf-8")
         tmp.replace(FLOW_FILE)
     except Exception as e:
@@ -92,11 +102,57 @@ def _prune(now: float):
     for k in list(_buckets):
         if _buckets[k].get("ts", 0) < cut:
             del _buckets[k]
+    # Drop a merchant's PERSISTED availability once they've been off the board long enough — a
+    # last-known value is useful for a switch-off, misleading after days away.
+    avail_cut = now - AVAIL_FORGET_AFTER
+    for n in list(_avail_now):
+        if _avail_seen.get(n, 0) < avail_cut:
+            del _avail_now[n]
+            _avail_seen.pop(n, None)
+    # Expire reversal-log entries past the refill window (they can no longer be reversed).
+    rf_cut = now - REFILL_WINDOW
+    for adv in list(_recent_fills):
+        _recent_fills[adv] = [r for r in _recent_fills[adv] if r.get("ts", 0) >= rf_cut]
+        if not _recent_fills[adv]:
+            del _recent_fills[adv]
     # forget merchants neither active nor seen in the last 72h
     old = now - 72 * 3600
     for n in list(_nick_first):
         if n not in _avail_now and _nick_first[n] < old:
             del _nick_first[n]
+
+
+def _reverse_recent(adv: str, rise: float, now: float):
+    """An ad's advertised available went UP by `rise`. If it had a counted DROP within the refill
+    window, that drop was almost certainly an edit/relist/reprice (repricing churn on big sell ads
+    is the main thing that over-counts 'sold'), not a real fill — so unwind the counted amount from
+    the exact bucket it landed in, newest fills first. Clamped at 0 so totals can never go negative."""
+    log = _recent_fills.get(adv)
+    if not log:
+        return
+    remaining = rise
+    out = []
+    for rec in reversed(log):                          # newest first
+        if remaining <= 0 or (now - rec["ts"]) > REFILL_WINDOW:
+            out.append(rec)
+            continue
+        take = min(remaining, rec["amt"])
+        frac = (take / rec["amt"]) if rec["amt"] else 0.0
+        kes_take = rec["kes"] * frac
+        bk = _buckets.get(rec["hk"])
+        if bk:
+            act = rec["action"]
+            bk[act] = max(0.0, bk.get(act, 0.0) - take)
+            mm = (bk.get("m") or {}).get(rec["nick"])
+            if mm:
+                mm[act] = max(0.0, mm.get(act, 0.0) - take)
+                mm[act + "_kes"] = max(0.0, mm.get(act + "_kes", 0.0) - kes_take)
+        rec["amt"] -= take
+        rec["kes"] -= kes_take
+        remaining -= take
+        if rec["amt"] > 0.0001:
+            out.append(rec)
+    _recent_fills[adv] = list(reversed(out))
 
 
 async def _flow_once():
@@ -138,23 +194,35 @@ async def _flow_once():
         if adv in _prev:
             delta = _prev[adv] - av
             if delta > 0:
+                # DROP = a fill. A drop on a SELL ad (board["buy"]) means the merchant SOLD USDT; a
+                # drop on a BUY ad (board["sell"]) means they BOUGHT. Count it, and log it so a quick
+                # refill (an edit/relist/reprice, NOT a trade) can reverse it within REFILL_WINDOW.
                 filled = min(delta, MAX_FILL_PER_MIN)
-                # A drop on a SELL ad (board["buy"]) means the merchant SOLD USDT; a drop on a
-                # BUY ad (board["sell"]) means they BOUGHT. (Earlier this was mislabeled, which
-                # made net buyers like our own merchants show up as sellers.)
                 action = "sold" if board_side == "buy" else "bought"
+                # KES value of the fill at the merchant's own ad price — lets us derive their
+                # volume-weighted average buy/sell price, and thus their daily maker spread.
+                kes = filled * price if price > 0 else 0.0
                 b[action] += filled
                 m = b["m"].setdefault(nick, {"bought": 0.0, "sold": 0.0})
                 m[action] = m.get(action, 0.0) + filled
-                # KES value of the fill at the merchant's own ad price — lets us derive their
-                # volume-weighted average buy/sell price, and thus their daily maker spread.
-                if price > 0:
-                    m[action + "_kes"] = m.get(action + "_kes", 0.0) + filled * price
+                if kes:
+                    m[action + "_kes"] = m.get(action + "_kes", 0.0) + kes
+                _recent_fills.setdefault(adv, []).append(
+                    {"ts": now, "nick": nick, "action": action, "amt": filled, "kes": kes, "hk": hk})
+            elif delta < 0:
+                # RISE = the ad bounced back UP — an edit/relist/reprice, not a real trade. Unwind
+                # any counted drop for this ad still inside the refill window.
+                _reverse_recent(adv, -delta, now)
 
     _prev.clear()
     _prev.update({adv: av for adv, (n, s, av, p) in cur.items()})
-    _avail_now.clear()
-    _avail_now.update(nick_avail)
+    # Availability PERSISTS across ad switch-offs: update every merchant currently showing a sell
+    # ad; merchants who turned their ads OFF keep their LAST known available (no snap to 0) until
+    # they return (fresh value overwrites) or age out in _prune. Was: clear + rebuild each snapshot,
+    # which zeroed a merchant the instant they paused their ad.
+    for nick, av in nick_avail.items():
+        _avail_now[nick] = av
+        _avail_seen[nick] = now
     _prune(now)
     _save()
 
@@ -189,9 +257,12 @@ def get_summary() -> dict:
         dpct = round((availn - base) / base * 100, 1) if base else None
         # NOTE: per-merchant "spread" (their posted sell-price − buy-price) is computed from the
         # live board in the market-activity route, not here (this service has no price context).
+        # avail_stale = the merchant's ads are currently OFF, so `avail` is their LAST known value
+        # (persisted) rather than a live figure. The UI can dim it to stay honest.
+        avail_stale = _avail_seen.get(nick, 0.0) < (now - AVAIL_STALE_AFTER)
         rows.append({
             "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(v["sold"]),
-            "avail": round(availn), "delta_pct": dpct,
+            "avail": round(availn), "avail_stale": avail_stale, "delta_pct": dpct,
         })
     # Rank by BOUGHT — the cleanest signal. A drop on a merchant's BUY ad is an unambiguous
     # fill (someone sold USDT to them); sell-ad depletion is noisier (edits/repricing), so
@@ -209,7 +280,7 @@ def get_summary() -> dict:
         "bought_vol": round(bought),
         "sold_vol": round(sold),
         "total_vol": round(bought + sold),
-        "active_merchants": len(_avail_now),
+        "active_merchants": sum(1 for t in _avail_seen.values() if t >= now - AVAIL_STALE_AFTER),
         "new_merchants": new_m,
         "merchants": rows[:40],
         "tracked_hours": coverage_hours,

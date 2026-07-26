@@ -100,14 +100,14 @@ export default function MarketActivity({ enabled }) {
                       <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8 }}>{m.nick}</span>{m.tier && m.tier !== 'normal' && <span style={{ marginLeft: 8, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '2px 6px', borderRadius: 5, color: TIER_COLOR[m.tier], border: `1px solid ${TIER_COLOR[m.tier]}55`, textTransform: 'uppercase' }}>{m.tier}</span>}</td>
                       <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
-                      <td data-label="Avail Now">{m.avail ? fmtU(m.avail) : <span className="muted">0</span>}</td>
+                      <td data-label="Avail Now">{m.avail ? <span style={m.avail_stale ? { opacity: 0.45 } : undefined} title={m.avail_stale ? 'Ads currently off — last known available' : undefined}>{fmtU(m.avail)}</span> : <span className="muted">0</span>}</td>
                       <td data-label="Est. Traded" className="v-traded">{fmtU(m.traded)}</td>
                       <td data-label="Net Spread" title="Posted sell price − buy price, minus Binance fees (Gold 0.25 / Silver 0.35 / Bronze 0.40 KES/USDT) — the merchant's net margin per USDT. Shown only when they quote both sides." style={{ color: m.spread == null ? 'var(--text-3)' : m.spread < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.spread == null ? '—' : `KES ${m.spread.toFixed(2)}`}</td>
                     </tr>
                   ))}
               </tbody>
             </table></div>
-            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Avail Now” = USDT they currently have listed for sale (updates in real time as they sell or restock). “Net Spread” = their live posted sell price minus buy price, minus Binance fees for their tier (Gold 0.25 / Silver 0.35 / Bronze 0.40 KES/USDT) — their net margin per USDT after fees, shown only when the merchant is quoting both sides of the book.</div>
+            <div className="footnote">“Est. traded” = USDT inferred filled from drops in this merchant's advertised quantity. “Avail Now” = USDT they currently have listed for sale — their largest single sell ad (so a split/spoof two-ad post can't inflate it). It updates in real time as they sell or restock, and holds the last known value (dimmed) while a merchant's ads are switched off. “Net Spread” = their live posted sell price minus buy price, minus Binance fees for their tier (Gold 0.25 / Silver 0.35 / Bronze 0.40 KES/USDT) — their net margin per USDT after fees, shown only when the merchant is quoting both sides of the book.</div>
           </>
         )}
       </div>
