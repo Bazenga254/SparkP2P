@@ -1074,6 +1074,10 @@ def compute_pnl(orders, fee_per_usdt=0.25):
     # Profit is tracked in USDT ONLY — exclude USDC/BTC/etc. so a different coin's price never
     # mixes into the average rates, volume, or realized profit (keeps every figure consistent).
     orders = [o for o in orders if (o.crypto_currency or "USDT").upper() == "USDT"]
+    # Drop invalid 0-unit orders: a buy/sell of 0 crypto for non-zero KES has no real rate and
+    # poisons the weighted-average cost basis (an offline-completed stub, hardcoded to USDT with
+    # crypto_amount=0 but later given a KES value, once fabricated a large fake loss this way).
+    orders = [o for o in orders if float(o.crypto_amount or 0) > 0]
     buys = [o for o in orders if o.side == OrderSide.BUY]
     sells = [o for o in orders if o.side == OrderSide.SELL]
 
@@ -1148,6 +1152,9 @@ def compute_pnl_daily(orders, fee_per_usdt=0.25):
     # Profit is tracked in USDT ONLY — exclude other assets (USDC/BTC/…) entirely so mixed-asset
     # prices don't distort the daily gross/net or volume.
     orders = [o for o in orders if (o.crypto_currency or "USDT").upper() == "USDT"]
+    # Drop invalid 0-unit orders (see compute_pnl) — 0 crypto for non-zero KES has no rate and
+    # corrupts the daily average buy rate, fabricating fake losses.
+    orders = [o for o in orders if float(o.crypto_amount or 0) > 0]
     by_asset = defaultdict(list)
     for o in orders:
         by_asset[(o.crypto_currency or "USDT").upper()].append(o)
