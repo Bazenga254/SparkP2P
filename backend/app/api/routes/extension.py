@@ -293,7 +293,8 @@ async def report_release(
             sent = await notify_trader(
                 trader,
                 f"✅ SparkP2P: Order complete! {order.crypto_amount} {order.crypto_currency} released. "
-                f"KES {order.fiat_amount:,.0f} credited to your wallet. Ref: {data.order_number[-8:]}"
+                f"KES {order.fiat_amount:,.0f} credited to your wallet. Ref: {data.order_number[-8:]}",
+                side="sell",
             )
             if not sent:
                 from app.services.sms import send_sms
@@ -1224,6 +1225,7 @@ async def _complete_buy_order(order: Order, trader: Trader, db: AsyncSession, no
             trader,
             f"✅ SparkP2P: Buy done! {order.crypto_amount} {order.crypto_currency} received on Binance. "
             f"Paid KES {order.fiat_amount:,.0f}. Ref: {order.binance_order_number[-8:]}",
+            side="buy",
         )
         if not sent:
             from app.services.sms import send_sms
@@ -1278,6 +1280,7 @@ async def _complete_sell_order(order: Order, trader: Trader, db: AsyncSession) -
             trader,
             f"✅ SparkP2P: Sell done! KES {order.fiat_amount:,.0f} received. "
             f"{order.crypto_amount} {order.crypto_currency} released. Ref: {order.binance_order_number[-8:]}",
+            side="sell",
         )
         if not sent:
             from app.services.sms import send_sms

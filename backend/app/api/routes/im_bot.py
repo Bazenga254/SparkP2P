@@ -806,7 +806,7 @@ async def result(
                 "im-bot timing: order %s detected→paid %s ms (created_at=%s, paid=%s)",
                 data.order_id, _detected_to_paid_ms, order.created_at, order.payment_sent_at,
             )
-            await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.{_timing}")
+            await _alert(trader_id, f"✅ I&M Bot paid buy order …{data.order_id[-8:]} — KES {int(order.fiat_amount or 0):,}. Ref {data.bank_ref or 'n/a'}.{_timing}", side="buy")
 
             # Mark the order PAID on Binance ourselves (EP-17, server-side HMAC).
             # In the I&M-Bot flow the DESKTOP does not pay the seller, so it also
@@ -1092,14 +1092,16 @@ async def bot_buy_credits(
     }
 
 
-async def _alert(trader_id: int, text: str) -> None:
+async def _alert(trader_id: int, text: str, side: str = None) -> None:
     """Telegram alert to the trader; never let a notification failure break the
-    result path (the money decision has already been recorded)."""
+    result path (the money decision has already been recorded). `side` honours the
+    trader's alert preference — a routine buy-payout SUCCESS is tagged 'buy' so a
+    sell-only trader doesn't get it, while failures stay untagged and always send."""
     try:
         async with async_session() as db:
             trader = await db.get(Trader, trader_id)
         if trader:
             from app.api.routes.telegram import notify_trader
-            await notify_trader(trader, text)
+            await notify_trader(trader, text, side=side)
     except Exception as _e:
         logger.warning("im-bot alert failed for trader %s: %s", trader_id, _e)

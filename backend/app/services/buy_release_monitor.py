@@ -104,7 +104,7 @@ async def buy_release_monitor():
                     )
                     try:
                         from app.api.routes.telegram import notify_trader
-                        await notify_trader(trader, msg)
+                        await notify_trader(trader, msg, side="buy")
                         _notified.add(o.id)
                         logger.info("[BuyReleaseMonitor] nagged trader %s for buy order %s (%dm unreleased)",
                                     trader.id, o.binance_order_number, mins)

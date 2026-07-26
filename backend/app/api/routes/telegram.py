@@ -105,10 +105,20 @@ async def edit_trader_message(chat_id, message_id, text: str, reply_markup=None)
     return bool(result and result.get("ok"))
 
 
-async def notify_trader(trader, message: str, reply_markup=None, reply_to=None) -> bool:
+async def notify_trader(trader, message: str, reply_markup=None, reply_to=None, side: str = None) -> bool:
     """Send a Telegram notification to a trader if they have a chat_id linked.
     Returns True if sent successfully, False otherwise.
-    Callers should fall back to SMS for security-critical notifications when False."""
+    Callers should fall back to SMS for security-critical notifications when False.
+
+    `side` tags an alert as belonging to a BUY-order ("buy") or SELL-order ("sell")
+    so it honours the trader's Telegram alert preference (telegram_notify_scope:
+    'both' | 'sell' | 'buy'). A trader who chose "Sell orders only" then gets no
+    buy-order alerts, and vice-versa. Untagged alerts (side=None) — system alerts
+    like bot up/down, KYC, subscriptions, payout confirmations — always send."""
+    if side in ("buy", "sell"):
+        scope = (getattr(trader, "telegram_notify_scope", "both") or "both")
+        if (scope == "sell" and side == "buy") or (scope == "buy" and side == "sell"):
+            return False   # muted by the trader's notification preference
     # Mirror to the phone's notification bar (independent of Telegram being linked).
     try:
         from app.services import push_queue
