@@ -493,48 +493,36 @@ async def get_market_activity(
     except Exception as _e:
         logger.warning(f"market-activity tier gating failed: {_e}")
 
-    # ── Ground-truth SOLD calibration ─────────────────────────────────────────────
-    # Estimated SOLD is inflated by sell-ad repricing churn (BOUGHT is accurate). Our OWN merchants
-    # report EXACT sold in real time, so compare our estimate to their reality for the ones on the
-    # board and derive a market-wide correction. Only UPDATE the factor once our merchants have
-    # actually sold a meaningful amount today (early-morning churn races ahead of real trades, which
-    # would over-correct); otherwise carry the persisted factor. Then scale every merchant's Sold.
+    # ── Our own clients: exact SOLD overrides the estimate ────────────────────────
+    # Everyone else's Sold is inventory-conservation (bought − available_now, computed in
+    # market_flow); for our OWN merchants we know the REAL figure from their tracked orders, so use
+    # that ground truth for them (matched by their Binance nickname on the board).
     try:
-        from app.services import market_flow as _mf
         from sqlalchemy import text as _sqltext
-        est_sold = {m.get("nick"): (m.get("sold") or 0) for m in summary.get("merchants", []) if m.get("nick")}
-        if est_sold:
-            _rows = (await db.execute(_sqltext(
-                "SELECT t.binance_nickname AS nick, "
-                "COALESCE(SUM(CASE WHEN o.side='SELL' THEN o.crypto_amount ELSE 0 END),0) AS sold "
-                "FROM traders t JOIN orders o ON o.trader_id=t.id "
-                "WHERE t.binance_nickname IS NOT NULL AND t.binance_nickname<>'' "
-                "AND o.status IN ('COMPLETED','RELEASED') "
-                "AND (o.crypto_currency='USDT' OR o.crypto_currency IS NULL) AND o.crypto_amount>0 "
-                "AND o.created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') "
-                "GROUP BY t.binance_nickname"
-            ))).fetchall()
-            actual = {r.nick: float(r.sold or 0) for r in _rows}
-            matched = [n for n in actual if (est_sold.get(n) or 0) > 0]
-            sum_act = sum(actual[n] for n in matched)
-            sum_est = sum(est_sold[n] for n in matched)
-            # Only trust the ratio once real sold volume is mature enough to compare against.
-            if sum_act >= 10000 and sum_est > 0:
-                ratio = max(0.1, min(1.0, sum_act / sum_est))
-                _mf.set_sold_calib(0.7 * _mf.get_sold_calib() + 0.3 * ratio)   # smooth (EMA)
-        factor = _mf.get_sold_calib()
-        if factor < 0.999:
+        _rows = (await db.execute(_sqltext(
+            "SELECT t.binance_nickname AS nick, "
+            "COALESCE(SUM(CASE WHEN o.side='SELL' THEN o.crypto_amount ELSE 0 END),0) AS sold "
+            "FROM traders t JOIN orders o ON o.trader_id=t.id "
+            "WHERE t.binance_nickname IS NOT NULL AND t.binance_nickname<>'' "
+            "AND o.status IN ('COMPLETED','RELEASED') "
+            "AND (o.crypto_currency='USDT' OR o.crypto_currency IS NULL) AND o.crypto_amount>0 "
+            "AND o.created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') "
+            "GROUP BY t.binance_nickname"
+        ))).fetchall()
+        client_sold = {r.nick: float(r.sold or 0) for r in _rows}
+        if client_sold:
+            delta = 0
             for m in summary.get("merchants", []):
-                m["sold"] = round((m.get("sold") or 0) * factor)
-                m["traded"] = round((m.get("bought") or 0) + m["sold"])
-            summary["sold_vol"] = round((summary.get("sold_vol") or 0) * factor)
-            summary["total_vol"] = round((summary.get("bought_vol") or 0) + summary["sold_vol"])
-            for _t in (summary.get("by_tier") or {}).values():
-                _t["sold"] = round((_t.get("sold") or 0) * factor)
-                _t["traded"] = round((_t.get("bought") or 0) + _t["sold"])
-        summary["sold_calibrated"] = round(factor, 3)
+                if m.get("nick") in client_sold:
+                    new = round(client_sold[m["nick"]])
+                    delta += new - (m.get("sold") or 0)
+                    m["sold"] = new
+                    m["traded"] = round((m.get("bought") or 0) + new)
+            if delta:
+                summary["sold_vol"] = max(0, round((summary.get("sold_vol") or 0) + delta))
+                summary["total_vol"] = round((summary.get("bought_vol") or 0) + summary["sold_vol"])
     except Exception as _e:
-        logger.warning(f"market-activity sold calibration failed: {_e}")
+        logger.warning(f"market-activity client-sold override failed: {_e}")
 
     return summary
 

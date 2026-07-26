@@ -31,23 +31,7 @@ _nick_first: dict[str, float] = {}  # nick -> first-seen ts
 _avail_now: dict[str, float] = {}   # nick -> LAST known advertised available (persists when ads off)
 _avail_seen: dict[str, float] = {}  # nick -> last ts seen advertising a sell ad (for live vs stale)
 _recent_fills: dict[str, list] = {} # advNo -> [{ts,nick,action,amt,kes,hk}] recent counted fills (reversal log)
-# SOLD is systematically inflated by sell-ad repricing churn (BOUGHT is accurate). This multiplier
-# scales estimated Sold to reality; it's calibrated in the market-activity route against our OWN
-# merchants' real sold (ground truth) and persists here. Seeded from the observed ~0.4 so it's
-# corrected out of the box, then self-adjusts as real trades accumulate.
-_sold_calib: float = 0.4
 _started: float = 0.0
-
-
-def get_sold_calib() -> float:
-    return _sold_calib
-
-
-def set_sold_calib(f: float):
-    """Store the ground-truth SOLD correction (clamped to a sane range) and persist it."""
-    global _sold_calib
-    _sold_calib = max(0.1, min(1.0, float(f)))
-    _save()
 
 AVAIL_STALE_AFTER = 180             # s: avail older than this = merchant's ads are OFF (persisted/stale)
 AVAIL_FORGET_AFTER = 48 * 3600     # s: drop a merchant's persisted avail after this long off the board
@@ -73,7 +57,7 @@ def _hour(ts: float) -> str:
 
 
 def _load():
-    global _prev, _buckets, _nick_first, _avail_now, _avail_seen, _recent_fills, _sold_calib, _started
+    global _prev, _buckets, _nick_first, _avail_now, _avail_seen, _recent_fills, _started
     try:
         if FLOW_FILE.exists():
             d = json.loads(FLOW_FILE.read_text("utf-8")) or {}
@@ -83,7 +67,6 @@ def _load():
             _avail_now = d.get("avail_now", {})
             _avail_seen = d.get("avail_seen", {})
             _recent_fills = d.get("recent_fills", {})
-            _sold_calib = d.get("sold_calib", _sold_calib)
             _started = d.get("started", 0.0) or time.time()
             # Migrate legacy buckets (buy/sell keys) -> corrected bought/sold. The old 'buy' key
             # held sell-ad drops (= the merchant SOLD); 'sell' held buy-ad drops (= BOUGHT).
@@ -107,7 +90,7 @@ def _save():
         tmp.write_text(json.dumps({
             "prev": _prev, "buckets": _buckets, "nick_first": _nick_first,
             "avail_now": _avail_now, "avail_seen": _avail_seen,
-            "recent_fills": _recent_fills, "sold_calib": _sold_calib, "started": _started,
+            "recent_fills": _recent_fills, "started": _started,
         }), "utf-8")
         tmp.replace(FLOW_FILE)
     except Exception as e:
@@ -253,37 +236,43 @@ def _day_start(now: float) -> float:
 def get_summary() -> dict:
     now = time.time()
     cut = _day_start(now)
-    bought = sold = 0.0
+    bought = 0.0
     merch: dict[str, dict] = {}
     live = [b for b in _buckets.values() if b.get("ts", 0) >= cut]
     oldest = min(live, key=lambda x: x["ts"]) if live else None
     base_avail = (oldest or {}).get("start_avail", {})
     for b in live:
         bought += b.get("bought", 0.0)
-        sold += b.get("sold", 0.0)
         for nick, v in b.get("m", {}).items():
-            mm = merch.setdefault(nick, {"bought": 0.0, "sold": 0.0})
+            mm = merch.setdefault(nick, {"bought": 0.0})
             mm["bought"] += v.get("bought", 0.0)
-            mm["sold"] += v.get("sold", 0.0)
 
     rows = []
+    sold_total = 0.0
     for nick, v in merch.items():
-        traded = v["bought"] + v["sold"]
         availn = _avail_now.get(nick, 0.0)
+        # SOLD via inventory conservation, not raw sell-ad depletion (which repricing churn
+        # inflates): whatever a merchant BOUGHT and no longer has listed for sale, they've disposed
+        # of — sold on Binance, or routed to offline clients. Capped at bought (you can't sell more
+        # than you bought). Fits both a merchant who dumps everything on Binance (avail → 0, so
+        # sold → bought) and one with offline clients (holds inventory, so bought − avail leaves a
+        # visible discrepancy). Our OWN clients' EXACT sold overrides this in the market-activity
+        # route, where their real-time order data is available.
+        sold_est = max(0.0, v["bought"] - availn)
+        sold_total += sold_est
+        traded = v["bought"] + sold_est
         base = base_avail.get(nick)
         dpct = round((availn - base) / base * 100, 1) if base else None
-        # NOTE: per-merchant "spread" (their posted sell-price − buy-price) is computed from the
-        # live board in the market-activity route, not here (this service has no price context).
         # avail_stale = the merchant's ads are currently OFF, so `avail` is their LAST known value
         # (persisted) rather than a live figure. The UI can dim it to stay honest.
         avail_stale = _avail_seen.get(nick, 0.0) < (now - AVAIL_STALE_AFTER)
         rows.append({
-            "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(v["sold"]),
+            "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(sold_est),
             "avail": round(availn), "avail_stale": avail_stale, "delta_pct": dpct,
         })
     # Rank by BOUGHT — the cleanest signal. A drop on a merchant's BUY ad is an unambiguous
-    # fill (someone sold USDT to them); sell-ad depletion is noisier (edits/repricing), so
-    # "traded"/"sold" are less reliable for ordering the leaderboard.
+    # fill (someone sold USDT to them); sell-ad depletion is noisier, so it drives neither the
+    # ranking nor the Sold figure.
     rows.sort(key=lambda r: r["bought"], reverse=True)
 
     since_hours = round((now - cut) / 3600, 1)           # hours since 3am reset
@@ -295,8 +284,8 @@ def get_summary() -> dict:
     new_m = sum(1 for t in _nick_first.values() if t >= cut) if not incomplete else None
     return {
         "bought_vol": round(bought),
-        "sold_vol": round(sold),
-        "total_vol": round(bought + sold),
+        "sold_vol": round(sold_total),
+        "total_vol": round(bought + sold_total),
         "active_merchants": sum(1 for t in _avail_seen.values() if t >= now - AVAIL_STALE_AFTER),
         "new_merchants": new_m,
         "merchants": rows[:40],
@@ -320,16 +309,23 @@ def get_tier_breakdown(nick_tier: dict) -> dict:
         tt = t if t in agg else "normal"
         agg[tt]["online"] += 1
         agg[tt]["avail"] += _avail_now.get(nick, 0.0)
-    # Today's estimated traded volume, grouped by tier.
+    # Today's BOUGHT per merchant (buy-ad fills), summed across buckets.
+    from collections import defaultdict as _dd
+    bought_by_nick = _dd(float)
     for b in _buckets.values():
         if b.get("ts", 0) < cut:
             continue
         for nick, v in b.get("m", {}).items():
-            tt = nick_tier.get(nick, "normal")
-            if tt not in agg:
-                tt = "normal"
-            agg[tt]["bought"] += v.get("bought", 0.0)
-            agg[tt]["sold"] += v.get("sold", 0.0)
+            bought_by_nick[nick] += v.get("bought", 0.0)
+    # SOLD via inventory conservation per merchant (see get_summary), summed by tier — never raw
+    # sell-ad depletion. The per-merchant max(0, bought − avail) clamp is why we sum per merchant,
+    # not tier totals (Σ max ≠ max Σ).
+    for nick, bt in bought_by_nick.items():
+        tt = nick_tier.get(nick, "normal")
+        if tt not in agg:
+            tt = "normal"
+        agg[tt]["bought"] += bt
+        agg[tt]["sold"] += max(0.0, bt - _avail_now.get(nick, 0.0))
     for d in agg.values():
         d["bought"] = round(d["bought"]); d["sold"] = round(d["sold"])
         d["traded"] = d["bought"] + d["sold"]; d["avail"] = round(d["avail"])
