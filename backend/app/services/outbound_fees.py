@@ -199,9 +199,10 @@ def airtel_b2b_markup(amount: float) -> int:
 
 
 # ── PesaLink / Bank ───────────────────────────────────────────────────────────
+# Flat KES 25 per PesaLink transfer, all amounts (Choice Bank's real cost 15 +
+# our markup 10). Choice charges the KES 25 even on small transfers — the old
+# ≤1000 tiers billed only 15, understating the fee on small withdrawals.
 _PESALINK = [
-    (100,   (0,  15, 15)),
-    (1000,  (0,  15, 15)),
     (float("inf"), (15, 10, 25)),
 ]
 

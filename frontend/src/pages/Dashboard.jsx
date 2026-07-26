@@ -27,11 +27,13 @@ function mpesaOutboundFee(amount) {
   if (a <= 15000) return 28;
   if (a <= 25000) return 31;
   if (a <= 30000) return 32;
-  if (a <= 40000) return 39;
-  return 40;
+  if (a <= 40000) return 34;   // was 39 — stale; backend outbound_fees.py _B2C = 34
+  return 35;                    // was 40 — stale; backend _B2C = 35
 }
-function pesalinkOutboundFee(amount) {
-  return (amount || 0) <= 1000 ? 15 : 30;
+function pesalinkOutboundFee() {
+  // Flat KES 25 per PesaLink/Bank transfer (Choice cost 15 + Spark markup 10).
+  // Mirrors the backend source of truth (outbound_fees.py _PESALINK).
+  return 25;
 }
 function getWithdrawalFee(method, amount) {
   if (amount <= 0) return 0;
