@@ -1603,6 +1603,36 @@ async def get_active_orders(
                 "counterparty": counterparty,
             })
 
+    # Drop any order that is actually IN APPEAL. The cookie order-list marks every pending
+    # order "Pending Payment" (it carries no clean appeal flag), so an appealed order would
+    # keep being surfaced — the bot re-opens it and re-sends the "I'll send you KES…" greeting
+    # to an order that is already disputed. The reliable appeal signal is the SAPI order-history
+    # status (clean strings like IN_APPEAL), so cross-reference it and exclude those order
+    # numbers. Best-effort: if the trader has no API key or the relay is down, we leave the
+    # list unchanged rather than block trading.
+    if orders and trader.binance_api_key and trader.binance_api_secret:
+        try:
+            from app.services.binance.sapi_client import get_user_order_history, relay_trader
+            from app.core.security import decrypt_data
+            relay_trader.set(trader.id)
+            _ak = decrypt_data(trader.binance_api_key)
+            _as = decrypt_data(trader.binance_api_secret)
+            _hist = await get_user_order_history(_ak, _as, page=1, rows=50)
+            _APPEAL_STATES = {"APPEAL", "APPEALING", "IN_APPEAL", "OBJECTING", "APPEAL_CANCELLED", "APPEALED"}
+            _appeal_nos = {
+                str(o.get("orderNumber") or "")
+                for o in (_hist or [])
+                if str(o.get("orderStatus") or "").upper() in _APPEAL_STATES
+            }
+            if _appeal_nos:
+                _before = len(orders)
+                orders = [o for o in orders if o["orderNumber"] not in _appeal_nos]
+                _dropped = _before - len(orders)
+                if _dropped:
+                    logger.info("active-orders: excluded %d appeal order(s) for trader %s so the bot ignores them", _dropped, trader.id)
+        except Exception as e:
+            logger.warning("active-orders appeal cross-check failed for trader %s: %s", trader.id, e)
+
     # SAPI fallback: cookie sessions expire *silently* (Binance returns an empty list, not an
     # auth error), which strands active orders — most dangerously a buyer-paid "Please release"
     # sell the bot must release. The desktop's DOM fallback then misses it too (its status regex

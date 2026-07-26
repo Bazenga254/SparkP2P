@@ -2374,7 +2374,9 @@ async function readOrders(activeOnly = false) {
           if (!row || seen.has(orderNumber)) return;
           if (!/^\d{18,20}$/.test(orderNumber)) return; // real Binance order numbers are 18–20 digits; row-anchored extraction already prevents merged blobs
           const rowText = row.innerText || '';
-          if (/\b(Completed|Cancelled|Canceled)\b/i.test(rowText)) return;
+          // Skip terminal AND appealed orders — an order in appeal must be ignored entirely
+          // (never opened/greeted); the seller handles the appeal manually on Binance.
+          if (/\b(Completed|Cancelled|Canceled|Appeal)\b/i.test(rowText)) return;
           // Include the BUYER-PAID / release states — when the buyer taps "I've Sent" the
           // seller's row shows "Please release" / "To be released" / "Pending Release", NONE of
           // which were matched before, so buyer-paid sells were dropped from detection and never
