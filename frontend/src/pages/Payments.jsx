@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   choiceGetBalance,
-  cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms, cbSendMoneyResendEmail,
+  cbSendMoneyQuote, cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms, cbSendMoneyResendEmail,
   cbEmailVerifyStatus, cbEmailVerifyStart, cbEmailVerifyConfirm,
   cbPaybillInitiate, cbPaybillConfirm, cbLookupShortcode,
   cbGetBanks, cbLookupBankAccount, cbLookupMpesaName,
@@ -159,9 +159,9 @@ export default function Payments() {
 
       <div className="pm-sheet">
         {active === 'send' ? (
-          <SendMoney network="mpesa" onDone={done} onCancel={cancel} />
+          <SendMoney network="mpesa" balance={balance} onDone={done} onCancel={cancel} />
         ) : active === 'airtel' ? (
-          <SendMoney network="airtel" onDone={done} onCancel={cancel} />
+          <SendMoney network="airtel" balance={balance} onDone={done} onCancel={cancel} />
         ) : active === 'paybill' ? (
           <Paybill onDone={done} onCancel={cancel} />
         ) : active === 'buygoods' ? (
@@ -694,7 +694,7 @@ function MpesaToBank({ onDone, onCancel }) {
 
 // ── SendMoney (M-Pesa + Airtel, with Hakikisha name lookup for M-Pesa) ─────────
 
-function SendMoney({ network = 'mpesa', onDone, onCancel }) {
+function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
   const isMpesa = network === 'mpesa';
   const title = isMpesa ? 'Send to M-Pesa' : 'Send to Airtel';
   const limit = isMpesa ? 250000 : 70000;
@@ -707,10 +707,15 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [payee, setPayee] = useState({ status: 'idle', name: '' }); // Hakikisha
+  const [quote, setQuote] = useState(null); // fee preview + max "withdraw everything"
 
   const rawPhone = phone.replace(/\s/g, '');
   const validPhone = /^(0?7|0?1|7|1)\d{8}$/.test(rawPhone);
-  const validForm = validPhone && Number(amount) > 0 && Number(amount) <= limit;
+  const amtNum = Number(amount) || 0;
+  // The recipient gets `amount`; Choice charges a fee ON TOP, so the balance must
+  // cover amount + fee. Block submit when it doesn't (the backend re-checks too).
+  const insufficient = !!(quote && amtNum >= 10 && quote.total > quote.balance);
+  const validForm = validPhone && amtNum > 0 && amtNum <= limit && !insufficient;
 
   // Hakikisha: live name lookup for M-Pesa numbers as user types
   useEffect(() => {
@@ -727,6 +732,22 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
     }, 700);
     return () => { cancel = true; clearTimeout(t); };
   }, [rawPhone, isMpesa, validPhone]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fee preview: fee for the typed amount, whether the balance covers amount+fee,
+  // and the max amount that empties the account (for "Withdraw everything").
+  // Pure server-side computation from the pricing sheet — the backend stays the
+  // authority, so we never hardcode (and drift from) the fee tables here.
+  useEffect(() => {
+    if (balance == null) { setQuote(null); return; }
+    let cancel = false;
+    const t = setTimeout(async () => {
+      try {
+        const r = await cbSendMoneyQuote(network, amtNum, balance);
+        if (!cancel) setQuote(r.data || null);
+      } catch { if (!cancel) setQuote(null); }
+    }, 300);
+    return () => { cancel = true; clearTimeout(t); };
+  }, [amtNum, balance, network]);
 
   const initiate = async () => {
     setError(''); setBusy(true);
@@ -806,11 +827,42 @@ function SendMoney({ network = 'mpesa', onDone, onCancel }) {
               <div style={{ marginTop: 6, fontSize: 12.5, color: '#d97706' }}>⚠️ Could not verify name — check the number is correct</div>
             )}
           </div>
-          <div className="pm-field"><label>Amount (KES)</label>
+          <div className="pm-field">
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+              <label style={{ margin: 0 }}>Amount (KES)</label>
+              {quote && quote.max_net >= 10 && (
+                <button type="button" onClick={() => setAmount(String(quote.max_net))}
+                  style={{ background: 'none', border: 'none', color: '#f59e0b', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+                  Withdraw everything
+                </button>
+              )}
+            </div>
             <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
               onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
             <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max {fmtKES(limit)} per transaction.</div>
+
+            {/* Live fee + deduction breakdown so the sender sees exactly what leaves
+                their balance and what the recipient receives. */}
+            {quote && amtNum >= 10 && !insufficient && (
+              <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', fontSize: 13 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1' }}>
+                  <span>Recipient receives</span><span style={{ fontWeight: 800, color: '#10b981' }}>{fmtKES(amtNum)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#9aa4b2', marginTop: 5 }}>
+                  <span>Transaction fee</span><span>+ {fmtKES(quote.fee)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e5e7eb', marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--border)', fontWeight: 700 }}>
+                  <span>Deducted from balance</span><span>{fmtKES(quote.total)}</span>
+                </div>
+              </div>
+            )}
           </div>
+          {insufficient && (
+            <div className="pm-error">
+              Not enough balance: {fmtKES(quote.total)} needed ({fmtKES(amtNum)} + {fmtKES(quote.fee)} fee), you have {fmtKES(quote.balance)}.
+              {quote.max_net >= 10 && <> Tap <b>Withdraw everything</b> to send {fmtKES(quote.max_net)} to the recipient and empty your account.</>}
+            </div>
+          )}
           {error && <div className="pm-error">{error}</div>}
           <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
         </>

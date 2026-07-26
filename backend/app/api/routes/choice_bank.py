@@ -1174,6 +1174,59 @@ def _normalize_msisdn(phone: str) -> str:
     return p
 
 
+def _max_sendable(channel: str, balance: float, limit: float) -> tuple[int, int]:
+    """Largest amount N (recipient receives) such that N + fee(N) <= balance and
+    N <= the per-transaction limit — i.e. the amount that EMPTIES the account in
+    one transfer, powering the 'Withdraw everything' button. The fee is a step
+    function of N (bounded, ~<=40), so walking N down from the top converges in a
+    handful of steps. Returns (net, fee); (0, 0) if nothing sendable."""
+    from app.services.outbound_fees import outbound_fee
+    bal = max(0.0, float(balance or 0))
+    n = int(min(float(limit), bal))
+    for _ in range(200):          # safety bound; converges in ~<=40 in practice
+        if n < 10:                # M-Pesa/Airtel minimum transfer
+            return 0, 0
+        fee = int(outbound_fee(channel, n))
+        if n + fee <= bal:
+            return n, fee
+        n -= 1
+    return 0, 0
+
+
+@router.get("/choice/pay/send-money/quote")
+async def send_money_quote(
+    network: str = "mpesa",
+    amount: float = 0,
+    balance: float = 0,
+    trader: Trader = Depends(get_current_trader),
+):
+    """Fee preview for the Send-money form. Pure computation from the pricing
+    sheet (outbound_fees.py) — the initiate endpoint stays the authority and
+    re-checks the live balance. Returns the fee for `amount`, whether the passed
+    balance covers amount+fee, and the max amount that empties the account (for
+    the 'Withdraw everything' button)."""
+    from app.services.outbound_fees import outbound_fee
+    chan = "AIRTEL" if (network or "").lower() == "airtel" else "MPESA"
+    limit = 70000 if chan == "AIRTEL" else 250000
+
+    amt = max(0.0, float(amount or 0))
+    fee = int(outbound_fee(chan, amt)) if amt >= 10 else 0
+    total = int(amt) + fee
+    bal = max(0.0, float(balance or 0))
+    max_net, max_fee = _max_sendable(chan, bal, limit)
+    return {
+        "network": chan.lower(),
+        "amount": int(amt),
+        "fee": fee,
+        "total": total,                       # amount + fee, deducted from balance
+        "balance": int(bal),
+        "sufficient": amt >= 10 and total <= bal,
+        "max_net": max_net,                   # recipient receives this to empty the account
+        "max_fee": max_fee,
+        "max_total": max_net + max_fee if max_net else 0,
+    }
+
+
 @router.post("/choice/pay/send-money/initiate")
 async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(get_current_trader)):
     """Step 1: start a Choice Bank → M-Pesa transfer to an arbitrary number; OTP is sent to the

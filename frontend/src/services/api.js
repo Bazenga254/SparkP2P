@@ -229,6 +229,7 @@ export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
 export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
 // Payments Hub — Send Money to any M-Pesa number (OTP-confirmed)
+export const cbSendMoneyQuote = (network, amount, balance) => api.get('/choice/pay/send-money/quote', { params: { network, amount, balance } });
 export const cbSendMoneyInitiate = (body) => api.post('/choice/pay/send-money/initiate', body);
 export const cbSendMoneyConfirm = (otp) => api.post('/choice/pay/send-money/confirm', { otp });
 export const cbSendMoneyConfirmSms = () => api.post('/choice/pay/send-money/confirm-sms', {}, { timeout: 240000 });
