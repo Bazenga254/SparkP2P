@@ -4027,19 +4027,17 @@ export default function Dashboard() {
                     <div style={{ position: 'relative' }}>
                       <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>KES</span>
                       <input
-                        type="number"
-                        min={0}
-                        max={maxReceive}
-                        step={1}
+                        type="text"
+                        inputMode="numeric"
                         value={withdrawCustomAmount}
-                        onChange={e => { if (!forceFullBalance) setWithdrawCustomAmount(e.target.value); }}
+                        onChange={e => { if (!forceFullBalance) setWithdrawCustomAmount(e.target.value.replace(/[^\d]/g, '')); }}
                         readOnly={forceFullBalance}
-                        style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: `1px solid ${amtErr ? '#ef4444' : '#374151'}`, background: forceFullBalance ? '#0f1117' : '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box', cursor: forceFullBalance ? 'not-allowed' : 'text' }}
+                        style={{ width: '100%', padding: forceFullBalance ? '11px 14px 11px 44px' : '11px 74px 11px 44px', borderRadius: 8, border: `1px solid ${amtErr ? '#ef4444' : '#374151'}`, background: forceFullBalance ? '#0f1117' : '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box', cursor: forceFullBalance ? 'not-allowed' : 'text' }}
                       />
                       {!forceFullBalance && (
                       <button
-                        onClick={() => setWithdrawCustomAmount(String(Math.round(maxReceive * 100) / 100))}
-                        style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}
+                        onClick={() => setWithdrawCustomAmount(String(maxReceive))}
+                        style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.35)', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700, padding: '5px 11px', borderRadius: 6, letterSpacing: 0.3 }}
                       >MAX</button>
                       )}
                     </div>
@@ -5062,13 +5060,13 @@ export default function Dashboard() {
                   </label>
                   <div style={{ position: 'relative' }}>
                     <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontSize: 13 }}>KES</span>
-                    <input type="number" min={100} step={1}
+                    <input type="text" inputMode="numeric"
                       value={cbWithdrawAmount}
-                      onChange={e => setCbWithdrawAmount(e.target.value)}
-                      style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box' }}
+                      onChange={e => setCbWithdrawAmount(e.target.value.replace(/[^\d]/g, ''))}
+                      style={{ width: '100%', padding: '11px 74px 11px 44px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box' }}
                     />
                     <button onClick={() => setCbWithdrawAmount(String(maxWithdrawable(cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank', cbDashBalance?.balance || 0)))}
-                      style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}>
+                      style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.35)', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700, padding: '5px 11px', borderRadius: 6, letterSpacing: 0.3 }}>
                       MAX
                     </button>
                   </div>
