@@ -708,6 +708,7 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
   const [info, setInfo] = useState('');
   const [payee, setPayee] = useState({ status: 'idle', name: '' }); // Hakikisha
   const [quote, setQuote] = useState(null); // fee preview + max "withdraw everything"
+  const doneRef = useRef(false); // guards the background auto-capture poll from overriding a manual confirm
 
   const rawPhone = phone.replace(/\s/g, '');
   const validPhone = /^(0?7|0?1|7|1)\d{8}$/.test(rawPhone);
@@ -750,7 +751,7 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
   }, [amtNum, balance, network]);
 
   const initiate = async () => {
-    setError(''); setBusy(true);
+    setError(''); setBusy(true); doneRef.current = false;
     try {
       await cbSendMoneyInitiate({
         payee_phone: phone.trim(),
@@ -759,22 +760,31 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
         network,
       });
       setStep('waiting');
-      // Auto-confirm: backend waits for SMS OTP from MacroDroid webhook (up to 90s).
-      // On timeout fall back to manual OTP entry so the user isn't left stuck.
-      try {
-        await cbSendMoneyConfirmSms();
-        setStep('done');
-      } catch (e2) {
-        setInfo('OTP not auto-captured — enter the code from your phone manually.');
-        setStep('otp');
-      }
-    } catch (e) { setError(e.response?.data?.detail || 'Could not start the transfer. Please try again.'); }
-    finally { setBusy(false); }
+      setBusy(false);   // free the screen so the user can enter the code manually or use email
+      // Auto-confirm runs in the BACKGROUND: the backend waits for the SMS OTP from the
+      // MacroDroid webhook. If it lands first, we finish; if it times out, we drop to
+      // manual entry. Either path is guarded by doneRef so it can't override a manual
+      // confirm the user completed in the meantime.
+      (async () => {
+        try {
+          await cbSendMoneyConfirmSms();
+          if (!doneRef.current) { doneRef.current = true; setStep('done'); }
+        } catch (e2) {
+          if (!doneRef.current) {
+            setInfo('OTP not auto-captured — enter the code from your phone manually.');
+            setStep('otp');
+          }
+        }
+      })();
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Could not start the transfer. Please try again.');
+      setBusy(false);
+    }
   };
 
   const confirm = async () => {
     setError(''); setBusy(true);
-    try { await cbSendMoneyConfirm(otp.trim()); setStep('done'); }
+    try { await cbSendMoneyConfirm(otp.trim()); doneRef.current = true; setStep('done'); }
     catch (e) { setError(e.response?.data?.detail || 'OTP confirmation failed.'); }
     finally { setBusy(false); }
   };
@@ -874,8 +884,13 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
           <div style={{ color: '#f5a623', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Waiting for OTP…</div>
           <div style={{ color: '#9aa4b2', fontSize: 13 }}>Choice Bank sent an OTP to your phone.<br />It will be captured automatically.</div>
           {error && <div className="pm-error" style={{ marginTop: 14 }}>{error}</div>}
+          {/* If auto-capture is slow, let the user just type the code they received. */}
+          <button onClick={() => { setError(''); setInfo('Enter the OTP Choice Bank sent to your phone.'); setStep('otp'); }}
+            style={{ marginTop: 22, display: 'block', width: '100%', background: 'linear-gradient(135deg,#f59e0b,#d97706)', border: 'none', color: '#10131a', borderRadius: 10, padding: '12px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+            Enter the code manually
+          </button>
           <button onClick={resendEmail} disabled={busy}
-            style={{ marginTop: 20, background: 'none', border: '1px solid var(--border)', color: '#f59e0b', borderRadius: 9, padding: '9px 16px', fontSize: 13, cursor: 'pointer' }}>
+            style={{ marginTop: 12, background: 'none', border: 'none', color: '#f59e0b', fontSize: 13, cursor: busy ? 'default' : 'pointer', textDecoration: 'underline', padding: 0 }}>
             {busy ? 'Sending…' : '📧 SMS not arriving? Get the code by email'}
           </button>
         </div>
