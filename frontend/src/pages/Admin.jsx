@@ -6485,8 +6485,10 @@ export default function Admin() {
               Switch to Trader Dashboard
             </button>
             {[
+              { key: 'imbot',       label: 'I&M Automation',    icon: Bot           },
               { key: 'withdrawals', label: 'Withdrawals',       icon: Wallet        },
               { key: 'paybill',     label: 'Paybill Txns',      icon: Banknote      },
+              { key: 'unmatched',   label: 'Unmatched Payments',icon: Banknote      },
               { key: 'kyc',         label: 'KYC Verification',  icon: UserCheck     },
               { key: 'expenses',    label: 'Revenue',           icon: Receipt       },
               { key: 'affiliates',  label: 'Affiliates',        icon: Share2        },

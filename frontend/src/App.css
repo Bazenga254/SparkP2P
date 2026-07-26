@@ -6305,6 +6305,16 @@ body {
   .adm-hamburger { display: none !important; }
 }
 
+/* Mobile (≤767px): the fixed sidebar is replaced by the bottom nav, so the
+   page must be full-width. The global `.adm-main { margin-left: 200px !important }`
+   above (desktop sidebar offset) otherwise applies on phones too and shoves the
+   whole page 200px to the right, causing horizontal overflow / a "broken" layout.
+   This override comes later in source order, so it wins for phone widths. */
+@media (max-width: 767px) {
+  .adm-sidebar { transform: translateX(-100%) !important; }
+  .adm-main { margin-left: 0 !important; }
+}
+
 /* Affiliates 2-col grid — collapse on mobile */
 @media (max-width: 767px) {
   .aff-two-col { grid-template-columns: 1fr !important; }
