@@ -39,6 +39,22 @@ function getWithdrawalFee(method, amount) {
   if (amount <= 0) return 0;
   return method === 'mpesa' ? mpesaOutboundFee(amount) : pesalinkOutboundFee(amount);
 }
+// Largest amount the trader can RECEIVE such that amount + fee(amount) <= balance —
+// i.e. the amount that empties the account in one withdrawal. Choice debits (amount +
+// fee) and sends the full amount to the payee, and the fee is TIERED on the amount, so
+// `balance - fee(balance)` overshoots the fee and strands money (e.g. balance 103 →
+// 103 - 14 = 89, but the fee at 89 is only 8, so 95 is actually sendable). Walk the
+// amount down until amount + fee(amount) fits. Respects the M-Pesa per-transaction cap.
+function maxWithdrawable(method, balance) {
+  const bal = Math.floor(Number(balance) || 0);
+  const cap = method === 'mpesa' ? 250000 : Infinity;
+  let n = Math.min(bal, cap);
+  for (let i = 0; i < 300 && n >= 1; i++) {
+    if (n + getWithdrawalFee(method, n) <= bal) return n;
+    n -= 1;
+  }
+  return 0;
+}
 const fmtCountdown = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
 const fmtKES = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 const fmtKESFee = (n) => 'KES ' + Math.abs(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1472,8 +1488,8 @@ export default function Dashboard() {
       // Prefill the max RECEIVABLE amount (balance minus the Choice Bank fee, which is debited on top).
       {
         const _bal = p.balance ?? 0;
-        const _maxRecv = Math.max(0, _bal - getWithdrawalFee(p.settlement_method || 'mpesa', _bal));
-        setWithdrawCustomAmount(String(Math.round(_maxRecv * 100) / 100));
+        const _maxRecv = maxWithdrawable(p.settlement_method || 'mpesa', _bal);
+        setWithdrawCustomAmount(String(_maxRecv));
       }
       setWithdrawOtp('');
       setWithdrawOtpSent(false);
@@ -3978,8 +3994,9 @@ export default function Dashboard() {
               const forceFullBalance = withdrawPreview.force_full_withdrawal;
               const customAmt = parseFloat(withdrawCustomAmount) || 0;
               // Choice Bank debits (amount + fee) from the balance and sends the FULL amount to the
-              // payee. So the most a trader can RECEIVE is their balance minus the fee on that amount.
-              const maxReceive = Math.max(0, balance - getWithdrawalFee(method, balance));
+              // payee. The most a trader can RECEIVE is the amount that empties the account after its
+              // (tiered) fee — computed by maxWithdrawable, not balance - fee(balance) which overshoots.
+              const maxReceive = maxWithdrawable(method, balance);
               const clampedAmt = Math.min(customAmt, maxReceive);
               const liveFee = getWithdrawalFee(method, clampedAmt);
               const liveReceive = clampedAmt;                 // recipient gets the full amount
@@ -5050,7 +5067,7 @@ export default function Dashboard() {
                       onChange={e => setCbWithdrawAmount(e.target.value)}
                       style={{ width: '100%', padding: '11px 14px 11px 44px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 15, boxSizing: 'border-box' }}
                     />
-                    <button onClick={() => setCbWithdrawAmount(String(Math.round((cbDashBalance?.balance || 0) * 100) / 100))}
+                    <button onClick={() => setCbWithdrawAmount(String(maxWithdrawable(cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank', cbDashBalance?.balance || 0)))}
                       style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#10b981', fontSize: 11, cursor: 'pointer', fontWeight: 700 }}>
                       MAX
                     </button>
@@ -5063,9 +5080,14 @@ export default function Dashboard() {
                 {/* Fee breakdown */}
                 {parseFloat(cbWithdrawAmount) > 0 && (() => {
                   const amt = parseFloat(cbWithdrawAmount) || 0;
-                  const fee = getWithdrawalFee(cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank', amt);
+                  const method = cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank';
+                  const fee = getWithdrawalFee(method, amt);
+                  const bal = Number(cbDashBalance?.balance || 0);
+                  const over = amt + fee > bal;   // fee is charged ON TOP — can't afford this
+                  const maxRecv = maxWithdrawable(method, bal);
                   return (
-                    <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: 16, fontSize: 13 }}>
+                    <>
+                    <div style={{ background: '#111827', borderRadius: 10, padding: '14px 16px', marginBottom: over ? 8 : 16, fontSize: 13 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#9ca3af' }}>
                         <span>You Receive</span><span style={{ color: '#10b981', fontWeight: 700 }}>KES {amt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                       </div>
@@ -5074,9 +5096,16 @@ export default function Dashboard() {
                       </div>
                       <div style={{ borderTop: '1px solid #374151', paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
                         <span style={{ color: '#fff', fontWeight: 700 }}>Deducted from balance</span>
-                        <span style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>KES {(amt + fee).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span style={{ color: over ? '#ef4444' : '#fff', fontWeight: 700, fontSize: 15 }}>KES {(amt + fee).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                       </div>
                     </div>
+                    {over && (
+                      <p style={{ color: '#ef4444', fontSize: 12, marginBottom: 16, lineHeight: 1.5 }}>
+                        This needs KES {(amt + fee).toLocaleString()} but your balance is KES {bal.toLocaleString()}. The fee is charged on top of the amount.
+                        {maxRecv >= 1 && <> Tap <b>MAX</b> to withdraw everything — you’ll receive KES {maxRecv.toLocaleString()}.</>}
+                      </p>
+                    )}
+                    </>
                   );
                 })()}
 
@@ -5092,7 +5121,7 @@ export default function Dashboard() {
                         : 'Funds will be sent to your configured bank account via Pesalink.'}
                     </p>
                     <button
-                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount)}
+                      disabled={cbWithdrawOtpLoading || !parseFloat(cbWithdrawAmount) || ((parseFloat(cbWithdrawAmount) || 0) + getWithdrawalFee(cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank', parseFloat(cbWithdrawAmount) || 0) > Number(cbDashBalance?.balance || 0))}
                       onClick={async () => {
                         const minAmt = cbWithdrawChannel === 'mpesa' ? 1501 : 100; if (!parseFloat(cbWithdrawAmount) || parseFloat(cbWithdrawAmount) < minAmt) { setCbWithdrawMsg(`Minimum ${cbWithdrawChannel === 'mpesa' ? 'M-Pesa ' : ''}withdrawal is KES ${minAmt.toLocaleString()}`); return; }
                         if (cbWithdrawChannel === 'mpesa' && parseFloat(cbWithdrawAmount) > 250000) { setCbWithdrawMsg('M-Pesa withdrawals are limited to KES 250,000 per transaction. Withdraw to your bank for larger amounts.'); return; }
@@ -5105,7 +5134,7 @@ export default function Dashboard() {
                         } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Failed to send OTP'); }
                         setCbWithdrawOtpLoading(false);
                       }}
-                      style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: parseFloat(cbWithdrawAmount) > 0 ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: parseFloat(cbWithdrawAmount) > 0 ? 'pointer' : 'not-allowed' }}
+                      style={(() => { const _ok = parseFloat(cbWithdrawAmount) > 0 && ((parseFloat(cbWithdrawAmount) || 0) + getWithdrawalFee(cbWithdrawChannel === 'mpesa' ? 'mpesa' : 'bank', parseFloat(cbWithdrawAmount) || 0) <= Number(cbDashBalance?.balance || 0)); return { width: '100%', padding: '11px 0', borderRadius: 8, border: 'none', background: _ok ? 'linear-gradient(135deg,#ef4444,#dc2626)' : '#374151', color: '#fff', fontWeight: 700, fontSize: 14, cursor: _ok ? 'pointer' : 'not-allowed' }; })()}
                     >
                       {cbWithdrawOtpLoading ? 'Sending OTP...' : 'Send OTP to authorize'}
                     </button>
