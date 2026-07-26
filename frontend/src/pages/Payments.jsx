@@ -828,11 +828,12 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
             )}
           </div>
           <div className="pm-field">
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
               <label style={{ margin: 0 }}>Amount (KES)</label>
               {quote && quote.max_net >= 10 && (
                 <button type="button" onClick={() => setAmount(String(quote.max_net))}
-                  style={{ background: 'none', border: 'none', color: '#f59e0b', fontSize: 12.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', color: '#f59e0b', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', padding: '4px 10px', borderRadius: 999, letterSpacing: 0.2, lineHeight: 1 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
                   Withdraw everything
                 </button>
               )}
