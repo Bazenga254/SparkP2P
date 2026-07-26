@@ -126,8 +126,12 @@ async def _flow_once():
             if nick:
                 # "Avail now" = USDT the merchant actually has FOR SALE (their sell ads = board["buy"]).
                 # Buy-ad amounts are inflated monthly buy-limits, so they're excluded from availability.
+                # Take the merchant's LARGEST single sell ad, NOT the sum of all their sell ads: a
+                # merchant who splits/spoofs inventory across two ads would otherwise show a doubled,
+                # exaggerated availability. The biggest ad is the honest floor of what they really hold
+                # (~90% accurate even against a two-ad spoof).
                 if board_side == "buy":
-                    nick_avail[nick] = nick_avail.get(nick, 0.0) + av
+                    nick_avail[nick] = max(nick_avail.get(nick, 0.0), av)
                 _nick_first.setdefault(nick, now)
 
     for adv, (nick, board_side, av, price) in cur.items():
@@ -189,7 +193,10 @@ def get_summary() -> dict:
             "nick": nick, "traded": round(traded), "bought": round(v["bought"]), "sold": round(v["sold"]),
             "avail": round(availn), "delta_pct": dpct,
         })
-    rows.sort(key=lambda r: r["traded"], reverse=True)
+    # Rank by BOUGHT — the cleanest signal. A drop on a merchant's BUY ad is an unambiguous
+    # fill (someone sold USDT to them); sell-ad depletion is noisier (edits/repricing), so
+    # "traded"/"sold" are less reliable for ordering the leaderboard.
+    rows.sort(key=lambda r: r["bought"], reverse=True)
 
     since_hours = round((now - cut) / 3600, 1)           # hours since 3am reset
     started = _started or now

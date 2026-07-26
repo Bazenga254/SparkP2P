@@ -91,17 +91,17 @@ export default function MarketActivity({ enabled }) {
 
             <div className="section-h">Merchant flow — top movers (today, estimated)</div>
             <div className="tbl-wrap"><table>
-              <thead><tr><th className="l">Merchant</th><th>Est. Traded</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Net Spread</th></tr></thead>
+              <thead><tr><th className="l">Merchant</th><th>Bought</th><th>Sold</th><th>Avail Now</th><th>Est. Traded</th><th>Net Spread</th></tr></thead>
               <tbody>
                 {(shownMerchants.length === 0)
                   ? <tr><td className="l" colSpan="6" style={{ textAlign: 'center', color: 'var(--text-3)' }}>No fills observed yet — give it a few minutes of tracking.</td></tr>
                   : shownMerchants.map((m, i) => (
                     <tr key={m.nick + i}>
                       <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8 }}>{m.nick}</span>{m.tier && m.tier !== 'normal' && <span style={{ marginLeft: 8, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '2px 6px', borderRadius: 5, color: TIER_COLOR[m.tier], border: `1px solid ${TIER_COLOR[m.tier]}55`, textTransform: 'uppercase' }}>{m.tier}</span>}</td>
-                      <td data-label="Est. Traded" className="v-traded">{fmtU(m.traded)}</td>
                       <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
                       <td data-label="Avail Now">{m.avail ? fmtU(m.avail) : <span className="muted">0</span>}</td>
+                      <td data-label="Est. Traded" className="v-traded">{fmtU(m.traded)}</td>
                       <td data-label="Net Spread" title="Posted sell price − buy price, minus Binance fees (Gold 0.25 / Silver 0.35 / Bronze 0.40 KES/USDT) — the merchant's net margin per USDT. Shown only when they quote both sides." style={{ color: m.spread == null ? 'var(--text-3)' : m.spread < 0 ? '#ef6a7e' : 'var(--green-2)', fontWeight: 600 }}>{m.spread == null ? '—' : `KES ${m.spread.toFixed(2)}`}</td>
                     </tr>
                   ))}
