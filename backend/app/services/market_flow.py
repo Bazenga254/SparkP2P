@@ -31,7 +31,23 @@ _nick_first: dict[str, float] = {}  # nick -> first-seen ts
 _avail_now: dict[str, float] = {}   # nick -> LAST known advertised available (persists when ads off)
 _avail_seen: dict[str, float] = {}  # nick -> last ts seen advertising a sell ad (for live vs stale)
 _recent_fills: dict[str, list] = {} # advNo -> [{ts,nick,action,amt,kes,hk}] recent counted fills (reversal log)
+# SOLD is systematically inflated by sell-ad repricing churn (BOUGHT is accurate). This multiplier
+# scales estimated Sold to reality; it's calibrated in the market-activity route against our OWN
+# merchants' real sold (ground truth) and persists here. Seeded from the observed ~0.4 so it's
+# corrected out of the box, then self-adjusts as real trades accumulate.
+_sold_calib: float = 0.4
 _started: float = 0.0
+
+
+def get_sold_calib() -> float:
+    return _sold_calib
+
+
+def set_sold_calib(f: float):
+    """Store the ground-truth SOLD correction (clamped to a sane range) and persist it."""
+    global _sold_calib
+    _sold_calib = max(0.1, min(1.0, float(f)))
+    _save()
 
 AVAIL_STALE_AFTER = 180             # s: avail older than this = merchant's ads are OFF (persisted/stale)
 AVAIL_FORGET_AFTER = 48 * 3600     # s: drop a merchant's persisted avail after this long off the board
@@ -57,7 +73,7 @@ def _hour(ts: float) -> str:
 
 
 def _load():
-    global _prev, _buckets, _nick_first, _avail_now, _avail_seen, _recent_fills, _started
+    global _prev, _buckets, _nick_first, _avail_now, _avail_seen, _recent_fills, _sold_calib, _started
     try:
         if FLOW_FILE.exists():
             d = json.loads(FLOW_FILE.read_text("utf-8")) or {}
@@ -67,6 +83,7 @@ def _load():
             _avail_now = d.get("avail_now", {})
             _avail_seen = d.get("avail_seen", {})
             _recent_fills = d.get("recent_fills", {})
+            _sold_calib = d.get("sold_calib", _sold_calib)
             _started = d.get("started", 0.0) or time.time()
             # Migrate legacy buckets (buy/sell keys) -> corrected bought/sold. The old 'buy' key
             # held sell-ad drops (= the merchant SOLD); 'sell' held buy-ad drops (= BOUGHT).
@@ -90,7 +107,7 @@ def _save():
         tmp.write_text(json.dumps({
             "prev": _prev, "buckets": _buckets, "nick_first": _nick_first,
             "avail_now": _avail_now, "avail_seen": _avail_seen,
-            "recent_fills": _recent_fills, "started": _started,
+            "recent_fills": _recent_fills, "sold_calib": _sold_calib, "started": _started,
         }), "utf-8")
         tmp.replace(FLOW_FILE)
     except Exception as e:
