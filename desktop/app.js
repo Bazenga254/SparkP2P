@@ -11740,16 +11740,35 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
 }
 
 async function sendBinanceChatMessage(page, message) {
-  // Delegate to sendChatMessage which handles React native setter + send button click correctly
+  // Delegate to sendChatMessage which handles React native setter + send button click correctly.
   try {
-    // Wait up to 10s for the chat panel to render before handing off
-    let chatInput = null;
-    for (let i = 0; i < 5; i++) {
-      chatInput = await page.$('[placeholder*="message" i], [placeholder*="Enter message" i], [placeholder*="Type" i], textarea, div[contenteditable="true"]');
-      if (chatInput) break;
+    // Wait up to ~14s for the chat input to render. On a freshly-opened order tab the chat can be
+    // behind a collapsed "Chat" panel — with NO visible input, every send failed "chat not ready".
+    // So on each pass, if we don't yet see a VISIBLE input, click the "Chat" toggle to open the panel.
+    let visible = false;
+    for (let i = 0; i < 7; i++) {
+      visible = await page.evaluate(() => {
+        const inputs = [...document.querySelectorAll(
+          '[placeholder*="message" i], [placeholder*="enter message" i], [placeholder*="type" i], textarea, div[contenteditable="true"]'
+        )];
+        if (inputs.some(el => el.offsetParent !== null && !el.disabled && !el.readOnly)) return true;
+        // No visible input — try to OPEN the chat panel by clicking a "Chat" button/toggle.
+        const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        while (w.nextNode()) {
+          const t = (w.currentNode.textContent || '').trim().toLowerCase();
+          if (t === 'chat' || t === 'chat now' || t === 'open chat') {
+            const el = w.currentNode.parentElement;
+            const r = el && el.getBoundingClientRect();
+            if (r && r.width > 0 && r.height > 0) { el.click(); break; }
+          }
+        }
+        return false;
+      }).catch(() => false);
+      if (visible) break;
       await new Promise(r => setTimeout(r, 2000));
     }
-    if (!chatInput) { console.log('[SparkP2P] Chat input not found after retries'); return false; }
+    // Hand off to sendChatMessage REGARDLESS — it has a Vision fallback that can locate and click
+    // the chat box visually even when the DOM pre-check above never found a ready input.
     return await sendChatMessage(page, message);
   } catch (e) {
     console.log('[SparkP2P] Chat send error:', e.message);
