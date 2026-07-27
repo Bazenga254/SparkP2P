@@ -681,21 +681,39 @@ async def track_trader(db, trader) -> int:
                     "INSERT INTO sell_order_notifications (order_number, trader_id) VALUES (:o, :t) ON CONFLICT DO NOTHING"
                 ), {"o": str(ono), "t": trader.id})
                 await db.commit()
-                # Buyer profile via EP-19 (server-side; no browser)
+                # Buyer profile via EP-19 (server-side; no browser). RETRY a few times — a transient
+                # relay/API blip returns nothing, which would otherwise render an established,
+                # already-traded buyer as a blank, never-seen stranger (and falsely say "traded
+                # before: No"). Getting this wrong on screening is dangerous, so we retry, then flag
+                # the alert as "stats unavailable" if it still fails rather than asserting zeros.
                 prof = {}
-                try:
-                    prof = await get_counterparty_statistic(api_key, api_secret, ono)
-                except Exception:
-                    prof = {}
-                # Full (unmasked) buyer nickname + stable counterparty id from order detail
+                for _attempt in range(3):
+                    try:
+                        prof = await get_counterparty_statistic(api_key, api_secret, ono) or {}
+                    except Exception:
+                        prof = {}
+                    if prof.get("registerDays") is not None or prof.get("completedOrderNum") is not None \
+                       or prof.get("completedOrderNumOfLatest30day") is not None:
+                        break
+                    await asyncio.sleep(1.5)
+                # Did EP-19 actually return real data (even zeros for a genuinely new buyer), or did
+                # the lookup FAIL? A real Binance account always carries an account age / order count,
+                # so their absence means we couldn't fetch — NOT that the buyer is new/untraded.
+                _prof_ok = (prof.get("registerDays") is not None) or (prof.get("completedOrderNum") is not None) \
+                           or (prof.get("completedOrderNumOfLatest30day") is not None)
+                # Full (unmasked) buyer nickname + stable counterparty id from order detail (retry too)
                 _full_nick = None
                 _taker_no = None
-                try:
-                    _det = await get_order_payment_details(api_key, api_secret, ono)
-                    _full_nick = _det.get("counterparty_nickname")
-                    _taker_no = _det.get("taker_user_no")
-                except Exception:
-                    _full_nick = None
+                for _attempt in range(3):
+                    try:
+                        _det = await get_order_payment_details(api_key, api_secret, ono)
+                        _full_nick = _det.get("counterparty_nickname")
+                        _taker_no = _det.get("taker_user_no")
+                    except Exception:
+                        pass
+                    if _taker_no:
+                        break
+                    await asyncio.sleep(1.0)
                 def _f(v, suffix=""):
                     return (f"{v}{suffix}" if v not in (None, "") else "N/A")
                 t30 = prof.get("completedOrderNumOfLatest30day")
@@ -733,11 +751,16 @@ async def track_trader(db, trader) -> int:
                     # (finding sparse trades at high volume can take a couple of minutes).
                     if withus > 0 and _obs < withus and (trader.id, _taker_no) not in _rel_inflight:
                         _need_enrich = True
-                # "Traded with you before" reflects 30-day OR any older cached relationship
+                # "Traded with you before" reflects 30-day OR any older cached relationship. If the
+                # Binance lookup FAILED (and we have no cached relationship either), we do NOT know —
+                # say so rather than asserting "No", which would brand a returning client as a
+                # first-timer and could get them wrongly rejected.
                 if withus:
                     _before = f"Yes ({withus} in 30d)"
                 elif _obs > 0:
                     _before = f"Yes (last ~{_last_days}d ago)" if _last_days is not None else "Yes (earlier)"
+                elif not _prof_ok:
+                    _before = "⚠️ Couldn't check — Binance lookup failed"
                 else:
                     _before = "No"
 
@@ -751,6 +774,11 @@ async def track_trader(db, trader) -> int:
                 _threshold_notes = []
                 _account_notes = []
                 _base_flags = []   # cautionary (everything except relationship flags)
+                # Lookup failure guard: if EP-19 gave us nothing, the profile above is blank NOT
+                # because the buyer is new but because we couldn't reach Binance for them. Say so
+                # loudly so a trusted returning client isn't rejected on empty data.
+                if not _prof_ok:
+                    _base_flags.append("⚠️ Buyer stats unavailable — couldn't fetch this buyer's Binance history (temporary lookup failure). The blanks above are NOT confirmed zeros; a returning client can look brand-new here. Verify manually before rejecting.")
                 # 30-day threshold check
                 if thr30 > 0 and _t30 is not None:
                     if _t30 >= thr30:
