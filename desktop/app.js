@@ -1938,7 +1938,13 @@ async function onLoginDetected() {
   const _binancePage = _pages.find(p => p.url().includes('binance.com'))
     || _pages.find(p => !p.url().startsWith('chrome://') && p.url() !== 'about:blank');
   for (const p of _pages) {
-    if (p !== _binancePage && !p.url().startsWith('chrome://')) {
+    const _u = p.url();
+    // Keep the Binance page, Chrome internals, AND the Gmail tab. Binance now asks for an EMAIL
+    // verification code on release (on top of TOTP), and the bot reads that code from Gmail — so a
+    // persistent Gmail tab MUST survive this cleanup. It used to be closed here (from when OTP moved
+    // to SMS and "Gmail was no longer needed"), which is exactly why Gmail never stayed open.
+    const _isGmail = _u.includes('mail.google.com') || _u.includes('accounts.google.com');
+    if (p !== _binancePage && !_u.startsWith('chrome://') && !_isGmail) {
       await p.close().catch(() => {});
     }
   }
@@ -1954,7 +1960,13 @@ async function onLoginDetected() {
   // Sync Binance cookies immediately so backend marks binance_connected = true
   await syncCookies();
 
-  // Start bot (OTP now via SMS/MacroDroid — Gmail no longer needed)
+  // Open a PERSISTENT Gmail tab, logged in and parked alongside Binance. Binance now requires an
+  // EMAIL verification code on release (in addition to TOTP), which the bot extracts from Gmail —
+  // so we open it up front (and keep it via the cleanup guard above) instead of racing to open it
+  // mid-release while the code is expiring. Fire-and-forget so it never blocks the bot starting.
+  openGmailTab().catch(() => {});
+
+  // Start bot
   const setup = await checkSetupComplete();
   if (setup.complete && !pollerRunning) {
     mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
@@ -8829,10 +8841,12 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
 
       // â"€â"€ TOTP input â€" type code character by character + click Submit â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       if (screen === 'totp_input') {
-        if (!totpSecret) {
-          console.log('[TOTP] Secret not in memory â€" re-fetching credentials...');
-          await fetchAndApplyCredentials();
-        }
+        // ALWAYS refresh the secret from the backend before generating a code. A merchant who
+        // resets their Google Authenticator gets a NEW secret, but the bot cached the OLD one at
+        // startup and only re-fetched when it was missing entirely — so every release kept
+        // submitting a code from the stale secret and Binance rejected it as "Incorrect 2FA".
+        // Re-fetching here means an updated secret takes effect on the very next release, no restart.
+        await fetchAndApplyCredentials().catch(() => {});
         if (!totpSecret) {
           console.error('[TOTP] Secret not configured â€" check your SparkP2P settings');
           return { success: false, error: 'TOTP not configured' };
