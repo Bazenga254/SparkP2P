@@ -4441,9 +4441,18 @@ async function idleScan(page) {
           ];
         }
         if (_choiceAccNum) {
+          // HONOUR the chat-send result. sendBinanceChatMessage returns false when the chat panel
+          // never rendered / the send failed — previously the callback returned true regardless, so
+          // a silent failure was logged as "sell action done" and the buyer got NO payment details
+          // (and it was never retried). Now: if any message fails to send, abort, leave the order
+          // UNMARKED, and retry next cycle with a ready chat.
           const _sent = await withSellTab(order.orderNumber, async (tab) => {
             for (let i = 0; i < _payMsgs.length; i++) {
-              await sendBinanceChatMessage(tab, _payMsgs[i]);
+              const _ok = await sendBinanceChatMessage(tab, _payMsgs[i]);
+              if (!_ok) {
+                console.log(`[SparkP2P] Order ${order.orderNumber} -- chat send failed at message ${i + 1}/${_payMsgs.length}; will retry next cycle`);
+                return false;
+              }
               if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
             }
             return true;
@@ -4452,6 +4461,9 @@ async function idleScan(page) {
             sellPayInstructSentOrders.add(order.orderNumber);
             _saveOrderFlag(order.orderNumber, 'sellInstructionsSent', true);
             console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
+            sendBotLog('success', `Sell order ...${order.orderNumber.slice(-8)} — payment details sent to buyer`);
+          } else {
+            sendBotLog('warning', `Sell order ...${order.orderNumber.slice(-8)} — could NOT send payment details to the buyer (chat not ready). Retrying next cycle.`);
           }
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} -- Choice Bank account not set, cannot send instructions`);
