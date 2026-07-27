@@ -686,6 +686,12 @@ async def detect_binance_name(
         if p2p_tier in ("gold", "silver", "bronze"):
             trader.binance_merchant_tier = p2p_tier
     await db.commit()
+    # Auto-assign the subscription plan to match the detected Binance tier (from next renewal).
+    try:
+        from app.services.plans import apply_tier_plan
+        await apply_tier_plan(trader, db)
+    except Exception as _e:
+        logger.warning("detect-binance-name: apply_tier_plan failed for trader %s: %s", trader.id, _e)
     return {"nickname": nick, "tier": p2p_tier}
 
 
@@ -1837,6 +1843,14 @@ async def save_binance_api_key(
         pass
 
     await db.commit()
+
+    # Auto-assign the subscription plan to the detected Binance tier (Gold→Gold, Silver→Silver,
+    # Bronze→Bronze). Plans are locked to the Binance tier; this is the onboarding entry point.
+    try:
+        from app.services.plans import apply_tier_plan
+        await apply_tier_plan(trader, db)
+    except Exception as _e:
+        logger.warning("save_binance_api_key: apply_tier_plan failed for trader %s: %s", trader.id, _e)
 
     from app.api.deps import log_event
     await log_event(db, trader.id, f"Binance API key connected{' (Gold Merchant)' if merchant_capable else ''}", "success")

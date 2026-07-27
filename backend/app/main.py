@@ -431,6 +431,10 @@ async def lifespan(app: FastAPI):
     # Subscription reminders — 5-day / 3-day pre-expiry SMS (hourly).
     from app.services.subscription_reminder import subscription_reminder
     reminder_task = asyncio.create_task(subscription_reminder())
+    # Binance-tier → plan sync — hourly re-check of each merchant's live Binance medal; moves the
+    # subscription plan (both ways) to match. Relay-gated; skips a merchant whose relay is offline.
+    from app.services.tier_poller import tier_poller
+    tier_task = asyncio.create_task(tier_poller())
     # Deposit reconciliation — safety net for CHOICE_DEPOSIT payments left PENDING when the
     # inline 3-min background task fails or the server restarts (every 2 min).
     from app.services.deposit_reconcile_poller import deposit_reconcile_poller

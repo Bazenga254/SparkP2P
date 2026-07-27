@@ -3621,14 +3621,14 @@ export default function Dashboard() {
           // so a server-side price change can never leave these cards showing a stale price.
           const PLAN_UI = {
             starter: { cls: '',        ribbon: null,             btn: 'btn-ghost', check: 'check-a',
-              blurb: 'For casual traders getting started.', summary: '30 trades & 100 Telegram alerts per day',
-              features: ['<b>30 trades</b> per day (buy + sell)', '<b>100</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
+              blurb: 'Auto-assigned to Bronze Binance merchants.', summary: 'Unlimited trades & alerts · Bronze market data',
+              features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', 'Price Tracker: <b>Bronze</b> merchants only'] },
             pro: { cls: 'popular', ribbon: '★ MOST POPULAR', btn: 'btn-amber', check: 'check-a',
-              blurb: 'Best balance of volume and value.', summary: '80 trades & 200 Telegram alerts per day',
-              features: ['<b>80 trades</b> per day (buy + sell)', '<b>200</b> Telegram alerts per day', 'Resets daily at 3:00 AM'] },
+              blurb: 'Auto-assigned to Silver Binance merchants.', summary: 'Unlimited trades & alerts · Silver + Bronze data',
+              features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', 'Price Tracker: <b>Silver + Bronze</b> merchants'] },
             pro_max: { cls: 'best',    ribbon: '★ BEST VALUE',   btn: 'btn-green', check: 'check-g',
-              blurb: 'For high-volume power traders.', summary: 'Unlimited trades & Telegram alerts',
-              features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', '<b>Priority</b> support'] },
+              blurb: 'Auto-assigned to Gold Binance merchants.', summary: 'Unlimited everything · all market data',
+              features: ['<b>Unlimited</b> trades per day', '<b>Unlimited</b> Telegram alerts', 'Price Tracker: <b>all</b> merchants', '<b>Priority</b> support'] },
           };
           // Mirrors plans.py; only used for the first paint before payInfo arrives.
           const PLAN_FALLBACK = [
@@ -3902,12 +3902,20 @@ export default function Dashboard() {
               {!b2cEnabled && (<>
               <div className="plans-head reveal d3">
                 <div className="eyebrow">Subscription Plans</div>
-                <h3>Choose the plan that fits your trading volume</h3>
+                <h3>Your plan follows your Binance merchant tier</h3>
+                <p style={{ color: 'var(--text-3, #9aa4b2)', fontSize: 13, marginTop: 6, maxWidth: 620, marginLeft: 'auto', marginRight: 'auto' }}>
+                  Plans are set automatically from your live Binance P2P tier — Gold, Silver or Bronze. You're on the matching plan; the others are locked. All tiers get unlimited trades and Telegram alerts — Gold also sees every merchant's market data, Silver sees Silver + Bronze, Bronze sees Bronze.
+                </p>
               </div>
 
               <div className="plans">
                 {SUB_PLANS.map((p, idx) => {
                   const isCurrent = currentPlanKey === p.key;
+                  // Plans are LOCKED to the merchant's live Binance P2P tier — Gold→Gold, Silver→
+                  // Silver, Bronze→Bronze. Only the matching plan is choosable; the rest are shown
+                  // but disabled. (Tier unknown → leave all open so onboarding isn't blocked.)
+                  const _tierKey = { gold: 'pro_max', silver: 'pro', bronze: 'starter' }[(profile?.binance_merchant_tier || '').toLowerCase()] || null;
+                  const _locked = _tierKey && p.key !== _tierKey && !isCurrent;
                   const busy = (creditBuying || creditPolling) && creditPlan === p.key;
                   return (
                     <div key={p.key} className={`plan ${p.cls} reveal d${idx + 4}`}>
@@ -3922,6 +3930,8 @@ export default function Dashboard() {
                       </ul>
                       {isCurrent ? (
                         <button className="btn btn-current">✓ Current plan</button>
+                      ) : _locked ? (
+                        <button className="btn" disabled title="Your plan is set automatically by your Binance merchant tier" style={{ opacity: 0.45, cursor: 'not-allowed' }}>🔒 Set by Binance tier</button>
                       ) : (
                         <button className={`btn ${p.btn}`} disabled={busy || !creditPhone.trim()} onClick={() => handleSubscribe(p.key)}>
                           {busy ? (creditPolling ? 'Waiting…' : 'Sending…') : `Choose ${p.name} →`}
