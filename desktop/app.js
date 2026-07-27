@@ -1295,6 +1295,17 @@ async function getPage(urlMatch) {
 }
 
 async function verifyGmailWithVision(page) {
+  // FAST, RELIABLE URL check first. A mail.google.com/mail URL that isn't a Google sign-in page IS
+  // the logged-in inbox — don't gate the "Gmail connected → redirect to Binance" flow on a Vision
+  // API call that can be slow/flaky (that's why login sometimes wasn't confirmed and the app never
+  // switched back to Binance). Vision below is only a secondary check for ambiguous URLs.
+  try {
+    const u = page.url();
+    if (u.includes('mail.google.com/mail') && !u.includes('accounts.google.com')
+        && !u.includes('/signin') && !u.includes('ServiceLogin')) {
+      return true;
+    }
+  } catch (e) {}
   if (!anthropicApiKey) {
     // Fallback to URL check if no Vision key yet
     const url = page.url();
