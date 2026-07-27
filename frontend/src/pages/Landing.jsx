@@ -7,9 +7,9 @@ import { usePlans } from '../services/plans';
 
 // Presentation only — plan names and prices are fetched from the backend (plans.py).
 const LAND_PLAN_FEATURES = {
-  starter: ['Sell-side automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Up to 30 trades/day', 'Telegram notifications'],
-  pro:     ['Everything in Bronze', 'Buy-side auto-pay', 'Up to 80 trades/day', 'Priority settlement', 'Advanced analytics'],
-  pro_max: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Priority support', 'Dedicated onboarding'],
+  starter: ['Full buy & sell automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Market data: Bronze merchants'],
+  pro:     ['Everything in Bronze', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Market data: Silver + Bronze', 'Priority settlement'],
+  pro_max: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Market data: all merchants', 'Priority support', 'Dedicated onboarding'],
 };
 
 const FAQS = [

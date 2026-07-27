@@ -54,6 +54,14 @@ export default function Subscribe() {
     .filter(p => PLAN_UI[p.key])
     .map(p => ({ id: p.key, name: p.label, price: p.price, ...PLAN_UI[p.key] }));
   const planById = id => PLANS.find(p => p.id === id);
+  // Plans are LOCKED to the merchant's live Binance P2P tier — gold→Gold, silver→Silver,
+  // bronze→Bronze. Only the matching plan is selectable. (Tier unknown → leave all open.)
+  const tierPlanKey = { gold: 'pro_max', silver: 'pro', bronze: 'starter' }[(user?.binance_merchant_tier || '').toLowerCase()] || null;
+
+  // Default the selection to the tier-matching plan so the payment form is prefilled.
+  useEffect(() => {
+    if (tierPlanKey && !selectedPlan) setSelectedPlan(tierPlanKey);
+  }, [tierPlanKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadStatus = async () => {
     try {
@@ -126,7 +134,7 @@ export default function Subscribe() {
         <div className="subscribe-header">
           <Crown size={36} className="subscribe-icon" />
           <h1>SparkP2P Subscription</h1>
-          <p>Choose a plan to automate your Binance P2P trades</p>
+          <p>Your plan is set automatically by your Binance merchant tier{tierPlanKey ? ` — you're on ${planById(tierPlanKey)?.name || 'your'}` : ''}. All tiers get unlimited trades and Telegram alerts.</p>
         </div>
 
         {/* Current Status */}
@@ -157,11 +165,14 @@ export default function Subscribe() {
         <div className="plan-cards">
           {PLANS.map(plan => {
             const Icon = plan.icon;
+            const locked = tierPlanKey && plan.id !== tierPlanKey;
             return (
               <div
                 key={plan.id}
-                className={`plan-card ${plan.badge ? 'pro' : ''} ${selectedPlan === plan.id ? 'selected' : ''}`}
-                onClick={() => setSelectedPlan(plan.id)}
+                className={`plan-card ${plan.badge ? 'pro' : ''} ${selectedPlan === plan.id ? 'selected' : ''} ${locked ? 'locked' : ''}`}
+                onClick={() => { if (!locked) setSelectedPlan(plan.id); }}
+                style={locked ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                title={locked ? 'Your plan is set automatically by your Binance merchant tier' : undefined}
               >
                 {plan.badge && <div className="plan-badge">{plan.badge}</div>}
                 <div className="plan-card-header">
@@ -177,7 +188,7 @@ export default function Subscribe() {
                   {(plan.disabled || []).map(f => <li key={f} className="feature-disabled">{f}</li>)}
                 </ul>
                 <div className="plan-card-select">
-                  {selectedPlan === plan.id ? 'Selected' : 'Select Plan'}
+                  {locked ? '🔒 Set by Binance tier' : selectedPlan === plan.id ? 'Selected' : 'Select Plan'}
                 </div>
               </div>
             );
