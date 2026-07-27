@@ -3154,7 +3154,7 @@ async def im_configured_traders(
 
     Each row carries the rate resolved from their REAL subscription state
     (rate_for_trader → active_plan, never billing_active), so the admin sees
-    exactly what a Gold merchant pays (7), Silver (8), Bronze (9), a B2C/VIP
+    exactly what a Bronze merchant pays (4), Silver (5), Gold (7), a B2C/VIP
     client (5), and an unsubscribed trader on the intro allowance (10 → 12)."""
     from app.models.api_key import MerchantApiKey
     from app.models.im_charge import ImCharge

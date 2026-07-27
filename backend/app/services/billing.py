@@ -236,9 +236,9 @@ async def grant_b2c_credits(db, trader_id: int, amount: float, receipt: str = ""
             .order_by(CreditPurchase.created_at.desc())
         )).scalars().first()
 
-    # Credits are priced at the trader's PLAN rate (Gold 7 / Silver 8 / Bronze 9
-    # / B2C 5 / no-sub 10 / …), not a flat 8 — round(deposit / rate). The rate is
-    # locked in here, at purchase.
+    # Credits are priced at the trader's PLAN rate (Bronze 4 / Silver 5 / Gold 7
+    # / B2C 5 / no-sub 10 / …), round(deposit / rate). The rate is locked in here,
+    # at purchase.
     from app.services.credits import credit_rate_for_trader, credits_for
     rate = await credit_rate_for_trader(db, trader_id)
     credits = credits_for(amount, rate)

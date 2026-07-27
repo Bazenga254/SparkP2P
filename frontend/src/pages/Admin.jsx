@@ -4997,7 +4997,7 @@ export default function Admin() {
               </div>
               <p style={{ color: 'var(--text-3)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
                 Traders who configured I&amp;M Automation through SparkP2P. They bill at their <b>plan</b> rate —
-                Gold 7 · Silver 8 · Bronze 9 · B2C/VIP (KES 15,000) 5 · no subscription 10 (then 12).
+                Bronze 4 · Silver 5 · Gold 7 · B2C/VIP (KES 15,000) 5 · no subscription 10 (then 12).
               </p>
               {imLoading ? (
                 <p style={{ color: 'var(--text-3)' }}>Loading…</p>

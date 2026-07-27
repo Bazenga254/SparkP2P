@@ -1,10 +1,10 @@
 """
 What a merchant pays I&M Automation, per buy order it pays out.
 
-    B2C    (advanced, active)  KES  5   <- pays 15,000/mo, the most; charged the least
     Gold   (pro_max,  active)  KES  7
-    Silver (pro,      active)  KES  8
-    Bronze (starter,  active)  KES  9
+    B2C    (advanced, active)  KES  5
+    Silver (pro,      active)  KES  5
+    Bronze (starter,  active)  KES  4
     SparkP2P account, NO active subscription:
         first 100 payouts      KES 10   <- an allowance, not a rate (see below)
         payout 101 onward      KES 12
@@ -13,7 +13,7 @@ What a merchant pays I&M Automation, per buy order it pays out.
 THE 10 IS AN ALLOWANCE, NOT A RATE. A registered-but-unsubscribed trader gets
 100 payouts at 10 to try the bot; from the 101st they pay 12 — the same as
 someone who never signed up — because by then they are one. The moment they
-subscribe they move to their plan's rate (5/7/8/9) and the counter stops
+subscribe they move to their plan's rate (Bronze 4 / Silver 5 / Gold 7 / B2C 5) and the counter stops
 mattering. So "10" is a state a trader passes THROUGH, and any code that caches
 a trader's rate is wrong: it changes underneath you at payout 101.
 
@@ -66,10 +66,10 @@ INTRO_ALLOWANCE = 100
 
 # Only ACTIVE, unexpired plans appear here.
 RATE_BY_PLAN = {
-    SubscriptionPlan.ADVANCED: 5,   # B2C  (KES 15,000/mo — pays most, charged least)
+    SubscriptionPlan.ADVANCED: 5,   # B2C  (KES 15,000/mo)
     SubscriptionPlan.PRO_MAX:  7,   # Gold (KES 13,000/mo)
-    SubscriptionPlan.PRO:      8,   # Silver
-    SubscriptionPlan.STARTER:  9,   # Bronze
+    SubscriptionPlan.PRO:      5,   # Silver (was 8)
+    SubscriptionPlan.STARTER:  4,   # Bronze (was 9)
 }
 
 # A payout is billed only if the money actually moved.

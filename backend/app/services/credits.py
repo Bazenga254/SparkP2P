@@ -3,7 +3,7 @@ Prepaid payout credits for I&M Automation.
 
 1 credit = 1 payout. You buy credits by paying KES to paybill 4041355; the number
 you get is round(deposit / your rate) — so a Gold merchant (rate 7) turns KES
-1,000 into 143 credits, Silver (8) into 125, B2C/VIP (5) into 200, a bot-only
+1,000 into 143 credits, Silver (5) into 200, Bronze (4) into 250, a bot-only
 user (12) into 83. Each payout the bot makes consumes ONE credit. At zero, the
 bot stops: it ignores new Binance orders until the balance is topped up.
 
