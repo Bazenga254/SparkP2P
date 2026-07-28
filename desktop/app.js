@@ -2158,7 +2158,10 @@ async function onLoginDetected() {
   // EMAIL verification code on release (in addition to TOTP), which the bot extracts from Gmail —
   // so we open it up front (and keep it via the cleanup guard above) instead of racing to open it
   // mid-release while the code is expiring. Fire-and-forget so it never blocks the bot starting.
-  openGmailTab().catch(() => {});
+  // Gmail is now opened ON-DEMAND — only when a sell release actually needs the email
+  // OTP (IMAP is tried first; the Gmail tab is a fallback, opened inside readEmailOTP /
+  // readEmailOTPWithVision). We no longer open it up front, so after merely sending
+  // payment details the bot stays on Binance and never parks on the Gmail tab.
 
   // Start bot
   const setup = await checkSetupComplete();
@@ -6993,6 +6996,8 @@ async function readEmailOTP(binancePage = null) {
 
       // IMAP unavailable or no email yet â€" fall back to Gmail browser tab
       console.log('[SparkP2P] IMAP: no code yet â€" trying Gmail browser tab...');
+      if (!gmailPage || gmailPage.isClosed()) await openGmailTab();  // open on-demand, only now
+      if (!gmailPage) continue;
       await gmailPage.bringToFront();
       const code = await _readEmailOTPOnce(gmailPage, sentAt);
       if (code) {
