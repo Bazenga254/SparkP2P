@@ -11949,13 +11949,19 @@ async function sendBinanceChatMessage(page, message) {
           '[placeholder*="message" i], [placeholder*="enter message" i], [placeholder*="type" i], textarea, div[contenteditable="true"]'
         )];
         if (inputs.some(el => el.offsetParent !== null && !el.disabled && !el.readOnly)) return true;
-        // No visible input — try to OPEN the chat panel by clicking a "Chat" button/toggle.
+        // No visible input — try to OPEN an inline chat panel by clicking a "Chat"
+        // toggle. CRITICAL: never click the TOP-NAV "Chat" button — Binance now routes
+        // it to /en/chatroom (the new Dual-Identity chat inbox), which navigates the bot
+        // OFF the order page and strands it ("chat not ready"). So skip anything that is a
+        // link or lives in the header/nav/menu; only an in-page (order-panel) toggle is safe.
         const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         while (w.nextNode()) {
           const t = (w.currentNode.textContent || '').trim().toLowerCase();
           if (t === 'chat' || t === 'chat now' || t === 'open chat') {
             const el = w.currentNode.parentElement;
-            const r = el && el.getBoundingClientRect();
+            if (!el) continue;
+            if (el.closest('a[href], header, nav, [class*="header" i], [class*="nav" i], [class*="menu" i]')) continue;
+            const r = el.getBoundingClientRect();
             if (r && r.width > 0 && r.height > 0) { el.click(); break; }
           }
         }
