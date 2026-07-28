@@ -9,6 +9,7 @@ let autoUpdater = null; // lazy-loaded inside checkForUpdates() after app is rea
 
 // â"€â"€ Local control server on port 9223 â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Lets the Settings panel pause/resume via fetch() â€" works even in packaged app
+let _lastChatVia = null;   // 'websocket' or 'dom' - path of the last chat send (for /test-chat)
 http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -16,6 +17,39 @@ http.createServer(async (req, res) => {
     // Chrome page detected mouse/keyboard activity â€" reset the pause inactivity timer
     resetPauseTimerOnActivity();
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (req.url === '/test-chat' && req.method === 'POST') {
+    // On-demand chat test: opens the order, waits for the chat socket + this order's
+    // sessionId to be learned, then sends via the SAME path the automation uses.
+    // Reports which transport actually delivered (websocket vs dom fallback).
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1e5) req.destroy(); });
+    req.on('end', async () => {
+      try {
+        const { orderNo, message } = JSON.parse(body || '{}');
+        if (!orderNo || !message) { res.end(JSON.stringify({ ok: false, error: 'orderNo and message required' })); return; }
+        const tab = await openOrderTab(String(orderNo));
+        if (!tab) { res.end(JSON.stringify({ ok: false, error: 'could not open order tab' })); return; }
+        try { await tab.bringToFront(); } catch (e) {}
+        let wsReady = false, sessionKnown = false;
+        for (let i = 0; i < 24; i++) {   // up to ~12s for socket + sessionId to be learned
+          const st = await tab.evaluate((o) => ({
+            ws: !!(window.__bnChatWS && window.__bnChatWS.readyState === 1),
+            sess: !!(window.__bnSess && window.__bnSess[String(o)]),
+          }), String(orderNo)).catch(() => ({ ws: false, sess: false }));
+          wsReady = st.ws; sessionKnown = st.sess;
+          if (wsReady && sessionKnown) break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        _lastChatVia = null;
+        const ok = await sendBinanceChatMessage(tab, String(message));
+        sendBotLog(ok ? 'success' : 'warn', `Test chat -> ...${String(orderNo).slice(-8)} via ${_lastChatVia || '?'}: ${ok ? 'SENT' : 'FAILED'}`);
+        res.end(JSON.stringify({ ok, via: _lastChatVia, wsReady, sessionKnown }));
+      } catch (e) {
+        res.end(JSON.stringify({ ok: false, error: String((e && e.message) || e) }));
+      }
+    });
     return;
   }
   if (req.url === '/pause') {
@@ -307,7 +341,9 @@ let connectingMpesa = false;   // Prevents concurrent connectMpesaPortal() calls
 let mpesaPortalReady = false;  // True only after Vision confirms LOGGED_IN — gates sweep execution
 let mpesaSweepRunning = false; // Prevents concurrent sweep executions
 let lastSweepCompletedAt = 0;  // Timestamp of last completed sweep (ms) — enforces cooldown
-let pauseInactivityTimer = null; // Auto-resume timer when bot is paused
+let pauseInactivityTimer = null; // Auto-resume timer when bot is paused (legacy sliding mode)
+let pauseFixedTimer = null;      // Fixed-duration auto-resume timer (user picks 3m/10m/30m/1h)
+let pauseFixedUntil = 0;         // Epoch ms when a fixed pause auto-resumes (0 = none)
 const PAUSE_AUTO_RESUME_MS = 3 * 60 * 1000; // 3 minutes
 
 // ── Bot Activity Logs ─────────────────────────────────────────────────────────
@@ -346,10 +382,34 @@ function clearPauseInactivityTimer() {
   if (pauseInactivityTimer) { clearTimeout(pauseInactivityTimer); pauseInactivityTimer = null; }
 }
 
-// Any mouse/keyboard activity on the Electron window OR Chrome pages resets the 60s timer
+// Fixed-duration pause: the merchant picks how long (3m/10m/30m/1h). Unlike the
+// sliding inactivity timer, this does NOT reset on activity — it runs the full
+// chosen duration, then auto-resumes and re-locks. Resume Bot cancels it early.
+function startPauseFixedTimer(durationMs) {
+  clearPauseFixedTimer();
+  clearPauseInactivityTimer();   // fixed mode replaces the sliding timer
+  pauseFixedUntil = Date.now() + durationMs;
+  pauseFixedTimer = setTimeout(async () => {
+    if (!pauseNavigation) return; // already resumed manually
+    console.log(`[SparkP2P] Fixed pause (${Math.round(durationMs / 60000)}m) elapsed — auto-resuming and locking all screens`);
+    pauseNavigation = false;
+    pauseFixedUntil = 0;
+    await lockChromeBrowser().catch(() => {});
+    mainWindow?.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("bot-resumed", { detail: { reason: "timer" } }))').catch(() => {});
+  }, durationMs);
+}
+
+function clearPauseFixedTimer() {
+  if (pauseFixedTimer) { clearTimeout(pauseFixedTimer); pauseFixedTimer = null; }
+  pauseFixedUntil = 0;
+}
+
+// Any mouse/keyboard activity resets the sliding (legacy) inactivity timer only.
+// In fixed-duration mode pauseInactivityTimer is null, so this is a no-op — the
+// chosen duration is honored regardless of activity.
 function resetPauseTimerOnActivity() {
   if (pauseNavigation && pauseInactivityTimer) {
-    startPauseInactivityTimer(); // reset the 60s countdown
+    startPauseInactivityTimer(); // reset the 3-minute countdown
   }
 }
 
@@ -1417,14 +1477,136 @@ let gmailLoginPollTimer = null;
 // Each tab is parked on the Binance order detail URL so the bot never has to do a full
 // page navigation for state checks or chat messages — just bringToFront() + reload().
 
+// ── Background-safe chat over Binance's own WebSocket ─────────────────────────
+// Vision breaks when the window is minimized/parked (a blank screenshot -> garbage
+// coords). Chat rides a plain-JSON WebSocket to wss://im.binance.com/binance_chat,
+// which has NOTHING to do with pixels — so sending on that same socket works no
+// matter where the window is (exactly like the I&M headless engine). Captured live:
+//   send frame  = {"msgType":"U_TEXT","content":<text>,"localId":<uuid>,
+//                  "mentionUsers":null,"order":{"orderNo":<order>},"refMsgIds":null,
+//                  "self":true,"sendStatus":0,"sessionId":<session>,
+//                  "sessionType":"PRIVATE","timestamp":<now>}
+//   keepalive   = {"msgType":"HEART_BEAT"}  (page sends every ~15s)
+// This hook installs at document-start (before the page opens the socket), grabs a
+// reference to the live binance_chat socket, learns each order's sessionId from any
+// message frame (in or out), and exposes window.__bnSendChat(text) which builds the
+// EXACT frame and pushes it on that already-authenticated socket. Purely additive:
+// if the socket/sessionId isn't known yet (e.g. very first greeting on a brand-new
+// order, or the socket lives in a worker we can't reach) it returns false and the
+// caller falls back to DOM — whose send then seeds the sessionId for next time.
+function _chatWsHook() {
+  try {
+    if (window.__bnChatHooked) return;
+    window.__bnChatHooked = true;
+    window.__bnSess = window.__bnSess || {};   // orderNo -> sessionId
+
+    // Learn orderNo->sessionId from any chat frame (incoming or outgoing).
+    const learn = (data) => {
+      try {
+        if (typeof data !== 'string' || data.indexOf('sessionId') === -1) return;
+        const o = JSON.parse(data);
+        const ono = o && o.order && o.order.orderNo;
+        if (ono && o.sessionId) window.__bnSess[String(ono)] = String(o.sessionId);
+      } catch (e) {}
+    };
+    const onFrame = (ev) => { try { learn(ev.data); } catch (e) {} };
+
+    // Grab the socket the instant the page creates it (URL contains "binance_chat").
+    const OWS = window.WebSocket;
+    const WS = function (url, protocols) {
+      const ws = (protocols !== undefined) ? new OWS(url, protocols) : new OWS(url);
+      try {
+        if (/binance_chat/i.test(String(url))) {
+          window.__bnChatWS = ws;
+          ws.addEventListener('message', onFrame);
+        }
+      } catch (e) {}
+      return ws;
+    };
+    WS.prototype = OWS.prototype;
+    try { Object.setPrototypeOf(WS, OWS); } catch (e) {}
+    window.WebSocket = WS;
+
+    // Also patch send: learn sessionId from our/their outgoing frames, and grab the
+    // socket ref as a fallback if the constructor wrap missed it (e.g. pre-existing).
+    const origSend = OWS.prototype.send;
+    OWS.prototype.send = function (data) {
+      try {
+        learn(data);
+        if (!window.__bnChatWS && typeof data === 'string' && /"msgType"/.test(data)) window.__bnChatWS = this;
+      } catch (e) {}
+      return origSend.apply(this, arguments);
+    };
+
+    const uuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+
+    // Send a chat message on THIS order over the live socket. orderNo comes from the
+    // page URL; sessionId from what we've learned. Returns false (=> DOM fallback) if
+    // either the socket isn't open or the sessionId isn't known yet.
+    window.__bnSendChat = function (text) {
+      try {
+        const ws = window.__bnChatWS;
+        if (!ws || ws.readyState !== 1) return false;
+        const ono = new URLSearchParams(location.search).get('orderNo') ||
+                    (String(location.href).match(/orderNo=(\d{10,})/) || [])[1];
+        if (!ono) return false;
+        const sessionId = window.__bnSess[String(ono)];
+        if (!sessionId) return false;   // don't guess the session — let DOM seed it
+        const frame = {
+          msgType: 'U_TEXT', content: text, localId: uuid(), mentionUsers: null,
+          order: { orderNo: String(ono) }, refMsgIds: null, self: true, sendStatus: 0,
+          sessionId: String(sessionId), sessionType: 'PRIVATE', timestamp: Date.now(),
+        };
+        ws.send(JSON.stringify(frame));
+        return true;
+      } catch (e) { return false; }
+    };
+  } catch (e) {}
+}
+
+async function installChatWsHook(page) {
+  try { await page.evaluateOnNewDocument(_chatWsHook); } catch (_) {}
+}
+
+// Try to send a chat message over the WebSocket (background-safe, no DOM/Vision).
+// Returns true ONLY after we CONFIRM the message rendered as a sent bubble — sending
+// bytes on the socket is not proof of delivery, so we verify via the DOM (which updates
+// even when the window is minimized: innerText is not pixels). If the learned frame was
+// wrong, the message never renders, we return false, and the caller falls back to DOM.
+async function sendChatViaWebSocket(page, message) {
+  try {
+    // Distinctive, whitespace-normalised slice so verification matches the rendered
+    // bubble even when it wraps/reflows differently from the raw string. We check for
+    // an INCREASE in occurrences, so a repeated message still verifies correctly.
+    const needle = String(message).replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!needle) return false;
+    const count = () => page.evaluate((n) => (document.body.innerText.replace(/\s+/g, ' ').split(n).length - 1), needle).catch(() => 0);
+    const before = await count();
+    const sent = await page.evaluate((m) => (window.__bnSendChat ? window.__bnSendChat(m) : false), message);
+    if (!sent) return false;                       // socket/sessionId not ready -> caller uses DOM
+    for (let i = 0; i < 10; i++) {                 // up to ~4s for the sent bubble to render
+      await new Promise(r => setTimeout(r, 400));
+      if ((await count()) > before) return true;   // confirmed delivered + rendered
+    }
+    return false;                                  // sent but never rendered -> DOM fallback
+  } catch (e) { return false; }
+}
+
 async function openOrderTab(orderNumber) {
   if (!browser) return null;
   if (orderTabs[orderNumber] && !orderTabs[orderNumber].isClosed()) return orderTabs[orderNumber];
   try {
     const tab = await browser.newPage();
+    await installChatWsHook(tab);   // wrap WebSocket BEFORE the order page loads
+    // domcontentloaded (DOM parsed, ~1-3s) instead of networkidle2 (whole page quiet, 10-25s on
+    // Binance's chatty order page). The order details we act on are API-sourced (Phase-1 prefetch),
+    // and the chat/DOM helpers do their own readiness waits — so waiting for full network idle just
+    // added 10-20s of dead time to every buy order before we could pay.
     await tab.goto(
       `https://p2p.binance.com/en/fiatOrderDetail?orderNo=${orderNumber}`,
-      { waitUntil: 'networkidle2', timeout: 25000 }
+      { waitUntil: 'domcontentloaded', timeout: 15000 }
     ).catch(() => {});
     tab.on('close', () => { delete orderTabs[orderNumber]; });
     orderTabs[orderNumber] = tab;
@@ -1960,6 +2142,7 @@ async function onLoginDetected() {
     }
   }
   if (_binancePage) {
+    await installChatWsHook(_binancePage);   // background-safe chat over the WebSocket
     const _zl = await getDeviceZoomLevel();
     await _binancePage.evaluateOnNewDocument((z) => {
       document.addEventListener('DOMContentLoaded', () => { document.documentElement.style.zoom = `${Math.round(z * 100)}%`; });
@@ -11740,6 +11923,20 @@ async function pauseBuyAdAndNotify(page, orderNumber, orderDetails) {
 }
 
 async function sendBinanceChatMessage(page, message) {
+  // Background-safe FIRST: send over Binance's own chat WebSocket. Works even when the
+  // window is minimized/parked (no pixels, no DOM). Succeeds once the socket + frame
+  // template have been learned on this page (from an earlier send this session). If not
+  // yet learned, this returns false and we fall through to the DOM path below, which
+  // ALSO seeds the template — so the next send goes background-safe.
+  try {
+    if (await sendChatViaWebSocket(page, message)) {
+      _lastChatVia = 'websocket';
+      console.log('[SparkP2P] Chat sent via WebSocket (background-safe)');
+      sendBotLog('info', 'Chat sent via WebSocket (works minimized)');
+      return true;
+    }
+  } catch (_) {}
+  _lastChatVia = 'dom';
   // Delegate to sendChatMessage which handles React native setter + send button click correctly.
   try {
     // Wait up to ~14s for the chat input to render. On a freshly-opened order tab the chat can be
@@ -15067,8 +15264,16 @@ ipcMain.handle('connect-im', () => { connectIm(); return { opened: true }; });
 ipcMain.handle('connect-mpesa', () => { connectMpesaPortal(); return { opened: true }; });
 ipcMain.handle('unlock-browser', async () => { await unlockChromeBrowser(); console.log('[SparkP2P] Browser manually unlocked'); return { ok: true }; });
 ipcMain.handle('lock-browser', async () => { const p = await getPage(); if (p) await lockChromeBrowser(); return { ok: true }; });
-ipcMain.handle('pause-navigation', async () => { pauseNavigation = true; scanningInProgress = false; await unlockChromeBrowser(); startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€" Chrome unlocked for manual use'); return { ok: true }; });
-ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€" Chrome locked back to bot'); return { ok: true }; });
+ipcMain.handle('pause-navigation', async (_e, durationMs) => {
+  pauseNavigation = true; scanningInProgress = false;
+  await unlockChromeBrowser();
+  if (Number.isFinite(durationMs) && durationMs > 0) {
+    startPauseFixedTimer(durationMs);
+    console.log(`[SparkP2P] Navigation PAUSED for ${Math.round(durationMs / 60000)}m (fixed) - Chrome unlocked`);
+    return { ok: true, until: pauseFixedUntil };
+  }
+  startPauseInactivityTimer(); console.log('[SparkP2P] Navigation PAUSED â€" Chrome unlocked for manual use'); return { ok: true }; });
+ipcMain.handle('resume-navigation', async () => { pauseNavigation = false; clearPauseInactivityTimer(); clearPauseFixedTimer(); await lockChromeBrowser(); console.log('[SparkP2P] Navigation RESUMED â€" Chrome locked back to bot'); return { ok: true }; });
 ipcMain.handle('open-gmail-tab', async () => {
   // If Chrome is not running yet, launch it to Gmail directly
   if (!browser) {

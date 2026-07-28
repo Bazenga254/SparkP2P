@@ -98,6 +98,12 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [pauseHasTotp, setPauseHasTotp] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
   const [pauseMsg, setPauseMsg] = useState('');
+  const [pauseDuration, setPauseDuration] = useState(3 * 60 * 1000); // chosen pause length (ms)
+  const [pausedUntil, setPausedUntil] = useState(() => {
+    const v = parseInt(localStorage.getItem('sparkPausedUntil') || '0', 10);
+    return v && v > Date.now() ? v : null;
+  });
+  const [nowTick, setNowTick] = useState(Date.now());
 
   // I&M PIN
   const [imPinValue, setImPinValue] = useState('');
@@ -596,18 +602,54 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
         security_answer: pauseSecAnswer,
         totp_code: pauseTotpCode,
       });
-      // Verification passed — now actually pause
+      // Verification passed — now actually pause for the chosen duration
+      let until = pauseDuration ? Date.now() + pauseDuration : null;
       if (window.sparkp2p?.pauseNavigation) {
-        await window.sparkp2p.pauseNavigation();
+        const res = await window.sparkp2p.pauseNavigation(pauseDuration);
+        if (res && res.until) until = res.until;        // desktop is source of truth
+        else if (res && res.until === null) until = null; // old desktop = legacy sliding pause
       } else {
-        await fetch('http://127.0.0.1:9223/pause').catch(() => {});
+        await fetch('http://127.0.0.1:9223/pause?ms=' + (pauseDuration || 0)).catch(() => {});
       }
+      if (until) { setPausedUntil(until); localStorage.setItem('sparkPausedUntil', String(until)); }
       setShowPauseModal(false);
       setPauseStep('warning'); setPauseOtpCode(''); setPauseSecAnswer(''); setPauseTotpCode(''); setPauseMsg('');
     } catch (err) {
       setPauseMsg(err.response?.data?.detail || 'Verification failed. Check your codes and try again.');
     }
     setPauseLoading(false);
+  };
+
+  // Resume the bot early (before the chosen timer elapses).
+  const handleResumeBot = async () => {
+    try {
+      if (window.sparkp2p?.resumeNavigation) await window.sparkp2p.resumeNavigation();
+      else await fetch('http://127.0.0.1:9223/resume').catch(() => {});
+    } catch { /* re-lock is best-effort; clear the UI state regardless */ }
+    setPausedUntil(null);
+    localStorage.removeItem('sparkPausedUntil');
+  };
+
+  // Tick every second while paused so the countdown updates.
+  useEffect(() => {
+    if (!pausedUntil) return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [pausedUntil]);
+
+  // When the countdown reaches zero, the desktop has auto-resumed + re-locked;
+  // clear the UI state to match.
+  useEffect(() => {
+    if (pausedUntil && pausedUntil <= nowTick) {
+      setPausedUntil(null);
+      localStorage.removeItem('sparkPausedUntil');
+    }
+  }, [nowTick, pausedUntil]);
+
+  const fmtRemaining = (ms) => {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    const m = Math.floor(s / 60);
+    return `${m}:${String(s % 60).padStart(2, '0')}`;
   };
 
   const handleConnectIm = () => {
@@ -907,10 +949,17 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                     style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #f59e0b', background: 'transparent', color: '#f59e0b', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                     Re-connect
                   </button>
-                  <button onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); }}
-                    style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
-                    Pause Bot
-                  </button>
+                  {pausedUntil ? (
+                    <button onClick={handleResumeBot}
+                      style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #10b981', background: 'rgba(16,185,129,0.12)', color: '#10b981', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                      ▶ Resume Bot · {fmtRemaining(pausedUntil - nowTick)} left
+                    </button>
+                  ) : (
+                    <button onClick={() => { setShowPauseModal(true); setPauseStep('warning'); setPauseMsg(''); setPauseDuration(3 * 60 * 1000); }}
+                      style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+                      Pause Bot
+                    </button>
+                  )}
                 </div>
               ) : (
                 <button onClick={handleConnectBinance} disabled={connecting}
@@ -2232,24 +2281,33 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 During this window, anyone with physical or remote access to this device could interact with
                 your trading and banking accounts directly.<br /><br />
                 <strong style={{ color: '#fca5a5' }}>We strongly recommend pausing only when absolutely necessary</strong> — for example, to update your
-                configuration or troubleshoot an issue — and resuming immediately once done. The system will
-                automatically resume and re-lock all sessions after <strong>3 minutes of inactivity</strong>.
+                configuration or troubleshoot an issue — and resuming immediately once done. The bot stays paused for the time you pick below, then
+                automatically resumes and re-locks all sessions. You can resume earlier anytime with <strong>Resume Bot</strong>.
               </div>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button
-                  onClick={() => setShowPauseModal(false)}
-                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 14 }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRequestPauseOtp}
-                  disabled={pauseLoading}
-                  style={{ flex: 1, padding: '11px 0', borderRadius: 8, border: 'none', background: '#f59e0b', color: '#000', fontWeight: 700, cursor: 'pointer', fontSize: 14 }}
-                >
-                  {pauseLoading ? (profile?.has_totp ? 'Loading...' : 'Sending OTP...') : 'I Understand — Proceed'}
-                </button>
+              <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 8, textAlign: 'center' }}>How long should the bot stay paused?</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                {[['3 min', 3 * 60 * 1000], ['10 min', 10 * 60 * 1000], ['30 min', 30 * 60 * 1000], ['1 hour', 60 * 60 * 1000]].map(([label, ms]) => (
+                  <button
+                    key={ms}
+                    disabled={pauseLoading}
+                    onClick={() => { setPauseDuration(ms); handleRequestPauseOtp(); }}
+                    style={{ padding: '12px 0', borderRadius: 8, border: '1px solid #f59e0b', background: pauseDuration === ms ? '#f59e0b' : 'transparent', color: pauseDuration === ms ? '#000' : '#f59e0b', fontWeight: 700, cursor: pauseLoading ? 'not-allowed' : 'pointer', fontSize: 14 }}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
+              {pauseLoading && (
+                <div style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', marginBottom: 8 }}>
+                  {profile?.has_totp ? 'Loading verification…' : 'Sending OTP…'}
+                </div>
+              )}
+              <button
+                onClick={() => setShowPauseModal(false)}
+                style={{ width: '100%', padding: '11px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', cursor: 'pointer', fontSize: 14 }}
+              >
+                Cancel
+              </button>
             </>)}
 
             {pauseStep === 'otp' && (<>

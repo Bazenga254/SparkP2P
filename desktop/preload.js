@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   openGmailTab: () => ipcRenderer.invoke('open-gmail-tab'),
   unlockBrowser: () => ipcRenderer.invoke('unlock-browser'),
   lockBrowser: () => ipcRenderer.invoke('lock-browser'),
-  pauseNavigation: () => ipcRenderer.invoke('pause-navigation'),
+  pauseNavigation: (durationMs) => ipcRenderer.invoke('pause-navigation', durationMs),
   resumeNavigation: () => ipcRenderer.invoke('resume-navigation'),
   setToken: (token) => ipcRenderer.invoke('set-token', token),
   setPin: (pin) => ipcRenderer.invoke('set-pin', pin),
