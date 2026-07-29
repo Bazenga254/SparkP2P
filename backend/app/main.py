@@ -435,6 +435,11 @@ async def lifespan(app: FastAPI):
     # subscription plan (both ways) to match. Relay-gated; skips a merchant whose relay is offline.
     from app.services.tier_poller import tier_poller
     tier_task = asyncio.create_task(tier_poller())
+
+    # Clears resolved disputes: flips DISPUTED orders that are actually completed/
+    # cancelled on Binance to their real status so they drop off the admin list.
+    from app.services.dispute_reconciler import dispute_reconciler
+    dispute_task = asyncio.create_task(dispute_reconciler())
     # Deposit reconciliation — safety net for CHOICE_DEPOSIT payments left PENDING when the
     # inline 3-min background task fails or the server restarts (every 2 min).
     from app.services.deposit_reconcile_poller import deposit_reconcile_poller
