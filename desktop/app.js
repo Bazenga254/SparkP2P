@@ -2154,14 +2154,22 @@ async function onLoginDetected() {
   // Sync Binance cookies immediately so backend marks binance_connected = true
   await syncCookies();
 
-  // Open a PERSISTENT Gmail tab, logged in and parked alongside Binance. Binance now requires an
-  // EMAIL verification code on release (in addition to TOTP), which the bot extracts from Gmail —
-  // so we open it up front (and keep it via the cleanup guard above) instead of racing to open it
-  // mid-release while the code is expiring. Fire-and-forget so it never blocks the bot starting.
-  // Gmail is now opened ON-DEMAND — only when a sell release actually needs the email
-  // OTP (IMAP is tried first; the Gmail tab is a fallback, opened inside readEmailOTP /
-  // readEmailOTPWithVision). We no longer open it up front, so after merely sending
-  // payment details the bot stays on Binance and never parks on the Gmail tab.
+  // Pre-open a PERSISTENT Gmail tab at connect and WAIT for it to finish loading, THEN return
+  // focus to Binance to continue with orders. Binance now requires an email verification code on
+  // release (in addition to TOTP) which the bot reads from Gmail, so we warm the session up front
+  // instead of racing to open it mid-release while the code is expiring.
+  //   AWAITED — not fire-and-forget. The previous fire-and-forget open let Gmail's newPage()
+  //   focus-grab fire LATE, colliding with the first order's payment-details step and parking the
+  //   window on Gmail. Awaiting here guarantees Gmail is fully loaded and focus is back on Binance
+  //   BEFORE any order is worked. (On success openGmailTab -> onGmailConfirmed already returns
+  //   focus to Binance; we re-assert it for certainty. If Gmail needs login it stays in front so
+  //   the trader can sign in.) Order processing only ever uses the Binance/order tabs, so a warm
+  //   Gmail tab in the background never interferes with sending payment details.
+  const _gmailReady = await openGmailTab().catch(() => false);
+  if (_gmailReady) {
+    try { const _bp = await getPage(); if (_bp) await _bp.bringToFront(); } catch (_) {}
+    console.log('[SparkP2P] Gmail pre-loaded — focus returned to Binance to continue with orders');
+  }
 
   // Start bot
   const setup = await checkSetupComplete();
