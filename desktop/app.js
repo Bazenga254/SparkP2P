@@ -1675,6 +1675,39 @@ async function installChatWsHook(page) {
   try { await page.evaluateOnNewDocument(_chatWsHook); } catch (_) {}
 }
 
+// Block WebAuthn/passkey on Binance so the RELEASE step never triggers the native Windows
+// Security passkey dialog (screenshot: "Scan this QR code…") — that OS dialog is outside the
+// page and NO DOM/CDP click can dismiss it, so racing a click always risks losing to it.
+// Installed at document-start: the instant Binance calls navigator.credentials.get({publicKey})
+// for the passkey, we reject it immediately, so Binance drops straight to its fallback modal
+// ("Verify with passkey → Verification failed → My Passkeys Are Not Available"), which the bot
+// then clicks to reach TOTP + email OTP. Only WebAuthn (publicKey) is blocked — password/other
+// credential requests are untouched, so normal login is unaffected.
+function _passkeyBlockHook() {
+  try {
+    if (window.__bnPasskeyBlocked) return;
+    window.__bnPasskeyBlocked = true;
+    const creds = navigator.credentials;
+    if (creds && typeof creds.get === 'function') {
+      const _orig = creds.get.bind(creds);
+      creds.get = function (opts) {
+        try {
+          if (opts && opts.publicKey) {
+            return Promise.reject(new DOMException('Passkey disabled by SparkP2P', 'NotAllowedError'));
+          }
+        } catch (e) {}
+        return _orig(opts);
+      };
+    }
+  } catch (e) {}
+}
+
+async function installPasskeyBlock(page) {
+  try { await page.evaluateOnNewDocument(_passkeyBlockHook); } catch (_) {}
+  // Also apply to the CURRENT document in case the page already loaded before the hook attached.
+  try { await page.evaluate(_passkeyBlockHook); } catch (_) {}
+}
+
 // Try to send a chat message over the WebSocket (background-safe, no DOM/Vision).
 // Returns true ONLY after we CONFIRM the message rendered as a sent bubble — sending
 // bytes on the socket is not proof of delivery, so we verify via the DOM (which updates
@@ -1741,6 +1774,7 @@ async function openOrderTab(orderNumber) {
   try {
     const tab = await browser.newPage();
     await installChatWsHook(tab);   // wrap WebSocket BEFORE the order page loads
+    await installPasskeyBlock(tab); // block passkey BEFORE release verification triggers it
     // domcontentloaded (DOM parsed, ~1-3s) instead of networkidle2 (whole page quiet, 10-25s on
     // Binance's chatty order page). The order details we act on are API-sourced (Phase-1 prefetch),
     // and the chat/DOM helpers do their own readiness waits — so waiting for full network idle just
@@ -2284,6 +2318,7 @@ async function onLoginDetected() {
   }
   if (_binancePage) {
     await installChatWsHook(_binancePage);   // background-safe chat over the WebSocket
+    await installPasskeyBlock(_binancePage); // block passkey so release never hits the OS dialog
     const _zl = await getDeviceZoomLevel();
     await _binancePage.evaluateOnNewDocument((z) => {
       document.addEventListener('DOMContentLoaded', () => { document.documentElement.style.zoom = `${Math.round(z * 100)}%`; });
