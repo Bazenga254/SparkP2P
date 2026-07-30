@@ -1519,7 +1519,31 @@ function _chatWsHook() {
         if (ono && o.sessionId) { window.__bnSess[String(ono)] = String(o.sessionId); window.__bnSessSrc[String(ono)] = 'ws'; }
       } catch (e) {}
     };
-    const onFrame = (ev) => { try { learn(ev.data); } catch (e) {} };
+    // Rolling buffer of recent RAW incoming frames — used to CONFIRM our own sends from the
+    // server's echo/ack (Binance broadcasts a sent message back to the sender, carrying our
+    // localId). This is DOM-independent: it confirms delivery even when the chat panel never
+    // renders on this page (the exact laptop failure — socket+sessionId fine, but no bubble in
+    // the DOM to verify against). Keeps only the last ~40 frames.
+    window.__bnRecvRaw = window.__bnRecvRaw || [];
+    const onFrame = (ev) => {
+      try {
+        learn(ev.data);
+        if (typeof ev.data === 'string') {
+          window.__bnRecvRaw.push({ s: ev.data, t: Date.now() });
+          if (window.__bnRecvRaw.length > 40) window.__bnRecvRaw.shift();
+        }
+      } catch (e) {}
+    };
+    // True if the socket carried a frame AFTER sinceTs that references our sent message — by
+    // localId (a unique uuid, the reliable signal) or by a verbatim content slice (fallback).
+    window.__bnAckSince = function (localId, slice, sinceTs) {
+      try {
+        return (window.__bnRecvRaw || []).some(e => e.t >= sinceTs && e.s && (
+          (localId && e.s.indexOf(localId) !== -1) ||
+          (slice && slice.length >= 8 && e.s.indexOf(slice) !== -1)
+        ));
+      } catch (e) { return false; }
+    };
 
     // Grab the socket the instant the page creates it (URL contains "binance_chat").
     const OWS = window.WebSocket;
@@ -1622,6 +1646,8 @@ function _chatWsHook() {
     // Send a chat message on THIS order over the live socket. orderNo comes from the
     // page URL; sessionId from what we've learned. Returns false (=> DOM fallback) if
     // either the socket isn't open or the sessionId isn't known yet.
+    // Returns the message's localId (a uuid, truthy) on push, or false if not ready. The
+    // caller uses the returned localId to confirm delivery from the server echo (__bnAckSince).
     window.__bnSendChat = function (text) {
       try {
         const ws = window.__bnChatWS;
@@ -1631,13 +1657,14 @@ function _chatWsHook() {
         if (!ono) return false;
         const sessionId = window.__bnSess[String(ono)];
         if (!sessionId) return false;   // don't guess the session — let DOM seed it
+        const localId = uuid();
         const frame = {
-          msgType: 'U_TEXT', content: text, localId: uuid(), mentionUsers: null,
+          msgType: 'U_TEXT', content: text, localId: localId, mentionUsers: null,
           order: { orderNo: String(ono) }, refMsgIds: null, self: true, sendStatus: 0,
           sessionId: String(sessionId), sessionType: 'PRIVATE', timestamp: Date.now(),
         };
         ws.send(JSON.stringify(frame));
-        return true;
+        return localId;
       } catch (e) { return false; }
     };
   } catch (e) {}
@@ -1680,14 +1707,28 @@ async function sendChatViaWebSocket(page, message) {
       await new Promise(r => setTimeout(r, 500));
     }
     _lastSendDiag = `ws[socket=${st.socket ? 'y' : 'n'},sess=${st.sess ? 'y' : 'n'}${st.src ? '(' + st.src + ')' : ''}]`;
+    // A verbatim slice of the raw message to match the server's echo (the frame content is not
+    // whitespace-normalised, so use the raw first line, not the DOM needle).
+    const rawSlice = String(message).split('\n')[0].slice(0, 24);
     const before = await count();
-    const sent = await page.evaluate((m) => (window.__bnSendChat ? window.__bnSendChat(m) : false), message);
-    if (!sent) { _lastSendDiag += ' ws-send=no'; return false; }   // socket/sessionId not ready -> DOM
-    for (let i = 0; i < 10; i++) {                 // up to ~4s for the sent bubble to render
-      await new Promise(r => setTimeout(r, 400));
-      if ((await count()) > before) return true;   // confirmed delivered + rendered
+    const sinceTs = Date.now();
+    const localId = await page.evaluate((m) => (window.__bnSendChat ? window.__bnSendChat(m) : false), message);
+    if (!localId) { _lastSendDiag += ' ws-send=no'; return false; }   // socket/sessionId not ready -> DOM
+    // Confirm delivery, DOM-INDEPENDENT FIRST: the server echoes our message back on the socket
+    // (carrying our localId). That proves the buyer received it even when this page never renders
+    // the chat panel (the laptop failure). Fall back to the DOM bubble check for older UIs. Either
+    // one confirming returns immediately — so a good send is near-instant, not a 4s poll.
+    for (let i = 0; i < 12; i++) {                 // up to ~4.2s, but returns the moment it's confirmed
+      await new Promise(r => setTimeout(r, 350));
+      const res = await page.evaluate((lid, slice, ts, n) => {
+        const ack = !!(window.__bnAckSince && window.__bnAckSince(lid, slice, ts));
+        const rendered = (document.body.innerText.replace(/\s+/g, ' ').split(n).length - 1);
+        return { ack, rendered };
+      }, localId, rawSlice, sinceTs, needle).catch(() => ({ ack: false, rendered: 0 }));
+      if (res.ack) { _lastSendDiag += ' ws-ack'; return true; }        // server confirmed delivery
+      if (res.rendered > before) { _lastSendDiag += ' ws-rendered'; return true; }
     }
-    _lastSendDiag += ' ws-sent-but-not-rendered';  // frame pushed but never appeared -> DOM
+    _lastSendDiag += ' ws-sent-no-ack';   // pushed but no echo/render — treat as unconfirmed -> DOM
     return false;
   } catch (e) { return false; }
 }
