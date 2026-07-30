@@ -1692,7 +1692,8 @@ async function sendChatViaWebSocket(page, message) {
     // seeds a fresh order's sessionId). Up to ~3s — better than instantly falling to a DOM
     // send that breaks on the Dual-Identity chat UI. Bails early the instant it's ready.
     let st = { socket: false, sess: false, src: null };
-    for (let w = 0; w < 6; w++) {
+    for (let w = 0; w < 16; w++) {   // up to ~8s: on an on-demand (cold) tab the chat socket + REST
+                                     // sessionId harvest need a moment after the page loads; bails early
       st = await page.evaluate(() => {
         try {
           const ono = new URLSearchParams(location.search).get('orderNo') ||
@@ -4396,15 +4397,11 @@ async function idleScan(page) {
     const seenMins = Math.floor(seenMs / 60000);
     console.log(`[SparkP2P] Checking sell order ${order.orderNumber} (KES ${order.totalPrice}, seen ${seenMins}m)`);
 
-    // Pre-open the order tab the MOMENT any active sell is seen — new OR resumed — fired in
-    // PARALLEL with the screening/state relay calls below, so the page opens within a couple
-    // seconds (not left invisibly polling) and the chat WebSocket + sessionId are warm for the
-    // send/release. Fire-and-forget; withSellTab() reuses this exact tab. `!orderTabs` makes it a
-    // no-op once a tab is already open, so it doesn't reopen every cycle. Skip only rejected orders
-    // (those just need the one on-demand excuse-message tab).
-    if (!sellRejectedOrders.has(order.orderNumber) && !orderTabs[order.orderNumber]) {
-      openOrderTab(order.orderNumber).catch(() => {});
-    }
+    // TABLESS MONITORING: we do NOT keep a tab open here. A tab is opened ON DEMAND only when
+    // there's an actual chat/verify/release action to do (via withSellTab, which opens → acts →
+    // CLOSES), and stays closed during the approval wait and the payment wait. Keeping it open
+    // (a previous pre-open experiment) left tabs lingering through the waits and caused conflicts
+    // when several orders were in the queue.
 
     // EP-13 (SAPI): get authoritative state + payment method -- no DOM/Vision, no navigation
     const _cacheAge = sellOrderDetailsCache[order.orderNumber]
