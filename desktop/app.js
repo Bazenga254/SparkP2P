@@ -1538,6 +1538,72 @@ function _chatWsHook() {
       return origSend.apply(this, arguments);
     };
 
+    // ── Seed orderNo->sessionId from the page's OWN chat REST calls, BEFORE any message
+    // is sent. On a brand-new order no WS frame has carried the sessionId yet, so the
+    // FIRST message (e.g. a sell's payment details on approval) fails WS and falls to DOM
+    // — which breaks on the new Dual-Identity chat UI ("chat not ready" / details never
+    // sent). Binance fetches the chat session (get-session-statistics / session list) when
+    // the order chat mounts; we read the sessionId out of those responses. Defensive: we
+    // do NOT assume the exact shape — we walk the JSON for a sessionId co-located with an
+    // order number, and fall back to (single sessionId in the payload + the orderNo taken
+    // from the request URL/body). Purely additive: finds nothing -> behaves like before.
+    const extractOno = (s) => {
+      try { const m = String(s || '').match(/(?:orderNo|orderNumber)["'=:\s]*(\d{10,})/); return m ? m[1] : null; }
+      catch (e) { return null; }
+    };
+    const harvest = (text, hintOno) => {
+      try {
+        if (typeof text !== 'string' || text.indexOf('sessionId') === -1) return;
+        const root = JSON.parse(text);
+        let loneSession = null, loneCount = 0;
+        const visit = (node) => {
+          if (!node || typeof node !== 'object') return;
+          if (Array.isArray(node)) { node.forEach(visit); return; }
+          const sid = node.sessionId;
+          if (sid) {
+            loneSession = String(sid); loneCount++;
+            const ono = node.orderNo || node.orderNumber ||
+                        (node.order && (node.order.orderNo || node.order.orderNumber));
+            if (ono) window.__bnSess[String(ono)] = String(sid);
+          }
+          for (const k in node) { try { visit(node[k]); } catch (e) {} }
+        };
+        visit(root);
+        if (loneCount === 1 && hintOno && !window.__bnSess[String(hintOno)]) {
+          window.__bnSess[String(hintOno)] = loneSession;   // one session + one order hint
+        }
+      } catch (e) {}
+    };
+    const CHAT_RE = /(binance[-_]?chat|chat\/|session|messagecenter|imchat)/i;
+    const origFetch = window.fetch;
+    if (origFetch) {
+      window.fetch = function (input, init) {
+        const url = (input && input.url) || String(input || '');
+        const ret = origFetch.apply(this, arguments);
+        try {
+          if (CHAT_RE.test(url)) {
+            const hint = extractOno(url) || extractOno(init && init.body);
+            ret.then(r => { try { r.clone().text().then(t => harvest(t, hint)); } catch (e) {} }).catch(() => {});
+          }
+        } catch (e) {}
+        return ret;
+      };
+    }
+    const OX = window.XMLHttpRequest;
+    if (OX) {
+      const oOpen = OX.prototype.open, oSend = OX.prototype.send;
+      OX.prototype.open = function (m, url) { try { this.__bnUrl = url; } catch (e) {} return oOpen.apply(this, arguments); };
+      OX.prototype.send = function (body) {
+        try {
+          if (CHAT_RE.test(String(this.__bnUrl || ''))) {
+            const hint = extractOno(this.__bnUrl) || extractOno(body);
+            this.addEventListener('load', function () { try { harvest(this.responseText, hint); } catch (e) {} });
+          }
+        } catch (e) {}
+        return oSend.apply(this, arguments);
+      };
+    }
+
     const uuid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
       const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
     });
@@ -1583,6 +1649,21 @@ async function sendChatViaWebSocket(page, message) {
     const needle = String(message).replace(/\s+/g, ' ').trim().slice(0, 40);
     if (!needle) return false;
     const count = () => page.evaluate((n) => (document.body.innerText.replace(/\s+/g, ' ').split(n).length - 1), needle).catch(() => 0);
+    // Give the socket + sessionId a moment to be ready (WS frame OR the REST harvest that
+    // seeds a fresh order's sessionId). Up to ~3s — better than instantly falling to a DOM
+    // send that breaks on the Dual-Identity chat UI. Bails early the instant it's ready.
+    for (let w = 0; w < 6; w++) {
+      const ready = await page.evaluate(() => {
+        try {
+          const ono = new URLSearchParams(location.search).get('orderNo') ||
+                      (String(location.href).match(/orderNo=(\d{10,})/) || [])[1];
+          return !!(window.__bnChatWS && window.__bnChatWS.readyState === 1 &&
+                    ono && window.__bnSess && window.__bnSess[String(ono)]);
+        } catch (e) { return false; }
+      }).catch(() => false);
+      if (ready) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
     const before = await count();
     const sent = await page.evaluate((m) => (window.__bnSendChat ? window.__bnSendChat(m) : false), message);
     if (!sent) return false;                       // socket/sessionId not ready -> caller uses DOM
@@ -4666,7 +4747,7 @@ async function idleScan(page) {
             sellPayInstructSentOrders.add(order.orderNumber);
             _saveOrderFlag(order.orderNumber, 'sellInstructionsSent', true);
             console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
-            sendBotLog('success', `Sell order ...${order.orderNumber.slice(-8)} — payment details sent to buyer`);
+            sendBotLog('success', `Sell order ...${order.orderNumber.slice(-8)} — payment details sent to buyer (via ${_lastChatVia || '?'})`);
           } else {
             sendBotLog('warning', `Sell order ...${order.orderNumber.slice(-8)} — could NOT send payment details to the buyer (chat not ready). Retrying next cycle.`);
           }
