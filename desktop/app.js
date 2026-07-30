@@ -4376,6 +4376,17 @@ async function idleScan(page) {
     const seenMins = Math.floor(seenMs / 60000);
     console.log(`[SparkP2P] Checking sell order ${order.orderNumber} (KES ${order.totalPrice}, seen ${seenMins}m)`);
 
+    // Pre-open the order tab the MOMENT a new sell is seen — fired in PARALLEL with the
+    // screening/state relay calls below, so the tab opens within a couple seconds of detection
+    // (not ~2 min later at send time) and the chat WebSocket + sessionId are warm by the time we
+    // send. Fire-and-forget; withSellTab() reuses this exact tab. One-shot: only before the order
+    // has been requested/rejected and only if a tab isn't already open.
+    if (!sellApprovalRequestedOrders.has(order.orderNumber) &&
+        !sellRejectedOrders.has(order.orderNumber) &&
+        !orderTabs[order.orderNumber]) {
+      openOrderTab(order.orderNumber).catch(() => {});
+    }
+
     // EP-13 (SAPI): get authoritative state + payment method -- no DOM/Vision, no navigation
     const _cacheAge = sellOrderDetailsCache[order.orderNumber]
       ? Date.now() - sellOrderDetailsCache[order.orderNumber].ts : Infinity;
