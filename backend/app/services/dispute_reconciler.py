@@ -27,15 +27,28 @@ from app.models.trader import Trader
 logger = logging.getLogger(__name__)
 
 INTERVAL = 600   # reconcile every 10 minutes
+_PAGE_ROWS = 50    # Binance caps listUserOrderHistory at 50 rows/page (asked 100, got 50)
+_MAX_PAGES = 10    # walk up to 500 recent orders per trader to find older disputes
 
-# Binance C2C orderStatus (get_order_payment_details returns it uppercased) -> our status.
-# Binance codes: 1=pending, 2=paid, 3=releasing, 4=completed, 5=cancelled, 6=expired.
-# Word forms are handled too in case the detail endpoint returns text.
-_TERMINAL = {
-    4: OrderStatus.COMPLETED, "4": OrderStatus.COMPLETED, "COMPLETED": OrderStatus.COMPLETED, "RELEASED": OrderStatus.COMPLETED,
-    5: OrderStatus.CANCELLED, "5": OrderStatus.CANCELLED, "CANCELLED": OrderStatus.CANCELLED, "CANCELED": OrderStatus.CANCELLED,
-    6: OrderStatus.EXPIRED, "6": OrderStatus.EXPIRED, "EXPIRED": OrderStatus.EXPIRED,
-}
+# listUserOrderHistory (EP-16) returns ONLY terminal orders, and orderStatus is a STRING
+# enum, not an int — real observed values include COMPLETED, CANCELLED_BY_SYSTEM (buyer
+# never paid → Binance auto-cancel), CANCELLED_BY_USER, etc. We classify by SUBSTRING so
+# every cancel/complete/expire variant is recognised (an exact-string map missed
+# CANCELLED_BY_SYSTEM and left those disputes stuck forever). Numeric codes (4/5/6) are
+# also handled in case another endpoint feeds this.
+def _classify(raw) -> "OrderStatus | None":
+    s = str(raw or "").strip().upper()
+    if not s:
+        return None
+    if s in ("4", "5", "6"):
+        return {"4": OrderStatus.COMPLETED, "5": OrderStatus.CANCELLED, "6": OrderStatus.EXPIRED}[s]
+    if "COMPLET" in s or "FINISH" in s or "RELEASE" in s:
+        return OrderStatus.COMPLETED
+    if "EXPIRE" in s:
+        return OrderStatus.EXPIRED
+    if "CANCEL" in s:
+        return OrderStatus.CANCELLED
+    return None   # still-active (pending/trading/paid/appealing) — leave DISPUTED
 
 
 async def reconcile_disputed_orders_once() -> int:
@@ -64,30 +77,57 @@ async def reconcile_disputed_orders_once() -> int:
             if t.binance_api_key and t.binance_api_secret:
                 creds[t.id] = (t.binance_api_key, t.binance_api_secret)
 
-    # 2. One relay history read PER TRADER — NO DB connection held across it. A trader
-    #    whose relay is offline just errors and is skipped (retried next pass).
+    # 2. History read PER TRADER — NO DB connection held across it. A trader whose relay
+    #    is offline just errors and is skipped (retried next pass). We PAGINATE because
+    #    Binance caps listUserOrderHistory at ~100 rows/page; a high-volume trader's older
+    #    disputes fall off page 1, so we walk pages until every one of this trader's
+    #    disputed order numbers is found (or we hit end-of-history / the page cap).
     updates: dict[str, OrderStatus] = {}
     for tid, onos in by_trader.items():
         c = creds.get(tid)
         if not c:
             continue
         relay_trader.set(tid)
+        key, secret = decrypt_data(c[0]), decrypt_data(c[1])
+        remaining = set(onos)          # disputed order numbers we still need to locate
+        seen_rows = 0
+        matched_here = 0
+        first_keys = None
+        found_statuses: dict[str, int] = {}   # raw orderStatus -> count, for disputed orders we located
         try:
-            hist = await get_user_order_history(decrypt_data(c[0]), decrypt_data(c[1]), 1, 200)
-        except Exception:
+            for page in range(1, _MAX_PAGES + 1):
+                hist = await get_user_order_history(key, secret, page, _PAGE_ROWS)
+                if not hist:
+                    break
+                if first_keys is None and hist:
+                    first_keys = sorted(list(hist[0].keys()))[:12]
+                seen_rows += len(hist)
+                for o in hist:
+                    num = str(o.get("orderNumber") or "")
+                    if num not in remaining:
+                        continue
+                    raw = o.get("orderStatus")
+                    new = _classify(raw)
+                    if new:
+                        updates[num] = new
+                        matched_here += 1
+                    else:
+                        k = str(raw)
+                        found_statuses[k] = found_statuses.get(k, 0) + 1
+                    remaining.discard(num)   # found it (terminal or not) — stop looking
+                if not remaining or len(hist) < _PAGE_ROWS:
+                    break                    # all found, or we reached the end of history
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.warning("[DisputeReconcile] trader %s: history read failed (%s) — skipped",
+                           tid, str(e)[:80])
             continue   # relay offline / API error — skip this trader, retry next pass
-        for o in (hist or []):
-            num = str(o.get("orderNumber") or "")
-            if num not in onos:
-                continue
-            raw = o.get("orderStatus")
-            try:
-                stnum = int(raw)
-            except (TypeError, ValueError):
-                stnum = None
-            new = _TERMINAL.get(stnum) or _TERMINAL.get(str(raw or "").strip().upper())
-            if new:
-                updates[num] = new
+        # WARNING-level so it survives journalctl's INFO filter — lets us SEE it working.
+        logger.warning("[DisputeReconcile] trader %s: %d disputed, scanned %d history rows, "
+                       "resolved %d, still-unresolved %d%s",
+                       tid, len(onos), seen_rows, matched_here, len(remaining),
+                       (f", non-terminal statuses={found_statuses}" if found_statuses else
+                        ("" if matched_here else (f", sample keys={first_keys}" if first_keys else ", empty history"))))
         await asyncio.sleep(1)   # gentle pacing between traders
 
     if not updates:

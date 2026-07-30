@@ -333,6 +333,8 @@ export default function Admin() {
   const [resolveModal, setResolveModal] = useState(null); // { dispute }
   const [resolveAction, setResolveAction] = useState('cancel');
   const [resolveNote, setResolveNote] = useState('');
+  const [clearingDisputes, setClearingDisputes] = useState(false);
+  const [clearDisputesMsg, setClearDisputesMsg] = useState('');
   const [resolving, setResolving] = useState(false);
   const [unmatched, setUnmatched] = useState({ deposits: [], withdrawals: [] });
   const [unmatchedTab, setUnmatchedTab] = useState('deposits');
@@ -3507,7 +3509,30 @@ export default function Admin() {
               <div className="adm-card" style={{ marginBottom: 16 }}>
                 <div className="adm-card-header">
                   <h3>Disputed Orders</h3>
-                  <span className="adm-card-count">{disputes.length} disputes</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginLeft: 'auto' }}>
+                    {clearDisputesMsg && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{clearDisputesMsg}</span>}
+                    <span className="adm-card-count">{disputes.length} disputes</span>
+                    <button
+                      disabled={clearingDisputes || disputes.length === 0}
+                      onClick={async () => {
+                        setClearingDisputes(true);
+                        setClearDisputesMsg('Checking Binance…');
+                        try {
+                          const { data } = await api.post('/admin/disputes/reconcile');
+                          setClearDisputesMsg(`Cleared ${data.cleared} resolved · ${data.remaining} still active`);
+                          const r = await getDisputedOrders();
+                          setDisputes(r.data);
+                        } catch (e) {
+                          setClearDisputesMsg(e?.response?.data?.detail || 'Failed — try again');
+                        } finally {
+                          setClearingDisputes(false);
+                        }
+                      }}
+                      style={{ padding: '6px 14px', borderRadius: 6, border: 'none', background: clearingDisputes ? 'var(--border)' : 'linear-gradient(135deg, #6366f1, #4f46e5)', color: '#fff', fontWeight: 600, fontSize: 12, cursor: clearingDisputes || disputes.length === 0 ? 'not-allowed' : 'pointer', opacity: disputes.length === 0 ? 0.5 : 1 }}
+                    >
+                      {clearingDisputes ? 'Clearing…' : 'Clear Resolved'}
+                    </button>
+                  </div>
                 </div>
                 {disputes.length === 0 ? (
                   <p className="adm-empty">No disputes found</p>

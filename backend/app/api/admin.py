@@ -703,6 +703,27 @@ async def list_disputed_orders(
     ]
 
 
+@router.post("/disputes/reconcile")
+async def reconcile_disputes_now(
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear resolved disputes on demand. Runs one reconcile pass: checks each DISPUTED
+    order's REAL status on Binance (via the trader's relay) and flips the ones that are
+    actually completed/cancelled/expired so they drop off the list. READ-ONLY against
+    Binance (HMAC history read — never touches the session/cookies, so it cannot log a
+    trader out); genuinely-still-active orders are left in place."""
+    from app.services.dispute_reconciler import reconcile_disputed_orders_once
+    before = (await db.execute(
+        select(func.count(Order.id)).where(Order.status == OrderStatus.DISPUTED)
+    )).scalar() or 0
+    cleared = await reconcile_disputed_orders_once()
+    remaining = (await db.execute(
+        select(func.count(Order.id)).where(Order.status == OrderStatus.DISPUTED)
+    )).scalar() or 0
+    return {"cleared": cleared, "before": before, "remaining": remaining}
+
+
 @router.get("/payments/unmatched")
 async def list_unmatched_payments(
     admin: Trader = Depends(get_admin_trader),
