@@ -154,6 +154,9 @@ async def report_orders(
                 await _complete_buy_order(completed_order, trader, db, notify=True)
         else:
             # Order completed while bot was offline and full data couldn't be parsed — create stub.
+            # Savepoint + immediate flush: a concurrent path (the tracking poller or a second report)
+            # may insert the same order between our SELECT and the flush, which would otherwise
+            # autoflush-crash the whole request on the unique constraint. Skip harmlessly on conflict.
             stub = Order(
                 trader_id=trader.id,
                 binance_order_number=order_number,
@@ -165,8 +168,13 @@ async def report_orders(
                 exchange_rate=0,
                 released_at=datetime.now(timezone.utc),
             )
-            db.add(stub)
-            logger.info(f"Recorded offline-completed buy order {order_number} for trader {trader.id}")
+            try:
+                async with db.begin_nested():
+                    db.add(stub)
+                    await db.flush()
+                logger.info(f"Recorded offline-completed buy order {order_number} for trader {trader.id}")
+            except Exception:
+                logger.info(f"Buy order {order_number} already recorded (concurrent) — skipped stub")
 
     # Mark completed sell orders (we released crypto — from Binance Completed history tab)
     for order_number in data.completed_sell_order_numbers:
@@ -192,8 +200,13 @@ async def report_orders(
                 exchange_rate=0,
                 released_at=datetime.now(timezone.utc),
             )
-            db.add(stub)
-            logger.info(f"Recorded offline-completed sell order {order_number} for trader {trader.id}")
+            try:
+                async with db.begin_nested():
+                    db.add(stub)
+                    await db.flush()
+                logger.info(f"Recorded offline-completed sell order {order_number} for trader {trader.id}")
+            except Exception:
+                logger.info(f"Sell order {order_number} already recorded (concurrent) — skipped stub")
 
     # Auto-cancel PENDING SELL orders absent from the active list for >8 minutes.
     # BUY orders are excluded: the bot manages their full lifecycle explicitly (I&M payment

@@ -643,27 +643,105 @@ async def request_approval(
     except Exception:
         amount_str = f"KES {order.get('totalPrice', '?')}"
 
-    advisory = payload.get("advisory") or ""
-    text = (
-        (advisory + chr(10) + chr(10) if advisory else "") + "🔔 New Sell Order — Approval Required\n\n"
-        f"Amount: {amount_str}\n"
-        f"Buyer: {order.get('buyerNickname') or order.get('counterparty') or 'Unknown'}\n"
-        f"Order: {order_number}\n\n"
-        "Buyer Profile:\n"
-        f"- All trades: {all_time}\n"
-        f"- Last 30d trades: {b.get('last30dTrades', 'N/A')}\n"
-        f"- 30d completion rate: {b.get('completionRate', 'N/A')}\n"
-        f"- Avg pay time: {b.get('avgPayMins', 'N/A')}\n"
-        f"- Trade partners: {b.get('counterparties', 'N/A')}\n"
-        f"- Registered: {b.get('registeredDays', 'N/A')} days ago\n"
-        f"- First trade: {b.get('firstTradeDays', 'N/A')} days ago\n"
-        f"- Traded with you before: {'✅ Yes' if b.get('tradedBefore') else '❌ No'}\n\n"
-        "Tap YES to send payment details, or NO to reject."
-    )
+    # ── Build the RICH advisory notification (accurate EP-19 stats + verdict), the SAME builder
+    # the server-side tracking poller uses — instead of echoing the desktop's payload stats, which
+    # are frequently blank (the "All trades: N/A / Trade partners: N/A" alert). We fetch the buyer's
+    # Binance history server-side here and render it. Falls back to the basic text only when we
+    # can't fetch (no API keys / lookup error), so a notification always goes out.
+    text = None
     keyboard = {"inline_keyboard": [[
         {"text": "✅ YES - Proceed", "callback_data": f"approve:{order_number}"},
         {"text": "❌ NO - Reject",   "callback_data": f"reject:{order_number}"},
     ]]}
+    try:
+        if trader.binance_api_key and trader.binance_api_secret:
+            from app.services.binance.sapi_client import get_counterparty_statistic, relay_trader
+            from app.core.security import decrypt_data
+            from app.services.tracking import _render_sell_alert
+            relay_trader.set(trader.id)
+            _ak = decrypt_data(trader.binance_api_key)
+            _as = decrypt_data(trader.binance_api_secret)
+            prof = await get_counterparty_statistic(_ak, _as, str(order_number)) or {}
+            t30 = prof.get("completedOrderNumOfLatest30day"); tall = prof.get("completedOrderNum")
+            rate30 = prof.get("finishRateLatest30Day"); regd = prof.get("registerDays")
+            _apay = prof.get("avgPayTimeOfLatest30day") or prof.get("avgPayTime") or 0
+            _arel = prof.get("avgReleaseTimeOfLatest30day") or prof.get("avgReleaseTime") or 0
+            _pay_min = (_apay / 60.0) if _apay else None
+            _rel_min = (_arel / 60.0) if _arel else None
+            _rate_txt = (f"{rate30*100:.2f}%" if rate30 is not None else "N/A")
+
+            def _f(v, sfx=""):
+                return (f"{int(v):,}{sfx}" if isinstance(v, (int, float))
+                        else (f"{v}{sfx}" if v not in (None, "") else "N/A"))
+
+            def _i(v):
+                try: return int(float(v))
+                except Exception: return None
+
+            thr30 = int(getattr(trader, "cf_all_trades_min", 0) or 0)
+            thrall = int(getattr(trader, "cf_all_trades_min_all", 0) or 0)
+            _t30, _tall, _regd = _i(t30), _i(tall), _i(regd)
+            _notes, _accnotes, _flags = [], [], []
+            if not ((t30 is not None) or (tall is not None)):
+                _flags.append("⚠️ Buyer stats unavailable — couldn't fetch this buyer's Binance history "
+                              "(temporary lookup failure). The blanks are NOT confirmed zeros; a returning "
+                              "client can look brand-new here. Verify manually before rejecting.")
+            if thr30 > 0 and _t30 is not None:
+                (_notes if _t30 >= thr30 else _flags).append(
+                    f"Has surpassed your 30-day minimum of {thr30} ({_t30} trades in the last 30 days)"
+                    if _t30 >= thr30 else f"Below your 30-day minimum of {thr30} (only {_t30} trades)")
+            if thrall > 0 and _tall is not None:
+                (_notes if _tall >= thrall else _flags).append(
+                    f"Strong track record — {_tall} lifetime trades (your minimum is {thrall})"
+                    if _tall >= thrall else f"Below your all-time minimum of {thrall} ({_tall} lifetime trades)")
+            if _regd is not None:
+                if _regd >= 365: _accnotes.append(f"Well-aged account ({_regd} days / ~{_regd//365}y) — established trader")
+                elif _regd >= 90: _accnotes.append(f"Established account ({_regd} days old)")
+                elif _regd < 30: _flags.append(f"New account — only {_regd} days old")
+            if rate30 is not None and rate30 < 0.90:
+                _flags.append(f"30-day completion rate is {_rate_txt} — below 90%")
+
+            _ctx = {
+                "ono": str(order_number),
+                "header_lines": [
+                    f"Amount: {amount_str}",
+                    f"Buyer: <b>{order.get('buyerNickname') or order.get('counterparty') or 'Unknown'}</b>",
+                    f"Order: {order_number}",
+                ],
+                "prof_lines": [
+                    f"- 30d trades: {_f(t30)}",
+                    f"- All-time trades: {_f(tall)}",
+                    f"- 30d completion: {_rate_txt}",
+                    f"- Avg pay time: {('%.1f min' % _pay_min) if _pay_min else 'N/A'}",
+                    f"- Avg release time: {('%.1f min' % _rel_min) if _rel_min else 'N/A'}",
+                    f"- Account age: {_f(regd, ' days')}",
+                ],
+                "threshold_notes": _notes, "account_notes": _accnotes,
+                "base_flags": _flags, "returning_note": None,
+            }
+            text, keyboard = _render_sell_alert(_ctx, [])
+    except Exception as _rich_e:
+        import logging; logging.getLogger(__name__).warning("request_approval rich alert failed for %s: %s", order_number, _rich_e)
+        text = None
+
+    if text is None:
+        advisory = payload.get("advisory") or ""
+        text = (
+            (advisory + chr(10) + chr(10) if advisory else "") + "🔔 New Sell Order — Approval Required\n\n"
+            f"Amount: {amount_str}\n"
+            f"Buyer: {order.get('buyerNickname') or order.get('counterparty') or 'Unknown'}\n"
+            f"Order: {order_number}\n\n"
+            "Buyer Profile:\n"
+            f"- All trades: {all_time}\n"
+            f"- Last 30d trades: {b.get('last30dTrades', 'N/A')}\n"
+            f"- 30d completion rate: {b.get('completionRate', 'N/A')}\n"
+            f"- Avg pay time: {b.get('avgPayMins', 'N/A')}\n"
+            f"- Trade partners: {b.get('counterparties', 'N/A')}\n"
+            f"- Registered: {b.get('registeredDays', 'N/A')} days ago\n"
+            f"- First trade: {b.get('firstTradeDays', 'N/A')} days ago\n"
+            f"- Traded with you before: {'✅ Yes' if b.get('tradedBefore') else '❌ No'}\n\n"
+            "Tap YES to send payment details, or NO to reject."
+        )
 
     # Daily Telegram-alert cap by tier — once over cap, don't send the approval prompt.
     from app.services.rate_limits import consume_tg_alert as _consume_tg
@@ -673,6 +751,7 @@ async def request_approval(
     resp = await _tg_send("sendMessage", {
         "chat_id": trader.telegram_chat_id,
         "text": text,
+        "parse_mode": "HTML",
         "reply_markup": keyboard,
     })
 
