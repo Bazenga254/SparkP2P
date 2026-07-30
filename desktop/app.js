@@ -10,6 +10,7 @@ let autoUpdater = null; // lazy-loaded inside checkForUpdates() after app is rea
 // â"€â"€ Local control server on port 9223 â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 // Lets the Settings panel pause/resume via fetch() â€" works even in packaged app
 let _lastChatVia = null;   // 'websocket' or 'dom' - path of the last chat send (for /test-chat)
+let _lastSendDiag = '';    // per-send breakpoint trace (WS/DOM/Vision) for diagnosing "chat not ready"
 http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -1439,6 +1440,14 @@ async function onGmailConfirmed() {
 
 async function openGmailTab() {
   if (!browser) return false;
+  // TRACE who triggered a Gmail open — it should ONLY happen for an email-OTP read at
+  // release time. If this fires during a sell/buy send, the caller in the stack tells us
+  // exactly where to fix. Surfaces in the Activity Logs the user is watching.
+  try {
+    const _caller = (new Error().stack || '').split('\n')[2]?.trim().replace(/^at\s+/, '') || 'unknown';
+    console.log(`[SparkP2P] openGmailTab() called by: ${_caller}`);
+    sendBotLog('info', `Gmail tab open requested (${_caller.split(' ')[0] || 'unknown'})`);
+  } catch (_) {}
   try {
     // Reuse existing Gmail tab if already open
     const pages = await browser.pages();
@@ -1498,7 +1507,8 @@ function _chatWsHook() {
   try {
     if (window.__bnChatHooked) return;
     window.__bnChatHooked = true;
-    window.__bnSess = window.__bnSess || {};   // orderNo -> sessionId
+    window.__bnSess = window.__bnSess || {};      // orderNo -> sessionId
+    window.__bnSessSrc = window.__bnSessSrc || {}; // orderNo -> 'ws' | 'rest' (diagnostic)
 
     // Learn orderNo->sessionId from any chat frame (incoming or outgoing).
     const learn = (data) => {
@@ -1506,7 +1516,7 @@ function _chatWsHook() {
         if (typeof data !== 'string' || data.indexOf('sessionId') === -1) return;
         const o = JSON.parse(data);
         const ono = o && o.order && o.order.orderNo;
-        if (ono && o.sessionId) window.__bnSess[String(ono)] = String(o.sessionId);
+        if (ono && o.sessionId) { window.__bnSess[String(ono)] = String(o.sessionId); window.__bnSessSrc[String(ono)] = 'ws'; }
       } catch (e) {}
     };
     const onFrame = (ev) => { try { learn(ev.data); } catch (e) {} };
@@ -1564,13 +1574,14 @@ function _chatWsHook() {
             loneSession = String(sid); loneCount++;
             const ono = node.orderNo || node.orderNumber ||
                         (node.order && (node.order.orderNo || node.order.orderNumber));
-            if (ono) window.__bnSess[String(ono)] = String(sid);
+            if (ono) { window.__bnSess[String(ono)] = String(sid); window.__bnSessSrc[String(ono)] = 'rest'; }
           }
           for (const k in node) { try { visit(node[k]); } catch (e) {} }
         };
         visit(root);
         if (loneCount === 1 && hintOno && !window.__bnSess[String(hintOno)]) {
           window.__bnSess[String(hintOno)] = loneSession;   // one session + one order hint
+          window.__bnSessSrc[String(hintOno)] = 'rest';
         }
       } catch (e) {}
     };
@@ -1652,26 +1663,32 @@ async function sendChatViaWebSocket(page, message) {
     // Give the socket + sessionId a moment to be ready (WS frame OR the REST harvest that
     // seeds a fresh order's sessionId). Up to ~3s — better than instantly falling to a DOM
     // send that breaks on the Dual-Identity chat UI. Bails early the instant it's ready.
+    let st = { socket: false, sess: false, src: null };
     for (let w = 0; w < 6; w++) {
-      const ready = await page.evaluate(() => {
+      st = await page.evaluate(() => {
         try {
           const ono = new URLSearchParams(location.search).get('orderNo') ||
                       (String(location.href).match(/orderNo=(\d{10,})/) || [])[1];
-          return !!(window.__bnChatWS && window.__bnChatWS.readyState === 1 &&
-                    ono && window.__bnSess && window.__bnSess[String(ono)]);
-        } catch (e) { return false; }
-      }).catch(() => false);
-      if (ready) break;
+          return {
+            socket: !!(window.__bnChatWS && window.__bnChatWS.readyState === 1),
+            sess: !!(ono && window.__bnSess && window.__bnSess[String(ono)]),
+            src: (window.__bnSessSrc && ono) ? (window.__bnSessSrc[String(ono)] || null) : null,
+          };
+        } catch (e) { return { socket: false, sess: false, src: null }; }
+      }).catch(() => ({ socket: false, sess: false, src: null }));
+      if (st.socket && st.sess) break;
       await new Promise(r => setTimeout(r, 500));
     }
+    _lastSendDiag = `ws[socket=${st.socket ? 'y' : 'n'},sess=${st.sess ? 'y' : 'n'}${st.src ? '(' + st.src + ')' : ''}]`;
     const before = await count();
     const sent = await page.evaluate((m) => (window.__bnSendChat ? window.__bnSendChat(m) : false), message);
-    if (!sent) return false;                       // socket/sessionId not ready -> caller uses DOM
+    if (!sent) { _lastSendDiag += ' ws-send=no'; return false; }   // socket/sessionId not ready -> DOM
     for (let i = 0; i < 10; i++) {                 // up to ~4s for the sent bubble to render
       await new Promise(r => setTimeout(r, 400));
       if ((await count()) > before) return true;   // confirmed delivered + rendered
     }
-    return false;                                  // sent but never rendered -> DOM fallback
+    _lastSendDiag += ' ws-sent-but-not-rendered';  // frame pushed but never appeared -> DOM
+    return false;
   } catch (e) { return false; }
 }
 
@@ -2235,22 +2252,10 @@ async function onLoginDetected() {
   // Sync Binance cookies immediately so backend marks binance_connected = true
   await syncCookies();
 
-  // Pre-open a PERSISTENT Gmail tab at connect and WAIT for it to finish loading, THEN return
-  // focus to Binance to continue with orders. Binance now requires an email verification code on
-  // release (in addition to TOTP) which the bot reads from Gmail, so we warm the session up front
-  // instead of racing to open it mid-release while the code is expiring.
-  //   AWAITED — not fire-and-forget. The previous fire-and-forget open let Gmail's newPage()
-  //   focus-grab fire LATE, colliding with the first order's payment-details step and parking the
-  //   window on Gmail. Awaiting here guarantees Gmail is fully loaded and focus is back on Binance
-  //   BEFORE any order is worked. (On success openGmailTab -> onGmailConfirmed already returns
-  //   focus to Binance; we re-assert it for certainty. If Gmail needs login it stays in front so
-  //   the trader can sign in.) Order processing only ever uses the Binance/order tabs, so a warm
-  //   Gmail tab in the background never interferes with sending payment details.
-  const _gmailReady = await openGmailTab().catch(() => false);
-  if (_gmailReady) {
-    try { const _bp = await getPage(); if (_bp) await _bp.bringToFront(); } catch (_) {}
-    console.log('[SparkP2P] Gmail pre-loaded — focus returned to Binance to continue with orders');
-  }
+  // Gmail is opened ON-DEMAND, only when a release actually needs the email verification code
+  // (readEmailOTP / readEmailOTPWithVision open it at the email_otp_input step). We do NOT pre-open
+  // it at connect: the trader asked that the Gmail tab only appear at release-coin time, never
+  // during order processing. IMAP is tried first, so on many releases the tab never opens at all.
 
   // Start bot
   const setup = await checkSetupComplete();
@@ -4749,7 +4754,7 @@ async function idleScan(page) {
             console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
             sendBotLog('success', `Sell order ...${order.orderNumber.slice(-8)} — payment details sent to buyer (via ${_lastChatVia || '?'})`);
           } else {
-            sendBotLog('warning', `Sell order ...${order.orderNumber.slice(-8)} — could NOT send payment details to the buyer (chat not ready). Retrying next cycle.`);
+            sendBotLog('warning', `Sell order ...${order.orderNumber.slice(-8)} — could NOT send payment details (chat not ready) [${_lastSendDiag.trim() || 'no-diag'}]. Retrying next cycle.`);
           }
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} -- Choice Bank account not set, cannot send instructions`);
@@ -12022,6 +12027,7 @@ async function sendBinanceChatMessage(page, message) {
   // template have been learned on this page (from an earlier send this session). If not
   // yet learned, this returns false and we fall through to the DOM path below, which
   // ALSO seeds the template — so the next send goes background-safe.
+  _lastSendDiag = '';
   try {
     if (await sendChatViaWebSocket(page, message)) {
       _lastChatVia = 'websocket';
@@ -12064,11 +12070,15 @@ async function sendBinanceChatMessage(page, message) {
       if (visible) break;
       await new Promise(r => setTimeout(r, 2000));
     }
+    _lastSendDiag += ` dom[input=${visible ? 'y' : 'n'}]`;
     // Hand off to sendChatMessage REGARDLESS — it has a Vision fallback that can locate and click
     // the chat box visually even when the DOM pre-check above never found a ready input.
-    return await sendChatMessage(page, message);
+    const _ok = await sendChatMessage(page, message);
+    _lastSendDiag += ` domsend=${_ok ? 'ok' : 'fail'}`;
+    return _ok;
   } catch (e) {
     console.log('[SparkP2P] Chat send error:', e.message);
+    _lastSendDiag += ' dom-exc';
     return false;
   }
 }
