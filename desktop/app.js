@@ -4258,8 +4258,24 @@ async function idleScan(page) {
       const _hasFlags = _existingFlags && Object.values(_existingFlags).some(Boolean);
       if (_hasFlags) {
         const _flagList = Object.keys(_existingFlags).filter(k => _existingFlags[k]).join(',');
-        console.log(`[SparkP2P] Resuming in-progress buy order: ${num} (restored: ${_flagList})`);
-        sendBotLog('info', `Resuming buy order: ${num}`);
+        // Restore SELL approval/instruction state across restarts. Without this, an order we
+        // already approved + sent payment details to re-enters the approval flow after a restart,
+        // re-polls the now-stale Telegram approval (which has since timed out at 45 min), and gets
+        // WRONGLY flipped to "rejected" — even though the buyer already has the details. An
+        // instructed order is COMMITTED; a sent-decline order stays declined.
+        if (_existingFlags.sellInstructionsSent) {
+          sellApprovalRequestedOrders.add(num);
+          sellApprovedOrders.add(num);
+          sellPayInstructSentOrders.add(num);
+          sellPayMsgProgress[num] = 5;   // all instruction msgs already delivered — never re-send
+        }
+        if (_existingFlags.sellDeclineSent) {
+          sellApprovalRequestedOrders.add(num);
+          sellRejectedOrders.add(num);
+          sellRejectionMsgSent.add(num);
+        }
+        console.log(`[SparkP2P] Resuming in-progress order: ${num} (restored: ${_flagList})`);
+        sendBotLog('info', `Resuming order: ${num}`);
       } else {
         console.log(`[SparkP2P] New order detected: ${num}`);
         sendBotLog('info', `New order detected: ${num}`);
@@ -4639,12 +4655,16 @@ async function idleScan(page) {
             `with our banking system, we are unable to complete this transaction at this time. To avoid ` +
             `any delay for you, we kindly request that you cancel this order so that you may trade with ` +
             `another merchant. We deeply regret this inconvenience and truly appreciate your understanding. Thank you.`;
+          // HONOUR the real send result — the old `.then(() => true)` reported success even when
+          // the send returned false, so it logged "excuse message sent" while the buyer got nothing.
           const _sent = await withSellTab(order.orderNumber, (tab) =>
-            sendBinanceChatMessage(tab, rejMsg).then(() => true).catch(() => false));
+            sendBinanceChatMessage(tab, rejMsg).catch(() => false));
           if (_sent) {
             sellRejectionMsgSent.add(order.orderNumber);
             _saveOrderFlag(order.orderNumber, 'sellDeclineSent', true);
             sendBotLog('info', `Sell order ${order.orderNumber} rejected -- excuse message sent, awaiting buyer cancellation`);
+          } else {
+            sendBotLog('warning', `Sell order ...${order.orderNumber.slice(-8)} — could NOT send the decline message [${_lastSendDiag.trim() || 'no-diag'}]. Retrying next cycle.`);
           }
         } else {
           console.log(`[SparkP2P] Order ${order.orderNumber} -- rejected: awaiting buyer cancel / expiry (silent)`);
@@ -4698,8 +4718,11 @@ async function idleScan(page) {
         continue; // move to next order while waiting
       }
 
-      // STEP 2: Poll Telegram approval status
-      if (!sellApprovedOrders.has(order.orderNumber) && !sellRejectedOrders.has(order.orderNumber)) {
+      // STEP 2: Poll Telegram approval status.
+      // NEVER re-poll (and risk a stale reject) once we've already sent payment instructions —
+      // an instructed order is committed regardless of what the (now-expired) approval says.
+      if (!sellApprovedOrders.has(order.orderNumber) && !sellRejectedOrders.has(order.orderNumber)
+          && !sellPayInstructSentOrders.has(order.orderNumber)) {
         const _statusData = await fetch(
           `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(order.orderNumber)}`,
           { headers: { 'Authorization': `Bearer ${token}` } }
