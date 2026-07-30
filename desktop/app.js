@@ -4268,8 +4268,12 @@ async function idleScan(page) {
           sellApprovedOrders.add(num);
           sellPayInstructSentOrders.add(num);
           sellPayMsgProgress[num] = 5;   // all instruction msgs already delivered — never re-send
-        }
-        if (_existingFlags.sellDeclineSent) {
+          // INSTRUCTED WINS over a decline flag. The old phantom-"excuse sent" bug (v<1.9.91)
+          // could save sellDeclineSent:true even though nothing was sent — leaving an order with
+          // BOTH flags. Such an order was really approved + instructed (the buyer has the details),
+          // so ignore + PURGE the stale decline flag so it's never restored as rejected again.
+          if (_existingFlags.sellDeclineSent) _saveOrderFlag(num, 'sellDeclineSent', false);
+        } else if (_existingFlags.sellDeclineSent) {
           sellApprovalRequestedOrders.add(num);
           sellRejectedOrders.add(num);
           sellRejectionMsgSent.add(num);
