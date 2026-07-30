@@ -226,6 +226,7 @@ const buyDeclineMsgSent = new Set();            // buy orderNums where the polit
 const buyPaymentDetailsCache = {};              // orderNum → paymentDetails extracted from Binance API
 const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
+const sellPayMsgProgress = {};                  // orderNum → # of the 5 instruction msgs CONFIRMED sent (idempotent retries — never re-send a delivered msg)
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
 const sellHeldOrders = new Map();               // orderNum → {reason,detail,heldAt} — paid but held (payer name mismatch)
 const sellHoldDecisionAsked = new Set();        // sell orderNums where the HOLD- merchant decision was already requested
@@ -1540,7 +1541,7 @@ function _chatWsHook() {
       try {
         return (window.__bnRecvRaw || []).some(e => e.t >= sinceTs && e.s && (
           (localId && e.s.indexOf(localId) !== -1) ||
-          (slice && slice.length >= 8 && e.s.indexOf(slice) !== -1)
+          (slice && slice.length >= 4 && e.s.indexOf(slice) !== -1)   // >=4 so short paybill/number msgs confirm too
         ));
       } catch (e) { return false; }
     };
@@ -4778,13 +4779,19 @@ async function idleScan(page) {
           // a silent failure was logged as "sell action done" and the buyer got NO payment details
           // (and it was never retried). Now: if any message fails to send, abort, leave the order
           // UNMARKED, and retry next cycle with a ready chat.
+          // IDEMPOTENT: resume from the first message not yet CONFIRMED-sent. A failed send
+          // aborts and retries next cycle — but we must NEVER re-send a message that already
+          // went out (that spammed the buyer with duplicate "Payment details" blocks). Progress
+          // is tracked per order; on retry we pick up exactly where we left off.
           const _sent = await withSellTab(order.orderNumber, async (tab) => {
-            for (let i = 0; i < _payMsgs.length; i++) {
+            let i = sellPayMsgProgress[order.orderNumber] || 0;
+            for (; i < _payMsgs.length; i++) {
               const _ok = await sendBinanceChatMessage(tab, _payMsgs[i]);
               if (!_ok) {
-                console.log(`[SparkP2P] Order ${order.orderNumber} -- chat send failed at message ${i + 1}/${_payMsgs.length}; will retry next cycle`);
+                console.log(`[SparkP2P] Order ${order.orderNumber} -- chat send failed at message ${i + 1}/${_payMsgs.length} (${sellPayMsgProgress[order.orderNumber] || 0} already sent); will resume next cycle`);
                 return false;
               }
+              sellPayMsgProgress[order.orderNumber] = i + 1;   // confirmed — never re-send this one
               if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
             }
             return true;
