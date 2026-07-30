@@ -4392,14 +4392,13 @@ async function idleScan(page) {
     const seenMins = Math.floor(seenMs / 60000);
     console.log(`[SparkP2P] Checking sell order ${order.orderNumber} (KES ${order.totalPrice}, seen ${seenMins}m)`);
 
-    // Pre-open the order tab the MOMENT a new sell is seen — fired in PARALLEL with the
-    // screening/state relay calls below, so the tab opens within a couple seconds of detection
-    // (not ~2 min later at send time) and the chat WebSocket + sessionId are warm by the time we
-    // send. Fire-and-forget; withSellTab() reuses this exact tab. One-shot: only before the order
-    // has been requested/rejected and only if a tab isn't already open.
-    if (!sellApprovalRequestedOrders.has(order.orderNumber) &&
-        !sellRejectedOrders.has(order.orderNumber) &&
-        !orderTabs[order.orderNumber]) {
+    // Pre-open the order tab the MOMENT any active sell is seen — new OR resumed — fired in
+    // PARALLEL with the screening/state relay calls below, so the page opens within a couple
+    // seconds (not left invisibly polling) and the chat WebSocket + sessionId are warm for the
+    // send/release. Fire-and-forget; withSellTab() reuses this exact tab. `!orderTabs` makes it a
+    // no-op once a tab is already open, so it doesn't reopen every cycle. Skip only rejected orders
+    // (those just need the one on-demand excuse-message tab).
+    if (!sellRejectedOrders.has(order.orderNumber) && !orderTabs[order.orderNumber]) {
       openOrderTab(order.orderNumber).catch(() => {});
     }
 
