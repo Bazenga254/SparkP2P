@@ -14555,18 +14555,26 @@ setInterval(async () => {
 let isOnline = true;
 let offlineSince = null;
 let connectivityFailures = 0;
-const CONNECTIVITY_FAILURES_NEEDED = 2;
+// The VPS is far (high-latency, occasionally lossy trans-oceanic path from Kenya), so a
+// single slow/dropped /health must NOT pause the bot. Require several CONSECUTIVE failures
+// over ~90s of a genuinely-down backend before pausing, and retry /health twice within one
+// check so a lone dropped packet doesn't count as a failure.
+const CONNECTIVITY_FAILURES_NEEDED = 4;
 
 async function checkConnectivity() {
-  try {
-    const r = await fetch(`${API_BASE}/health`, {
-      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(8000),
-    });
-    return r.ok || r.status < 500;
-  } catch {
-    return false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(`${API_BASE}/health`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(15000),
+      });
+      if (r.ok || r.status < 500) return true;
+    } catch {
+      // network blip — fall through to a quick retry before declaring this check failed
+    }
+    if (attempt === 0) await new Promise(res => setTimeout(res, 1500));
   }
+  return false;
 }
 
 async function recoverSessions() {
