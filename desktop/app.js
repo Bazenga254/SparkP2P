@@ -1430,7 +1430,10 @@ async function onGmailConfirmed() {
   } catch (e) {}
 
   const setup = await checkSetupComplete();
-  if (setup.complete && !pollerRunning) {
+  if (setup.complete) {
+    // Same fix as the main connect path: never gate on !pollerRunning (a stale true silently
+    // strands the bot on the dashboard). Always (re)start cleanly; stopPoller() clears any zombie.
+    stopPoller();
     pauseNavigation = false;
     mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
     console.log('[SparkP2P] All connections established — starting bot');
@@ -2346,9 +2349,17 @@ async function onLoginDetected() {
 
   // Start bot
   const setup = await checkSetupComplete();
-  if (setup.complete && !pollerRunning) {
+  if (setup.complete) {
+    // IMPORTANT: do NOT gate on !pollerRunning. A stale pollerRunning=true (from a prior
+    // session whose stop didn't clear) made this whole block skip — the bot logged in, sat on
+    // the dashboard, and NEVER navigated to the P2P order page or polled (and logged nothing,
+    // since setup IS complete). Always (re)start cleanly on a completed connect; stopPoller()
+    // first clears any zombie interval so we don't end up with two.
+    stopPoller();
+    pauseNavigation = false;   // clear any stuck pause so idleScan actually runs on this fresh connect
     mainWindow.webContents.executeJavaScript('window.dispatchEvent(new CustomEvent("setup-complete"))').catch(() => {});
     console.log('[SparkP2P] All connections established — starting bot');
+    sendBotLog('info', 'All connections established — navigating to orders and starting poller');
     // Navigate Binance tab to P2P orders page immediately so pending orders are visible on first poll
     try {
       const _bp = await getPage();
@@ -2356,12 +2367,14 @@ async function onLoginDetected() {
         await _bp.goto('https://p2p.binance.com/en/fiatOrder?tab=0&page=1', { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
         await new Promise(r => setTimeout(r, 800));
         console.log('[SparkP2P] Navigated to P2P orders page');
+        sendBotLog('info', 'Navigated to P2P orders page');
       }
     } catch(_) {}
     await initialScan().catch(e => { scanningInProgress = false; console.error('[SparkP2P] Initial scan error:', e.message?.substring(0, 60)); });
     startPoller();
-  } else if (!setup.complete) {
+  } else {
     console.log('[SparkP2P] Setup incomplete:', setup.missing.join(', '));
+    sendBotLog('warning', `Setup incomplete — waiting for: ${(setup.missing || []).join(', ') || 'connections'}`);
   }
 
   // Suppress window.open() on Binance pages (prevents popup tabs)
