@@ -1087,6 +1087,15 @@ async function launchChrome(url) {
     '--no-first-run', '--no-default-browser-check',
     '--disable-features=MediaRouter',
     '--disable-backgrounding-occluded-windows', // prevent Chrome throttling GPU when overlay covers it
+    // ── STABILITY on low-end / old machines ──────────────────────────────────────────
+    // A crashing Chrome drops the CDP link and logs "Binance disconnected — bot stopped",
+    // stopping the bot before it can poll. The #1 cause on weak/old Windows PCs is the GPU
+    // driver, so render in software (the bot uses DOM + screenshots, which still work).
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-gpu-compositing',
+    '--disable-dev-shm-usage',
+    '--disable-extensions',
     '--user-data-dir=' + profileDir,
     url || 'https://accounts.binance.com/en/login',
   ]);
