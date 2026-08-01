@@ -2423,19 +2423,30 @@ async function fetchAndApplyCredentials() {
 // Check that Binance is connected (Gmail and I&M Bank are both optional)
 async function checkSetupComplete() {
   if (!token) return { complete: false, missing: ['binance'] };
-  try {
-    const res = await fetch(`${API_BASE}/traders/me`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
-    if (!res.ok) return { complete: false, missing: [] };
-    const profile = await res.json();
-    const missing = [];
-    if (!profile.binance_connected) missing.push('Binance');
-    // Gmail and I&M Bank are optional — bot runs without them; Gmail only needed for OTP reads
-    return { complete: missing.length === 0, missing };
-  } catch (e) {
-    return { complete: false, missing: [] };
+  // RETRY: a single failed /traders/me (transient network blip — common on a churning
+  // mobile/CGNAT IP) used to falsely report "Setup incomplete — waiting for: connections"
+  // (empty missing) and strand the bot on the dashboard with no navigation to the order page.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE}/traders/me`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (res.ok) {
+        const profile = await res.json();
+        const missing = [];
+        if (!profile.binance_connected) missing.push('Binance');
+        // Gmail and I&M Bank are optional — bot runs without them; Gmail only needed for OTP reads
+        return { complete: missing.length === 0, missing };
+      }
+    } catch (e) { /* network blip — fall through to retry */ }
+    if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
   }
+  // Couldn't reach the backend after retries. We only get here AFTER launching Chrome and
+  // syncing Binance cookies, so Binance IS connected — do NOT strand on the dashboard. Proceed
+  // as complete so the bot navigates to the order page and polls; any real problem surfaces in
+  // the poll loop / connectivity monitor rather than a silent stuck state.
+  return { complete: true, missing: [], unverified: true };
 }
 
 function notifySetupIncomplete(missing) {
