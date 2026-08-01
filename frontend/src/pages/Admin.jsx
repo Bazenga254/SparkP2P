@@ -411,6 +411,7 @@ export default function Admin() {
   // Revenue breakdown
   const [revBreakdown, setRevBreakdown] = useState(null);
   const [revPeriod, setRevPeriod] = useState('today');
+  const [revMonth, setRevMonth] = useState('');   // YYYY-MM — specific past month (overrides period when set)
   const [revPlan, setRevPlan] = useState('all');
   const [revPage, setRevPage] = useState(1);
   const [revLoading, setRevLoading] = useState(false);
@@ -814,12 +815,12 @@ export default function Admin() {
     setWdActionLoading(null);
   };
 
-  const loadImBot = async (period = imPeriod) => {
+  const loadImBot = async (period = imPeriod, month = '') => {
     setImLoading(true);
     setImPeriod(period);
     try {
       const [rev, accts, traders] = await Promise.allSettled([
-        getImRevenue({ period }),
+        getImRevenue({ period, month }),
         getImBotAccounts({ page: 1, limit: 100 }),
         getImTraders({ period }),
       ]);
@@ -838,15 +839,15 @@ export default function Admin() {
     setImLoading(false);
   };
 
-  const loadRevenueBreakdown = async (period = revPeriod, plan = revPlan, page = revPage) => {
+  const loadRevenueBreakdown = async (period = revPeriod, plan = revPlan, page = revPage, month = revMonth) => {
     setRevLoading(true);
     try {
-      const res = await getSubscriptionRevenue({ period, plan, page, limit: 50 });
+      const res = await getSubscriptionRevenue({ period, plan, page, limit: 50, month });
       setRevBreakdown(res.data);
     } catch (err) {
       console.error('Revenue breakdown error:', err);
     }
-    api.get('/admin/revenue/outbound-breakdown', { params: { period } })
+    api.get('/admin/revenue/outbound-breakdown', { params: { period, month } })
       .then(r => setObBreakdown(r.data)).catch(() => {});
     setRevLoading(false);
   };
@@ -5478,15 +5479,31 @@ export default function Admin() {
                 <div className="fin-head-actions">
                   <div className="fin-segment">
                     {[['today','Today'],['week','This week'],['month','This month'],['all','All time']].map(([val, label]) => (
-                      <button key={val} className={revPeriod === val ? 'on' : ''}
-                        onClick={() => { setRevPeriod(val); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1); loadImBot(val); }}>
+                      <button key={val} className={(revPeriod === val && !revMonth) ? 'on' : ''}
+                        onClick={() => { setRevPeriod(val); setRevMonth(''); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1, ''); loadImBot(val, ''); }}>
                         {label}
                       </button>
                     ))}
                   </div>
+                  {/* Pick any past calendar month (e.g. view July while in August) */}
+                  <input type="month" className="fin-month" value={revMonth}
+                    max={new Date().toISOString().slice(0, 7)}
+                    title="View a specific calendar month's profit"
+                    onChange={e => {
+                      const m = e.target.value;
+                      setRevMonth(m); setRevPage(1);
+                      loadRevenueBreakdown(revPeriod, revPlan, 1, m);
+                      loadImBot(revPeriod, m);
+                    }} />
+                  {revMonth && (
+                    <button className="fin-btn" title="Clear month filter"
+                      onClick={() => { setRevMonth(''); setRevPage(1); loadRevenueBreakdown(revPeriod, revPlan, 1, ''); loadImBot(revPeriod, ''); }}>
+                      Clear
+                    </button>
+                  )}
                   <button className="fin-btn" onClick={() => {
                     adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {});
-                    loadRevenueBreakdown(revPeriod, revPlan, 1);
+                    loadRevenueBreakdown(revPeriod, revPlan, 1, revMonth);
                   }}>
                     <RefreshCw size={14} /> Refresh
                   </button>

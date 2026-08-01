@@ -1464,7 +1464,7 @@ def _get_period_start(period: str):
     elif period == "week":
         return now - timedelta(days=7)
     elif period == "month":
-        return now - timedelta(days=30)
+        return trading_month_start(now)   # calendar month, resets on the 1st
     elif period == "year":
         return now - timedelta(days=365)
     else:
@@ -1637,7 +1637,7 @@ async def admin_analytics(
     now = datetime.now(timezone.utc)
     today_start = trading_day_start(now)
     week_start = now - timedelta(days=7)
-    month_start = now - timedelta(days=30)
+    month_start = trading_month_start(now)   # calendar month, resets on the 1st
     year_start = now - timedelta(days=365)
 
     async def _revenue_for_period(start):
@@ -2280,7 +2280,7 @@ async def get_withdrawals(
     elif period == "week":
         filters.append(Payment.created_at >= now - timedelta(days=7))
     elif period == "month":
-        filters.append(Payment.created_at >= now - timedelta(days=30))
+        filters.append(Payment.created_at >= trading_month_start(now))
 
     # Summary
     summary_q = select(
@@ -2441,7 +2441,7 @@ async def revenue_breakdown(
     period_starts = {
         "today": today_start_utc,
         "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
+        "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
 
@@ -2634,8 +2634,8 @@ async def outbound_revenue_breakdown(
         label = start.strftime("%B %Y")
     else:
         start = {"today": trading_day_start(now), "week": now - timedelta(days=7),
-                 "month": now - timedelta(days=30)}.get(period)
-        end = None; label = {"today": "Today", "week": "Last 7 days", "month": "Last 30 days"}.get(period, "All time")
+                 "month": trading_month_start(now)}.get(period)
+        end = None; label = {"today": "Today", "week": "Last 7 days", "month": "This month"}.get(period, "All time")
     data = await _compute_outbound_breakdown(db, start, end)
     return {**data, "period": period, "month": month or None, "label": label}
 
@@ -2755,6 +2755,7 @@ async def choice_bank_invoice(
 @router.get("/revenue/subscriptions")
 async def revenue_subscriptions(
     period: str = Query("all"),   # today | week | month | all
+    month: str = Query(""),        # YYYY-MM — a specific past month (overrides period)
     plan: str = Query("all"),     # starter | pro | all
     page: int = Query(1, ge=1),
     limit: int = Query(50, le=200),
@@ -2769,9 +2770,12 @@ async def revenue_subscriptions(
     period_starts = {
         "today": today_start_utc,
         "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
+        "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
+    end = None
+    if month.strip():   # explicit month picker → bounded [start, end)
+        start, end = _month_range(month.strip())
 
     # Only count paid (active) subscriptions — exclude admin grants (no real payment)
     base_where = [
@@ -2781,6 +2785,8 @@ async def revenue_subscriptions(
     ]
     if start:
         base_where.append(Subscription.started_at >= start)
+    if end:
+        base_where.append(Subscription.started_at < end)
     if plan != "all":
         try:
             base_where.append(Subscription.plan == SubscriptionPlan(plan))
@@ -2820,6 +2826,8 @@ async def revenue_subscriptions(
                   Payment.fee > 0]
     if start:
         _pay_where.append(Payment.created_at >= start)
+    if end:
+        _pay_where.append(Payment.created_at < end)
     for _p in (await db.execute(
         select(Payment.amount, Payment.fee, Payment.destination_type).where(*_pay_where)
     )).all():
@@ -2829,6 +2837,8 @@ async def revenue_subscriptions(
     _ord_where = [Order.side == _OrderSide.BUY, Order.choice_fee > 0]
     if start:
         _ord_where.append(Order.created_at >= start)
+    if end:
+        _ord_where.append(Order.created_at < end)
     for _o in (await db.execute(
         select(Order.fiat_amount, Order.choice_fee, Order.seller_payment_method).where(*_ord_where)
     )).all():
@@ -2911,6 +2921,7 @@ async def revenue_subscriptions(
 @router.get("/im/revenue")
 async def im_revenue(
     period: str = Query("all"),   # today | week | month | all
+    month: str = Query(""),        # YYYY-MM — a specific past month (overrides period)
     admin: Trader = Depends(get_employee_or_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2926,10 +2937,15 @@ async def im_revenue(
     period_starts = {
         "today": trading_day_start(now),
         "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
+        "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
+    end = None
+    if month.strip():   # explicit month picker → bounded [start, end)
+        start, end = _month_range(month.strip())
     where = [ImCharge.charged_at >= start] if start else []
+    if end:
+        where.append(ImCharge.charged_at < end)
 
     rows = (await db.execute(
         select(
@@ -2952,6 +2968,8 @@ async def im_revenue(
     dep_where = [CreditPurchase.status == "completed"]
     if start:
         dep_where.append(CreditPurchase.created_at >= start)
+    if end:
+        dep_where.append(CreditPurchase.created_at < end)
     dep_trader = int((await db.execute(
         select(func.coalesce(func.sum(CreditPurchase.amount), 0))
         .where(*dep_where, CreditPurchase.trader_id.isnot(None))
@@ -2994,7 +3012,7 @@ async def im_charges_list(
     period_starts = {
         "today": trading_day_start(now),
         "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
+        "month": trading_month_start(now),   # calendar month, resets on the 1st
         "year":  now - timedelta(days=365),
     }
     start = period_starts.get(period)
@@ -3178,7 +3196,7 @@ async def im_configured_traders(
     period_starts = {
         "today": trading_day_start(now),
         "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
+        "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
     for tid in trader_ids:
@@ -3311,7 +3329,7 @@ def _apply_period(q, model_col, period, now):
     elif period == "week":
         return q.where(model_col >= now - timedelta(days=7))
     elif period == "month":
-        return q.where(model_col >= now - timedelta(days=30))
+        return q.where(model_col >= trading_month_start(now))
     elif period == "year":
         return q.where(model_col >= now - timedelta(days=365))
     return q

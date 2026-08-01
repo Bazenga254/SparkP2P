@@ -7641,6 +7641,10 @@ body {
   color:#e6ebf2;font-family:inherit;font-size:13px;font-weight:500;padding:8px 14px;border-radius:10px;cursor:pointer}
 .fin-btn:hover{background:#1c2434}
 .fin-btn svg{width:14px;height:14px}
+.fin-month{border:1px solid var(--border);background:var(--surface);color:#e6ebf2;font-family:inherit;
+  font-size:13px;font-weight:500;padding:7px 12px;border-radius:10px;cursor:pointer;color-scheme:dark}
+.fin-month:hover{background:#1c2434}
+.fin-month:focus{outline:none;border-color:var(--fin-orange)}
 .fin-btn-primary{background:var(--fin-orange);border-color:var(--fin-orange);color:#0a0e17;font-weight:700}
 .fin-btn-primary:hover{background:#fbaa1c}
 .fin-btn-primary:disabled{background:#3a3f4d;border-color:#3a3f4d;color:#9aa4b2;cursor:default}
