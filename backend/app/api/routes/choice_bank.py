@@ -1078,8 +1078,22 @@ async def deposit_status(tx_id: str, trader: Trader = Depends(get_current_trader
 
 @router.get("/choice/balance/{trader_id}")
 async def get_trader_balance(trader_id: int, db: AsyncSession = Depends(get_db)):
-    """Get the live Choice Bank balance for a trader's sub-account."""
-    trader = await db.get(Trader, trader_id)
+    """Get the live Choice Bank balance for a trader's sub-account.
+
+    NOTE: callers sometimes pass the 14-digit Choice ACCOUNT NUMBER here instead of the
+    trader id. traders.id is a 32-bit INTEGER, so binding a 14-digit value to it makes
+    asyncpg raise DataError ('value out of int32 range') -> HTTP 500 (this was breaking
+    the balance fetch AND the buy-order payment path for accounts like 46012001324046).
+    Guard: only treat the value as an id when it fits int32; otherwise resolve the trader
+    by choice_account_number."""
+    INT32_MAX = 2147483647
+    trader = None
+    if -INT32_MAX <= trader_id <= INT32_MAX:
+        trader = await db.get(Trader, trader_id)
+    if trader is None:
+        trader = (await db.execute(
+            select(Trader).where(Trader.choice_account_number == str(trader_id))
+        )).scalar_one_or_none()
     if not trader or not trader.choice_account_id:
         raise HTTPException(status_code=404, detail="Trader has no Choice Bank account")
 
@@ -1102,7 +1116,16 @@ async def initiate_transfer(body: TransferRequest, db: AsyncSession = Depends(ge
     Used for BUY orders — pays the seller via M-Pesa or Airtel.
     payee_mobile: 9-digit phone number without 254/0 prefix.
     """
-    trader = await db.get(Trader, body.trader_id)
+    # Same int32 guard as get_trader_balance: body.trader_id may be the 14-digit account
+    # number, which overflows the int32 traders.id column -> DataError/500. Resolve safely.
+    _tid = body.trader_id
+    trader = None
+    if isinstance(_tid, int) and -2147483647 <= _tid <= 2147483647:
+        trader = await db.get(Trader, _tid)
+    if trader is None:
+        trader = (await db.execute(
+            select(Trader).where(Trader.choice_account_number == str(_tid))
+        )).scalar_one_or_none()
     if not trader or not trader.choice_account_id:
         raise HTTPException(status_code=404, detail="Trader has no Choice Bank account")
 
