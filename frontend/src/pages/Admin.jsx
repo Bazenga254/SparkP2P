@@ -2176,18 +2176,18 @@ export default function Admin() {
                         No I&amp;M Bot payouts billed in this period.
                       </div>
                     ) : (
-                      <div style={{ overflowX: 'auto' }}>
-                        <table className="adm-table" style={{ width: '100%', fontSize: 13 }}>
+                      <div style={{ overflowX: 'auto', fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", sans-serif' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                           <thead>
-                            <tr>
-                              <th style={{ textAlign: 'left' }}>When</th>
-                              <th style={{ textAlign: 'left' }}>Order</th>
-                              <th style={{ textAlign: 'left' }}>Billed to</th>
-                              <th style={{ textAlign: 'left' }}>Type</th>
-                              <th style={{ textAlign: 'right' }}>Payout</th>
-                              <th style={{ textAlign: 'right' }}>Fee</th>
-                              <th style={{ textAlign: 'left' }}>Result</th>
-                              <th style={{ textAlign: 'left' }}>Ref</th>
+                            <tr style={{ textAlign: 'left', color: '#8a93a6', fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                              <th style={{ padding: '10px 8px 10px 20px', fontWeight: 700 }}>When</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 700 }}>Order</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 700 }}>Billed to</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 700 }}>Type</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 700, textAlign: 'right' }}>Payout</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 700, textAlign: 'right' }}>Fee</th>
+                              <th style={{ padding: '10px 8px', fontWeight: 700 }}>Result</th>
+                              <th style={{ padding: '10px 20px 10px 8px', fontWeight: 700 }}>Ref</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2195,11 +2195,14 @@ export default function Admin() {
                               const st = c.status || 'completed';
                               const ok = st === 'completed';
                               return (
-                              <tr key={c.id}>
-                                <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{c.charged_at ? fmtDateEAT(c.charged_at) : '—'}</td>
-                                <td style={{ textAlign: 'left', fontFamily: 'monospace' }}>…{String(c.order_id).slice(-8)}</td>
-                                <td style={{ textAlign: 'left' }}>{c.who || '—'}</td>
-                                <td style={{ textAlign: 'left' }}>
+                              <tr key={c.id}
+                                style={{ borderTop: '1px solid rgba(255,255,255,0.05)', transition: 'background .12s' }}
+                                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
+                                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                                <td style={{ padding: '12px 8px 12px 20px', color: '#8a93a6', fontSize: 11.5, whiteSpace: 'nowrap' }}>{c.charged_at ? fmtDateEAT(c.charged_at) : '—'}</td>
+                                <td style={{ padding: '12px 8px', fontFamily: 'ui-monospace, monospace', color: '#9aa4b2', fontSize: 11.5 }}>…{String(c.order_id).slice(-8)}</td>
+                                <td style={{ padding: '12px 8px', color: '#e5e7eb', fontWeight: 400 }}>{c.who || '—'}</td>
+                                <td style={{ padding: '12px 8px' }}>
                                   <span className={`chip ${c.account_type === 'bot_only' ? '' : 'chip--pos'}`} style={{ fontSize: 10 }}>
                                     {c.account_type === 'bot_only' ? 'bot-only' : (c.plan || 'no sub')}
                                   </span>
@@ -2209,22 +2212,22 @@ export default function Admin() {
                                     </span>
                                   )}
                                 </td>
-                                <td style={{ textAlign: 'right' }}>{fmtAmt(c.payout_amount)}</td>
-                                <td style={{ textAlign: 'right', color: ok ? 'var(--pos)' : 'var(--text-3)' }}>
+                                <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: 500, color: '#f59e0b', whiteSpace: 'nowrap' }}>{fmtAmt(c.payout_amount)}</td>
+                                <td style={{ padding: '12px 8px', textAlign: 'right', color: ok ? '#3dcf8e' : '#6b7280', fontSize: 11.5 }}>
                                   {ok ? `KES ${c.rate}` : '—'}
                                 </td>
-                                <td style={{ textAlign: 'left' }}>
-                                  <span className={`chip ${ok ? 'chip--pos' : 'chip--neg'}`} style={{ fontSize: 10 }}>
+                                <td style={{ padding: '12px 8px' }}>
+                                  <span className={`adm-badge ${ok ? 'green' : 'red'}`} style={{ textTransform: 'capitalize' }}>
                                     {ok ? 'paid' : st}
                                   </span>
                                   {/* Why it failed — the whole point of showing these rows. */}
                                   {!ok && c.detail && (
-                                    <div title={c.detail} style={{ fontSize: 11, color: 'var(--neg)', marginTop: 3, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    <div title={c.detail} style={{ fontSize: 11, color: '#ef4444', marginTop: 3, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                       {c.detail}
                                     </div>
                                   )}
                                 </td>
-                                <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{c.bank_ref || '—'}</td>
+                                <td style={{ padding: '12px 20px 12px 8px', color: '#8a93a6', fontFamily: 'ui-monospace, monospace', fontSize: 11.5 }}>{c.bank_ref || '—'}</td>
                               </tr>
                             );})}
                           </tbody>
