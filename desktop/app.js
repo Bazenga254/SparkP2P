@@ -111,6 +111,31 @@ console.error = (...a) => { fs.appendFileSync(logFile, `[${new Date().toISOStrin
 const API_BASE = 'https://sparkp2p.com/api';
 const DASHBOARD_URL = 'https://sparkp2p.com/dashboard';
 
+// ── Route BACKEND calls through Electron's Chromium network stack (net.fetch) ──
+// Every call to our own backend in this file uses the bareword `fetch`. On some
+// merchant machines Node's global fetch (undici) intermittently fails — "Backend
+// unreachable", "report-orders failed", "completion report failed" — because
+// undici ignores the Windows system proxy, ships its OWN CA bundle (so antivirus
+// / corporate HTTPS interception breaks its TLS handshake) and can wedge on a
+// broken IPv6 route, while the SAME host loads fine in the app's Chromium windows
+// and the merchant's browser. net.fetch uses Chromium's stack (system proxy +
+// Windows cert store + Happy-Eyeballs IPv4 fallback), so shadowing `fetch` here
+// makes those calls survive. We ONLY reroute our own backend (sparkp2p.com);
+// external hosts (Binance, Anthropic) keep the original fetch to avoid any
+// Electron session/cookie side effects. Same fix as the I&M Bot (core/netfetch.js).
+const _origFetch = globalThis.fetch;
+let _netFetch = null;
+try {
+  const { net } = require('electron');
+  if (net && typeof net.fetch === 'function') _netFetch = (u, o) => net.fetch(u, o);
+} catch { /* not in an Electron main process */ }
+function fetch(url, opts) {
+  try {
+    if (_netFetch && String(url).startsWith('https://sparkp2p.com')) return _netFetch(url, opts);
+  } catch { /* fall through to Node fetch */ }
+  return _origFetch(url, opts);
+}
+
 // â"€â"€ Persistent paid-orders store â€" survives bot restarts â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 const paidOrdersFile = path.join(logDir, 'paid_orders.json');
 function loadPaidOrders() {
