@@ -3205,6 +3205,11 @@ body {
 /* Main Area */
 .adm-main {
   flex: 1;
+  /* min-width:0 lets this flex column shrink to the window instead of expanding
+     to fit its widest child (a wide table). Without it, wide content pushes the
+     whole page wider than the window and everything gets cut off / side-scrolls.
+     Inner tables use their own overflow-x:auto to scroll within this width. */
+  min-width: 0;
   margin-left: 220px;
   display: flex;
   flex-direction: column;
@@ -3271,6 +3276,8 @@ body {
 .adm-content {
   padding: 24px 28px;
   flex: 1;
+  min-width: 0;          /* constrain grids/tables to the column width */
+  max-width: 100%;
 }
 
 /* Stat grid */
@@ -6577,7 +6584,7 @@ body {
 .tdx .banner--dim .banner-num { color: var(--text-3); }
 
 /* ---- KPI ---- */
-.tdx .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 16px; }
+.tdx .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 16px; }
 .tdx .kpi { background: var(--s1); border: 1px solid var(--line); border-radius: var(--rad); padding: 16px 18px; }
 .tdx .kpi-label { font-size: 11.5px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .tdx .kpi-val { font-size: 22px; font-weight: 700; margin: 8px 0 4px; letter-spacing: -.01em; }
