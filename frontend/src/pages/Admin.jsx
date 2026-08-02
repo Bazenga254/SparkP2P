@@ -342,6 +342,8 @@ export default function Admin() {
   const [chartTip, setChartTip] = useState(null); // hover tooltip for monthly volume bars
   const [onlineTraders, setOnlineTraders] = useState([]);
   const [transactions, setTransactions] = useState({ total: 0, transactions: [] });
+  const [choiceDetail, setChoiceDetail] = useState({});          // tx.id -> Choice BaaS detail
+  const [choiceDetailLoading, setChoiceDetailLoading] = useState({}); // tx.id -> bool
   const [orders, setOrders] = useState({ total: 0, orders: [] });
   const [txPeriod, setTxPeriod] = useState('today');   // fiat period
   const [cryptoPeriod, setCryptoPeriod] = useState('all'); // crypto period — default all
@@ -1043,6 +1045,24 @@ export default function Admin() {
       if (resetPage) setFiatPage(1);
     } catch (err) {
       console.error('Transactions load error:', err);
+    }
+  };
+
+  // Fetch the live Choice BaaS detail (failure reason, fee, channel, counterparty)
+  // for one transaction on demand — so the admin never has to log into Choice BaaS.
+  // Only Choice transactions carry a UTRANS id; cached per row after the first open.
+  const loadChoiceDetail = async (tx) => {
+    const txId = tx.mpesa_transaction_id && tx.mpesa_transaction_id !== '-' ? tx.mpesa_transaction_id : null;
+    if (!txId || !txId.startsWith('UTRANS')) return;
+    if (choiceDetail[tx.id] || choiceDetailLoading[tx.id]) return;
+    setChoiceDetailLoading(s => ({ ...s, [tx.id]: true }));
+    try {
+      const r = await api.get('/admin/transactions/choice-detail', { params: { tx_id: txId } });
+      setChoiceDetail(s => ({ ...s, [tx.id]: r.data }));
+    } catch (e) {
+      setChoiceDetail(s => ({ ...s, [tx.id]: { error: e?.response?.data?.detail || 'Could not load bank detail' } }));
+    } finally {
+      setChoiceDetailLoading(s => ({ ...s, [tx.id]: false }));
     }
   };
 
@@ -1950,7 +1970,7 @@ export default function Admin() {
                               return (
                                 <Fragment key={tx.id}>
                                   <tr
-                                    onClick={() => setExpandedFiatId(open ? null : tx.id)}
+                                    onClick={() => { const willOpen = !open; setExpandedFiatId(willOpen ? tx.id : null); if (willOpen) loadChoiceDetail(tx); }}
                                     style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: rowBg, cursor: 'pointer', transition: 'background .12s' }}
                                     onMouseEnter={e => { if (!open) e.currentTarget.style.background = 'rgba(255,255,255,0.025)'; }}
                                     onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
@@ -1996,6 +2016,42 @@ export default function Admin() {
                                             </div>
                                           ))}
                                         </div>
+
+                                        {/* Live Choice Bank BaaS detail — the bank's own failure reason, fee, channel
+                                            and counterparty, so the admin never has to log into the Choice portal. */}
+                                        {txId && txId.startsWith('UTRANS') && (
+                                          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                                            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', color: '#8a93a6', marginBottom: 8, fontWeight: 700 }}>Bank detail · Choice BaaS</div>
+                                            {choiceDetailLoading[tx.id] ? (
+                                              <div style={{ color: '#6b7280', fontSize: 12 }}>Loading bank detail…</div>
+                                            ) : choiceDetail[tx.id]?.error ? (
+                                              <div style={{ color: '#ef4444', fontSize: 12 }}>{choiceDetail[tx.id].error}</div>
+                                            ) : choiceDetail[tx.id] ? (
+                                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: '10px 28px', fontSize: 12 }}>
+                                                {(() => {
+                                                  const cd = choiceDetail[tx.id];
+                                                  return [
+                                                    ['Failure Reason', cd.success ? null : cd.failure_reason, cd.success ? '#3dcf8e' : '#ef4444'],
+                                                    ['Bank Status', cd.status, cd.success ? '#3dcf8e' : '#f59e0b'],
+                                                    ['Channel', cd.channel, '#9aa4b2'],
+                                                    ['Bank Fee', cd.fee != null ? `KES ${cd.fee}` : null, '#9aa4b2'],
+                                                    ['Counterparty Name', cd.counterparty_name, '#e5e7eb'],
+                                                    ['Counterparty Bank', cd.counterparty_bank, '#9aa4b2'],
+                                                    ['Counterparty Account', cd.counterparty_account, '#9aa4b2', true],
+                                                    ['External Tx ID', cd.external_tx_id, '#9aa4b2', true],
+                                                  ].map(([label, val, color, mono], k) => (
+                                                    <div key={k}>
+                                                      <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>{label}</div>
+                                                      <div style={{ color: val ? (color || '#e5e7eb') : '#6b7280', fontWeight: label === 'Failure Reason' ? 700 : 500, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', wordBreak: 'break-all' }}>{val || (label === 'Failure Reason' ? '— (succeeded)' : '—')}</div>
+                                                    </div>
+                                                  ));
+                                                })()}
+                                              </div>
+                                            ) : (
+                                              <div style={{ color: '#6b7280', fontSize: 12 }}>—</div>
+                                            )}
+                                          </div>
+                                        )}
                                       </td>
                                     </tr>
                                   )}

@@ -1563,6 +1563,58 @@ async def admin_transactions(
     }
 
 
+# Choice BaaS status codes → words (getTransResult txStatus).
+_CB_TX_STATUS = {-1: "Timeout", 1: "Pending", 2: "Processing", 4: "Failed", 8: "Success"}
+
+
+@router.get("/transactions/choice-detail")
+async def admin_transaction_choice_detail(
+    tx_id: str = Query(..., description="Choice txId (UTRANS…) — the transaction's mpesa_transaction_id"),
+    admin: Trader = Depends(get_admin_trader),
+):
+    """Live Choice Bank BaaS detail for one transaction, so the admin can read the
+    failure reason (errorCode/errorMsg), fee, channel and counterparty WITHOUT
+    logging into the Choice BaaS portal. Fetched on demand from /query/getTransResult."""
+    from app.services.choice_bank import client as choice
+
+    tx_id = (tx_id or "").strip()
+    if not tx_id or tx_id == "-":
+        raise HTTPException(status_code=400, detail="No Choice transaction id on this row.")
+    try:
+        r = await choice.get_transaction_result(tx_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Choice lookup failed: {e}")
+    if (r or {}).get("code") != "00000":
+        raise HTTPException(status_code=502, detail=(r or {}).get("msg", "Choice returned no detail"))
+
+    d = (r.get("data") or {})
+    ext = (d.get("extInfo") or {})
+    status_word = _CB_TX_STATUS.get(d.get("txStatus"), str(d.get("txStatus")))
+    err_code = d.get("errorCode")
+    err_msg = d.get("errorMsg")
+    return {
+        "tx_id": d.get("txId"),
+        "status": status_word,
+        "success": d.get("txStatus") == 8,
+        # The whole point: the bank's own reason a transfer failed.
+        "failure_reason": (f"{err_msg} ({err_code})" if err_code and status_word != "Success" else (err_msg or None)),
+        "error_code": err_code,
+        "error_msg": err_msg,
+        "amount": d.get("amount"),
+        "fee": d.get("feeAmount"),
+        "currency": d.get("currency"),
+        "channel": d.get("paymentChannel"),
+        "tx_type": d.get("txType"),
+        "counterparty_name": d.get("oppoAccountName") or ext.get("counterpartyName"),
+        "counterparty_account": d.get("oppoAccountId"),
+        "counterparty_bank": d.get("oppoBankName"),
+        "narrative": ext.get("transactionNarrative") or None,
+        "external_tx_id": d.get("externalTxId"),
+        "created_time": d.get("createTime"),
+        "updated_time": d.get("updateTime"),
+    }
+
+
 @router.get("/orders")
 async def admin_orders(
     period: str = "today",
