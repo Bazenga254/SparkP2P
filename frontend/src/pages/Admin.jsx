@@ -469,6 +469,12 @@ export default function Admin() {
   const [affiliateFilter, setAffiliateFilter] = useState('all'); // all | pending | approved | rejected
   const [affiliateLoading, setAffiliateLoading] = useState(false);
   const [affiliateActionMsg, setAffiliateActionMsg] = useState('');
+  const [expandedAff, setExpandedAff] = useState(null);        // affiliate id whose referees are shown
+  const [affReferees, setAffReferees] = useState({});          // id -> [referees]
+  const [affRefereesLoading, setAffRefereesLoading] = useState(null);
+  const [rejectConfirmId, setRejectConfirmId] = useState(null);
+  const [addRefEmail, setAddRefEmail] = useState('');
+  const [addRefBusy, setAddRefBusy] = useState(false);
 
   // Paybill Transactions
   const [paybillTxs, setPaybillTxs] = useState({ transactions: [], total: 0, pages: 1, summary: {} });
@@ -594,11 +600,12 @@ export default function Admin() {
     setTimeout(() => setAffiliateActionMsg(''), 4000);
   };
 
+  // Two-step confirm (no browser prompt/confirm — those are blocked in the desktop app).
   const handleAffiliateReject = async (id) => {
-    const reason = prompt('Rejection reason (optional):') ?? '';
     try {
-      await api.post(`/affiliates/admin/${id}/reject`, { reason });
+      await api.post(`/affiliates/admin/${id}/reject`, { reason: '' });
       setAffiliateActionMsg('Rejected');
+      setRejectConfirmId(null);
       loadAffiliates();
     } catch (e) {
       setAffiliateActionMsg(e.response?.data?.detail || 'Error');
@@ -610,24 +617,49 @@ export default function Admin() {
   const handleAffiliateVisible = async (id, next) => {
     try {
       await api.put(`/affiliates/admin/${id}/visible`, { visible: next });
+      setAffiliateActionMsg(next ? 'Now shown to the merchant' : 'Hidden from the merchant');
       loadAffiliates();
     } catch (e) {
       setAffiliateActionMsg(e.response?.data?.detail || 'Error');
-      setTimeout(() => setAffiliateActionMsg(''), 4000);
     }
+    setTimeout(() => setAffiliateActionMsg(''), 3000);
   };
 
-  // Manually attribute a merchant to this affiliate (referral missed at sign-up).
-  const handleAddReferral = async (a) => {
-    const email = prompt(`Add a merchant to ${a.trader_name}'s referrals.\nEnter the referred merchant's email:`);
-    if (!email || !email.trim()) return;
+  // Expand a row and load its referees (the merchants this affiliate referred).
+  const loadAffReferees = async (id, force = false) => {
+    if (!force && affReferees[id]) return;
+    setAffRefereesLoading(id);
     try {
-      const res = await api.post(`/affiliates/admin/${a.id}/add-referral`, { email: email.trim() });
+      const r = await api.get(`/affiliates/admin/${id}/referrals`);
+      setAffReferees(s => ({ ...s, [id]: r.data.referrals || [] }));
+    } catch (e) {
+      setAffReferees(s => ({ ...s, [id]: [] }));
+    }
+    setAffRefereesLoading(null);
+  };
+
+  const toggleAffReferees = (id) => {
+    if (expandedAff === id) { setExpandedAff(null); return; }
+    setExpandedAff(id);
+    setAddRefEmail('');
+    loadAffReferees(id);
+  };
+
+  // Manually attribute a merchant to this affiliate — in-app email input, no prompt.
+  const handleAddReferral = async (a) => {
+    const email = (addRefEmail || '').trim();
+    if (!email) return;
+    setAddRefBusy(true);
+    try {
+      const res = await api.post(`/affiliates/admin/${a.id}/add-referral`, { email });
       setAffiliateActionMsg(res.data.message || 'Added');
-      loadAffiliates();
+      setAddRefEmail('');
+      await loadAffiliates();
+      await loadAffReferees(a.id, true);   // refresh the dropdown
     } catch (e) {
       setAffiliateActionMsg(e.response?.data?.detail || 'Error');
     }
+    setAddRefBusy(false);
     setTimeout(() => setAffiliateActionMsg(''), 5000);
   };
 
@@ -5339,7 +5371,8 @@ export default function Admin() {
                       {affiliateList
                         .filter(a => affiliateFilter === 'all' || a.status === affiliateFilter)
                         .map((a, i) => (
-                          <tr key={a.id} style={{ borderBottom: '1px solid #1f2937', background: i % 2 === 0 ? 'transparent' : '#0d1117' }}>
+                          <Fragment key={a.id}>
+                          <tr style={{ borderBottom: '1px solid #1f2937', background: expandedAff === a.id ? 'rgba(59,130,246,0.07)' : (i % 2 === 0 ? 'transparent' : '#0d1117') }}>
                             <td style={{ padding: '10px 12px', fontWeight: 600, color: '#f9fafb' }}>{a.trader_name}</td>
                             <td style={{ padding: '10px 12px', color: '#9ca3af' }}>{a.trader_email}</td>
                             <td style={{ padding: '10px 12px' }}>
@@ -5352,7 +5385,15 @@ export default function Admin() {
                             <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#60a5fa' }}>
                               {a.referral_code || '—'}
                             </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#f9fafb' }}>{a.referral_count}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#f9fafb' }}>
+                              {a.status === 'approved' ? (
+                                <button onClick={() => toggleAffReferees(a.id)}
+                                  title="Show the merchants they referred"
+                                  style={{ background: 'transparent', border: 'none', color: '#60a5fa', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>
+                                  {a.referral_count} {expandedAff === a.id ? '▾' : '▸'}
+                                </button>
+                              ) : a.referral_count}
+                            </td>
                             <td style={{ padding: '10px 12px', color: '#f97316', fontWeight: 700 }}>
                               {(a.pending_balance || 0).toLocaleString()}
                             </td>
@@ -5371,10 +5412,23 @@ export default function Admin() {
                                   </button>
                                 )}
                                 {a.status !== 'rejected' && (
-                                  <button onClick={() => handleAffiliateReject(a.id)}
-                                    style={{ padding: '4px 10px', background: '#ef4444', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <XCircle size={12} /> Reject
-                                  </button>
+                                  rejectConfirmId === a.id ? (
+                                    <>
+                                      <button onClick={() => handleAffiliateReject(a.id)}
+                                        style={{ padding: '4px 10px', background: '#ef4444', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 700 }}>
+                                        Confirm
+                                      </button>
+                                      <button onClick={() => setRejectConfirmId(null)}
+                                        style={{ padding: '4px 10px', background: '#1f2937', border: '1px solid #374151', borderRadius: 6, color: '#9ca3af', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button onClick={() => setRejectConfirmId(a.id)}
+                                      style={{ padding: '4px 10px', background: '#ef4444', border: 'none', borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      <XCircle size={12} /> Reject
+                                    </button>
+                                  )
                                 )}
                                 {a.status === 'approved' && (
                                   <>
@@ -5384,16 +5438,70 @@ export default function Admin() {
                                       style={{ padding: '4px 10px', background: a.visible ? '#065f46' : '#1f2937', border: `1px solid ${a.visible ? '#10b981' : '#374151'}`, borderRadius: 6, color: a.visible ? '#34d399' : '#9ca3af', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
                                       {a.visible ? 'Shown ✓' : 'Hidden'}
                                     </button>
-                                    <button onClick={() => handleAddReferral(a)}
-                                      title="Manually add a merchant to this affiliate's referrals"
+                                    <button onClick={() => toggleAffReferees(a.id)}
+                                      title="See their referees / add one"
                                       style={{ padding: '4px 10px', background: '#1e3a5f', border: '1px solid #3b82f6', borderRadius: 6, color: '#93c5fd', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                      + Referral
+                                      Referees {expandedAff === a.id ? '▾' : '▸'}
                                     </button>
                                   </>
                                 )}
                               </div>
                             </td>
                           </tr>
+                          {expandedAff === a.id && (
+                            <tr style={{ background: '#0b0f17' }}>
+                              <td colSpan={9} style={{ padding: '2px 16px 16px 16px' }}>
+                                {/* Manually add a referral — in-app input (desktop app blocks prompt()) */}
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '10px 0 12px', flexWrap: 'wrap' }}>
+                                  <span style={{ color: '#9ca3af', fontSize: 12 }}>Add a merchant to {a.trader_name}'s referrals:</span>
+                                  <input value={addRefEmail} onChange={e => setAddRefEmail(e.target.value)}
+                                    placeholder="referred merchant email"
+                                    onKeyDown={e => { if (e.key === 'Enter') handleAddReferral(a); }}
+                                    style={{ flex: '0 1 260px', padding: '7px 10px', borderRadius: 6, border: '1px solid #374151', background: '#0d1117', color: '#e5e7eb', fontSize: 12.5 }} />
+                                  <button onClick={() => handleAddReferral(a)} disabled={addRefBusy || !addRefEmail.trim()}
+                                    style={{ padding: '7px 16px', borderRadius: 6, border: 'none', background: addRefBusy || !addRefEmail.trim() ? '#1f2937' : '#3b82f6', color: addRefBusy || !addRefEmail.trim() ? '#6b7280' : '#fff', fontSize: 12.5, fontWeight: 700, cursor: addRefBusy || !addRefEmail.trim() ? 'default' : 'pointer' }}>
+                                    {addRefBusy ? 'Adding…' : 'Add'}
+                                  </button>
+                                </div>
+                                {/* Referee list */}
+                                {affRefereesLoading === a.id ? (
+                                  <div style={{ color: '#6b7280', fontSize: 12, padding: '6px 0' }}>Loading referees…</div>
+                                ) : (affReferees[a.id] || []).length === 0 ? (
+                                  <div style={{ color: '#6b7280', fontSize: 12, padding: '6px 0' }}>No referees yet. Add one above, or share their referral link.</div>
+                                ) : (
+                                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                                    <thead>
+                                      <tr style={{ color: '#6b7280', textAlign: 'left' }}>
+                                        <th style={{ padding: '6px 8px', fontWeight: 600 }}>Referred merchant</th>
+                                        <th style={{ padding: '6px 8px', fontWeight: 600 }}>Email</th>
+                                        <th style={{ padding: '6px 8px', fontWeight: 600 }}>Subscription</th>
+                                        <th style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'right' }}>This month</th>
+                                        <th style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'right' }}>Total</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(affReferees[a.id] || []).map((r, ri) => (
+                                        <tr key={ri} style={{ borderTop: '1px solid #1f2937' }}>
+                                          <td style={{ padding: '8px', color: '#e5e7eb', fontWeight: 600 }}>{r.trader_name}</td>
+                                          <td style={{ padding: '8px', color: '#9ca3af' }}>{r.trader_email}</td>
+                                          <td style={{ padding: '8px' }}>
+                                            <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                                              background: r.subscribed ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)',
+                                              color: r.subscribed ? '#34d399' : '#9ca3af' }}>
+                                              {r.subscribed ? `Subscribed${r.subscription_plan ? ' · ' + r.subscription_plan : ''}` : 'Not subscribed'}
+                                            </span>
+                                          </td>
+                                          <td style={{ padding: '8px', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>KES {(r.this_month_commission || 0).toLocaleString()}</td>
+                                          <td style={{ padding: '8px', textAlign: 'right', color: '#9ca3af' }}>KES {(r.total_earned || 0).toLocaleString()}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                          </Fragment>
                         ))}
                     </tbody>
                   </table>

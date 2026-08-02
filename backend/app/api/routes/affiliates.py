@@ -431,6 +431,61 @@ async def admin_add_referral(
             "trader_name": referred.full_name, "trader_email": referred.email}
 
 
+@router.get("/admin/{affiliate_id}/referrals")
+async def admin_affiliate_referrals(
+    affiliate_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every merchant this affiliate referred — name, email, whether they've PAID a
+    subscription, and the commission earned from them (this month + lifetime).
+    Powers the expandable dropdown on the admin Affiliates list."""
+    from app.models.subscription import Subscription, SubscriptionStatus
+
+    aff = (await db.execute(select(Affiliate).where(Affiliate.id == affiliate_id))).scalar_one_or_none()
+    if not aff:
+        raise HTTPException(status_code=404, detail="Affiliate not found")
+    if not aff.referral_code:
+        return {"referrals": []}
+
+    referred = (await db.execute(
+        select(Trader).where(Trader.referred_by_code == aff.referral_code)
+    )).scalars().all()
+
+    month_start = _month_start()
+    out = []
+    for rt in referred:
+        totals = (await db.execute(
+            select(
+                func.coalesce(func.sum(AffiliateEarning.commission), 0).label("total"),
+                func.coalesce(func.sum(
+                    case((AffiliateEarning.week_start == month_start, AffiliateEarning.commission), else_=0)
+                ), 0).label("this_month"),
+            ).where(AffiliateEarning.affiliate_id == aff.id,
+                    AffiliateEarning.referred_trader_id == rt.id)
+        )).one()
+        sub = (await db.execute(
+            select(Subscription).where(
+                Subscription.trader_id == rt.id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.mpesa_transaction_id != 'ADMIN_GRANT',
+                Subscription.mpesa_transaction_id.isnot(None),
+            ).order_by(Subscription.started_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        out.append({
+            "trader_id": rt.id,
+            "trader_name": rt.full_name,
+            "trader_email": rt.email,
+            "joined_at": rt.created_at.isoformat() if rt.created_at else None,
+            "subscribed": bool(sub),
+            "subscription_plan": (sub.plan.value if sub and hasattr(sub.plan, "value") else (str(sub.plan) if sub else None)),
+            "this_month_commission": round(float(totals.this_month or 0), 2),
+            "total_earned": round(float(totals.total or 0), 2),
+        })
+    out.sort(key=lambda r: (r["subscribed"], r["this_month_commission"]), reverse=True)
+    return {"referrals": out, "count": len(out)}
+
+
 @router.get("/admin/stats")
 async def admin_affiliate_stats(
     admin: Trader = Depends(get_admin_trader),
