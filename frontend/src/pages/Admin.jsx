@@ -5091,7 +5091,7 @@ export default function Admin() {
                 Traders who configured I&amp;M Automation through SparkP2P. They bill at their <b>plan</b> rate —
                 Bronze 4 · Silver 5 · Gold 7 · B2C/VIP (KES 15,000) 5 · no subscription 10 (then 12).
               </p>
-              {imLoading ? (
+              {imLoading && imTraders.length === 0 ? (
                 <p style={{ color: 'var(--text-3)' }}>Loading…</p>
               ) : imTraders.length === 0 ? (
                 <p style={{ color: 'var(--text-3)', fontSize: 13 }}>
@@ -5167,7 +5167,7 @@ export default function Admin() {
               <p style={{ color: 'var(--text-3)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
                 People who use the bot but are <b>not</b> SparkP2P clients — a flat KES 12/payout.
               </p>
-              {imLoading ? (
+              {imLoading && imAccounts.length === 0 ? (
                 <p style={{ color: 'var(--text-3)' }}>Loading…</p>
               ) : imAccounts.length === 0 ? (
                 <p style={{ color: 'var(--text-3)', fontSize: 13 }}>

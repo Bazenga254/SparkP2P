@@ -3240,6 +3240,9 @@ async def im_configured_traders(
         .distinct()
     )).scalars().all()
 
+    if not trader_ids:
+        return {"total": 0, "traders": [], "period": period}
+
     out = []
     now = datetime.now(timezone.utc)
     # Same window the revenue cards use, so the per-trader table agrees with the
@@ -3251,35 +3254,69 @@ async def im_configured_traders(
         "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
+
+    from app.models.subscription import CreditPurchase
+
+    # ── Batched aggregates ────────────────────────────────────────────────────
+    # This table used to run ~5 sequential DB queries PER trader (an N+1 loop),
+    # which is why the admin I&M dashboard felt slow to refresh. Do each lookup
+    # ONCE across all traders with GROUP BY, then assemble in Python — so the
+    # query count no longer grows with the number of merchants.
+    traders_by_id = {
+        t.id: t for t in (await db.execute(
+            select(Trader).where(Trader.id.in_(trader_ids))
+        )).scalars().all()
+    }
+
+    _cw = [ImCharge.trader_id.in_(trader_ids)]
+    if start:
+        _cw.append(ImCharge.charged_at >= start)
+    charge_by_id = {
+        row.trader_id: (int(row.n or 0), int(row.rev or 0), int(row.vol or 0))
+        for row in (await db.execute(
+            select(ImCharge.trader_id,
+                   func.count(ImCharge.id).label("n"),
+                   func.coalesce(func.sum(ImCharge.rate), 0).label("rev"),
+                   func.coalesce(func.sum(ImCharge.payout_amount), 0).label("vol"))
+            .where(*_cw).group_by(ImCharge.trader_id)
+        )).all()
+    }
+
+    # What each trader PAID to buy credits (completed top-ups) in the window.
+    _dw = [CreditPurchase.trader_id.in_(trader_ids), CreditPurchase.status == "completed"]
+    if start:
+        _dw.append(CreditPurchase.created_at >= start)
+    dep_by_id = {
+        row.trader_id: int(row.dep or 0)
+        for row in (await db.execute(
+            select(CreditPurchase.trader_id,
+                   func.coalesce(func.sum(CreditPurchase.amount), 0).label("dep"))
+            .where(*_dw).group_by(CreditPurchase.trader_id)
+        )).all()
+    }
+
+    seen_by_id = {
+        row.trader_id: row.seen
+        for row in (await db.execute(
+            select(MerchantApiKey.trader_id, func.max(MerchantApiKey.last_used_at).label("seen"))
+            .where(MerchantApiKey.trader_id.in_(trader_ids),
+                   MerchantApiKey.scope == "im_bot",
+                   MerchantApiKey.revoked_at.is_(None))
+            .group_by(MerchantApiKey.trader_id)
+        )).all()
+    }
+
     for tid in trader_ids:
-        trader = (await db.execute(select(Trader).where(Trader.id == tid))).scalar_one_or_none()
+        trader = traders_by_id.get(tid)
         if not trader:
             continue
         # Rate from their real plan (5/7/8/9, or the 10→12 intro allowance).
+        # Kept per-trader — it resolves live subscription state.
         info = await pricing.rate_for_trader(db, tid)
-        _charge_where = [ImCharge.trader_id == tid]
-        if start:
-            _charge_where.append(ImCharge.charged_at >= start)
-        stats = (await db.execute(
-            select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
-                   func.coalesce(func.sum(ImCharge.payout_amount), 0))
-            .where(*_charge_where)
-        )).one()
-        # What this trader PAID to buy credits (completed top-ups) in the window —
-        # so "who topped up KES 1,000 today" reads straight off this column.
-        from app.models.subscription import CreditPurchase
-        _dep_where = [CreditPurchase.trader_id == tid, CreditPurchase.status == "completed"]
-        if start:
-            _dep_where.append(CreditPurchase.created_at >= start)
-        deposited = int((await db.execute(
-            select(func.coalesce(func.sum(CreditPurchase.amount), 0)).where(*_dep_where)
-        )).scalar_one() or 0)
-        last_seen = (await db.execute(
-            select(func.max(MerchantApiKey.last_used_at))
-            .where(MerchantApiKey.trader_id == tid,
-                   MerchantApiKey.scope == "im_bot",
-                   MerchantApiKey.revoked_at.is_(None))
-        )).scalar_one_or_none()
+        _n, _rev, _vol = charge_by_id.get(tid, (0, 0, 0))
+        stats = (_n, _rev, _vol)
+        deposited = dep_by_id.get(tid, 0)
+        last_seen = seen_by_id.get(tid)
         # Online = the bot polled within the last 3 minutes (its heartbeat).
         online = bool(last_seen and (now - as_utc(last_seen)).total_seconds() < 180) if last_seen else False
         out.append({
