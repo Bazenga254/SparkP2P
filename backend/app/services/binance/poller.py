@@ -59,24 +59,24 @@ class BinanceOrderPoller:
             await self._activate_pending_settlements(db)
             await self._check_settlement_thresholds(db)
             await self._reconcile_stale_buy_orders(db)
-            await self._run_affiliate_friday_payouts(db)
+            await self._run_affiliate_monthly_payouts(db)
             # Volume fee removed — revenue from subscriptions + settlement fees only
             # await self._run_daily_volume_fee(db)
 
-    async def _run_affiliate_friday_payouts(self, db: AsyncSession):
-        """Process affiliate payouts every Friday for balances >= KES 5,000."""
+    async def _run_affiliate_monthly_payouts(self, db: AsyncSession):
+        """Settle affiliate commissions on the 2nd of every month (previous month)."""
         now = datetime.now(timezone.utc)
-        if now.weekday() != 4:  # 4 = Friday
+        if now.day != 2:   # only on the 2nd
             return
         today_str = now.strftime("%Y-%m-%d")
         if self._affiliate_payout_last_run == today_str:
             return
         try:
-            from app.api.routes.affiliates import process_friday_payouts
-            await process_friday_payouts(db)
+            from app.api.routes.affiliates import process_monthly_payouts
+            await process_monthly_payouts(db)
             self._affiliate_payout_last_run = today_str
         except Exception as e:
-            logger.error(f"Affiliate Friday payout failed: {e}")
+            logger.error(f"Affiliate monthly payout failed: {e}")
 
     async def _run_daily_volume_fee(self, db: AsyncSession):
         """

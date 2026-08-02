@@ -27,6 +27,11 @@ class Affiliate(Base):
     status = Column(Enum(AffiliateStatus), default=AffiliateStatus.PENDING, nullable=False)
     referral_code = Column(String(20), unique=True, nullable=True, index=True)  # set on approval
 
+    # Per-merchant switch (opt-in). The master AFFILIATES_ENABLED flag reveals the
+    # PROGRAM; this decides whether THIS merchant sees their affiliate dashboard.
+    # Defaults False: admin turns it on per merchant from the Affiliates list.
+    visible = Column(Boolean, default=False, nullable=False)
+
     applied_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     approved_at = Column(DateTime(timezone=True), nullable=True)
     rejected_at = Column(DateTime(timezone=True), nullable=True)

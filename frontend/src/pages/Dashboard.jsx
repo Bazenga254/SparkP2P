@@ -1914,7 +1914,7 @@ export default function Dashboard() {
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
-        {affiliatesEnabled && affiliateData?.affiliate && (
+        {affiliatesEnabled && affiliateData?.affiliate?.visible && (
           <button
             className={`tab-btn ${activeTab === 'affiliates' ? 'active' : ''}`}
             onClick={() => setActiveTab('affiliates')}
@@ -2078,7 +2078,7 @@ export default function Dashboard() {
           >
             <Megaphone size={16} /><span>Ads</span>
           </button>
-          {affiliatesEnabled && affiliateData?.affiliate && (
+          {affiliatesEnabled && affiliateData?.affiliate?.visible && (
             <button
               className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
               onClick={() => setActiveTab('affiliates')}
@@ -2501,7 +2501,7 @@ export default function Dashboard() {
             )}
 
             {/* Affiliate Quick-Action Card */}
-            {affiliatesEnabled && affiliateData !== null && (
+            {affiliatesEnabled && affiliateData?.affiliate?.visible && (
               <div className="card" style={{ marginBottom: 16 }}>
                 <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('affiliates')}>
                   <Share2 size={20} style={{ color: '#f59e0b' }} />
@@ -3402,7 +3402,7 @@ export default function Dashboard() {
           );
         })()}
 
-        {affiliatesEnabled && activeTab === 'affiliates' && (
+        {affiliatesEnabled && affiliateData?.affiliate?.visible && activeTab === 'affiliates' && (
           <div>
             {/* No affiliate record yet — Apply form */}
             {!affiliateData?.affiliate && (
@@ -3469,9 +3469,9 @@ export default function Dashboard() {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
                     {[
                       { label: 'REFERRALS',      value: affiliateReferrals?.summary?.total_referrals || 0 },
+                      { label: 'SUBSCRIBED',     value: affiliateReferrals?.summary?.subscribed_referrals || 0 },
+                      { label: 'THIS MONTH',     value: `KES ${(affiliateReferrals?.summary?.this_month_earnings || 0).toLocaleString()}` },
                       { label: 'PENDING PAYOUT', value: `KES ${(affiliateData.affiliate.pending_balance || 0).toLocaleString()}` },
-                      { label: 'TOTAL EARNED',   value: `KES ${(affiliateData.affiliate.total_earned || 0).toLocaleString()}` },
-                      { label: 'THIS WEEK',      value: `KES ${(affiliateReferrals?.summary?.this_week_earnings || 0).toLocaleString()}` },
                     ].map(({ label, value }) => (
                       <div key={label} className="card" style={{ padding: '14px 18px' }}>
                         <div style={{ color: '#fff', fontWeight: 700, fontSize: 20, marginBottom: 4 }}>{value}</div>
@@ -3500,7 +3500,7 @@ export default function Dashboard() {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           <span style={{ color: '#6b7280', fontSize: 12 }}>Your code: <strong style={{ color: '#f59e0b' }}>{affiliateData.affiliate.referral_code}</strong></span>
-                          <span style={{ color: '#6b7280', fontSize: 12 }}>10% of all fees, lifetime</span>
+                          <span style={{ color: '#6b7280', fontSize: 12 }}>15% of their subscription · paid on the 2nd</span>
                         </div>
                       </div>
 
@@ -3520,47 +3520,25 @@ export default function Dashboard() {
                         ) : (
                           <div style={{ marginTop: 8 }}>
                             {(affiliateReferrals?.referrals || []).map((ref, i) => (
-                              <div key={i} style={{ borderBottom: i < affiliateReferrals.referrals.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                                <div
-                                  style={{ display: 'flex', alignItems: 'center', padding: '12px 4px', cursor: ref.weekly_breakdown?.length > 0 ? 'pointer' : 'default' }}
-                                  onClick={() => ref.weekly_breakdown?.length > 0 && setExpandedReferral(expandedReferral === i ? null : i)}
-                                >
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontWeight: 600, color: '#e5e7eb', fontSize: 14 }}>{ref.trader_name}</div>
-                                    <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
+                              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 4px', borderBottom: i < affiliateReferrals.referrals.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: 600, color: '#e5e7eb', fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ref.trader_name}</div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3 }}>
+                                    {/* Whether the referred merchant has PAID for a subscription */}
+                                    <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10,
+                                      background: ref.subscribed ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)',
+                                      color: ref.subscribed ? '#34d399' : '#9ca3af' }}>
+                                      {ref.subscribed ? 'Subscribed' : 'Not subscribed'}
+                                    </span>
+                                    <span style={{ fontSize: 11, color: '#6b7280' }}>
                                       Joined {ref.joined_at ? new Date(ref.joined_at).toLocaleDateString('en-KE') : '—'}
-                                    </div>
+                                    </span>
                                   </div>
-                                  <div style={{ textAlign: 'right', marginRight: ref.weekly_breakdown?.length > 0 ? 8 : 0 }}>
-                                    <div style={{ fontWeight: 700, color: '#10b981', fontSize: 14 }}>KES {(ref.total_earned || 0).toLocaleString()}</div>
-                                    <div style={{ fontSize: 11, color: '#6b7280' }}>earned</div>
-                                  </div>
-                                  {ref.weekly_breakdown?.length > 0 && (
-                                    expandedReferral === i ? <ChevronUp size={16} color="#6b7280" /> : <ChevronDown size={16} color="#6b7280" />
-                                  )}
                                 </div>
-                                {expandedReferral === i && ref.weekly_breakdown?.length > 0 && (
-                                  <div style={{ background: 'rgba(255,255,255,0.03)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 }}>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                                      <thead>
-                                        <tr style={{ color: '#6b7280' }}>
-                                          <th style={{ textAlign: 'left', padding: '4px 0', fontWeight: 500 }}>Week</th>
-                                          <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Orders</th>
-                                          <th style={{ textAlign: 'right', padding: '4px 0', fontWeight: 500 }}>Commission</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {ref.weekly_breakdown.map((w, wi) => (
-                                          <tr key={wi} style={{ color: '#d1d5db' }}>
-                                            <td style={{ padding: '4px 0' }}>Week of {new Date(w.week_start).toLocaleDateString('en-KE')}</td>
-                                            <td style={{ padding: '4px 0', textAlign: 'right' }}>{w.order_count}</td>
-                                            <td style={{ padding: '4px 0', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>KES {(w.commission || 0).toLocaleString()}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                )}
+                                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                  <div style={{ fontWeight: 700, color: '#10b981', fontSize: 14 }}>KES {(ref.this_month_commission || 0).toLocaleString()}</div>
+                                  <div style={{ fontSize: 11, color: '#6b7280' }}>this month{ref.total_earned ? ` · KES ${(ref.total_earned).toLocaleString()} total` : ''}</div>
+                                </div>
                               </div>
                             ))}
                           </div>

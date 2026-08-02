@@ -606,6 +606,31 @@ export default function Admin() {
     setTimeout(() => setAffiliateActionMsg(''), 4000);
   };
 
+  // Per-merchant switch: whether this approved affiliate sees their dashboard.
+  const handleAffiliateVisible = async (id, next) => {
+    try {
+      await api.put(`/affiliates/admin/${id}/visible`, { visible: next });
+      loadAffiliates();
+    } catch (e) {
+      setAffiliateActionMsg(e.response?.data?.detail || 'Error');
+      setTimeout(() => setAffiliateActionMsg(''), 4000);
+    }
+  };
+
+  // Manually attribute a merchant to this affiliate (referral missed at sign-up).
+  const handleAddReferral = async (a) => {
+    const email = prompt(`Add a merchant to ${a.trader_name}'s referrals.\nEnter the referred merchant's email:`);
+    if (!email || !email.trim()) return;
+    try {
+      const res = await api.post(`/affiliates/admin/${a.id}/add-referral`, { email: email.trim() });
+      setAffiliateActionMsg(res.data.message || 'Added');
+      loadAffiliates();
+    } catch (e) {
+      setAffiliateActionMsg(e.response?.data?.detail || 'Error');
+    }
+    setTimeout(() => setAffiliateActionMsg(''), 5000);
+  };
+
   const loadSurveyResponses = async () => {
     setSurveyLoading(true);
     try {
@@ -5352,9 +5377,19 @@ export default function Admin() {
                                   </button>
                                 )}
                                 {a.status === 'approved' && (
-                                  <span style={{ color: '#34d399', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                    <Check size={12} /> Active
-                                  </span>
+                                  <>
+                                    {/* Per-merchant switch — only meaningful when the master toggle is ON */}
+                                    <button onClick={() => handleAffiliateVisible(a.id, !a.visible)}
+                                      title={a.visible ? 'Shown to this merchant — click to hide' : 'Hidden from this merchant — click to show'}
+                                      style={{ padding: '4px 10px', background: a.visible ? '#065f46' : '#1f2937', border: `1px solid ${a.visible ? '#10b981' : '#374151'}`, borderRadius: 6, color: a.visible ? '#34d399' : '#9ca3af', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      {a.visible ? 'Shown ✓' : 'Hidden'}
+                                    </button>
+                                    <button onClick={() => handleAddReferral(a)}
+                                      title="Manually add a merchant to this affiliate's referrals"
+                                      style={{ padding: '4px 10px', background: '#1e3a5f', border: '1px solid #3b82f6', borderRadius: 6, color: '#93c5fd', fontSize: 12, cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                      + Referral
+                                    </button>
+                                  </>
                                 )}
                               </div>
                             </td>

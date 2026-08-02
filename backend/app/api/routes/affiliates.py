@@ -6,7 +6,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -18,16 +18,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-COMMISSION_RATE = 0.20          # 20% of subscription price goes to affiliate
-MIN_PAYOUT_BALANCE = 5000.0    # KES — minimum to trigger Friday payout
+COMMISSION_RATE = 0.15          # 15% of subscription price goes to affiliate
+MIN_PAYOUT_BALANCE = 1.0       # KES — any positive balance is paid on the 2nd
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _week_start(d: date = None) -> date:
-    """Return the Monday of the week containing d (or today)."""
+def _month_start(d: date = None) -> date:
+    """First day of the month containing d (or today). Commissions accrue per
+    calendar month and are paid/reset on the 2nd of the following month."""
     d = d or datetime.now(timezone.utc).date()
-    return d - timedelta(days=d.weekday())
+    return d.replace(day=1)
+
+
+def _prev_month_range(d: date = None) -> tuple:
+    """(first, last) day of the month BEFORE d — the period a 2nd-of-month payout
+    settles."""
+    d = d or datetime.now(timezone.utc).date()
+    first_this = d.replace(day=1)
+    last_prev = first_this - timedelta(days=1)
+    return last_prev.replace(day=1), last_prev
+
+
+# Kept so any old caller/import still resolves; period is now the month.
+def _week_start(d: date = None) -> date:
+    return _month_start(d)
 
 
 def _generate_referral_code(full_name: str) -> str:
@@ -113,12 +128,14 @@ async def get_my_affiliate(
         "affiliate": {
             "id": aff.id,
             "status": aff.status,
+            "visible": bool(aff.visible),   # admin's per-merchant switch
             "referral_code": aff.referral_code,
             "referral_link": f"https://sparkp2p.com/login?ref={aff.referral_code}" if aff.referral_code else None,
             "pending_balance": aff.pending_balance,
             "total_earned": aff.total_earned,
             "total_paid_out": aff.total_paid_out,
             "referral_count": referral_count,
+            "commission_rate_pct": int(COMMISSION_RATE * 100),
             "applied_at": aff.applied_at.isoformat() if aff.applied_at else None,
             "approved_at": aff.approved_at.isoformat() if aff.approved_at else None,
         }
@@ -138,64 +155,72 @@ async def get_my_referrals(
     if not aff:
         raise HTTPException(status_code=404, detail="You are not an approved affiliate")
 
+    from app.models.subscription import Subscription, SubscriptionStatus
+
     # Get all referred traders
     refs_result = await db.execute(
         select(Trader).where(Trader.referred_by_code == aff.referral_code)
     )
     referred_traders = refs_result.scalars().all()
 
+    month_start = _month_start()
+
     referrals = []
     for rt in referred_traders:
-        # Earnings from this specific referee
-        earnings_result = await db.execute(
+        # Commission from this referee — lifetime and THIS month (the accruing pot).
+        totals = (await db.execute(
             select(
-                AffiliateEarning.week_start,
-                func.sum(AffiliateEarning.commission).label("weekly_commission"),
-                func.count(AffiliateEarning.id).label("order_count"),
-            )
-            .where(
+                func.coalesce(func.sum(AffiliateEarning.commission), 0).label("total"),
+                func.coalesce(func.sum(
+                    case((AffiliateEarning.week_start == month_start, AffiliateEarning.commission), else_=0)
+                ), 0).label("this_month"),
+            ).where(
                 AffiliateEarning.affiliate_id == aff.id,
                 AffiliateEarning.referred_trader_id == rt.id,
             )
-            .group_by(AffiliateEarning.week_start)
-            .order_by(AffiliateEarning.week_start.desc())
-        )
-        weekly_rows = earnings_result.all()
+        )).one()
 
-        total_earned_from = sum(r.weekly_commission for r in weekly_rows)
+        # Has this referred merchant PAID for a subscription? (active, not an admin grant)
+        sub = (await db.execute(
+            select(Subscription)
+            .where(Subscription.trader_id == rt.id,
+                   Subscription.status == SubscriptionStatus.ACTIVE,
+                   Subscription.mpesa_transaction_id != 'ADMIN_GRANT',
+                   Subscription.mpesa_transaction_id.isnot(None))
+            .order_by(Subscription.started_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
 
         referrals.append({
             "trader_name": rt.full_name,
+            "trader_email": rt.email,
             "joined_at": rt.created_at.isoformat() if rt.created_at else None,
-            "total_earned": round(total_earned_from, 2),
-            "weekly_breakdown": [
-                {
-                    "week_start": r.week_start.isoformat(),
-                    "commission": round(r.weekly_commission, 2),
-                    "order_count": r.order_count,
-                }
-                for r in weekly_rows
-            ],
+            "subscribed": bool(sub),
+            "subscription_plan": (sub.plan.value if sub and hasattr(sub.plan, "value") else (str(sub.plan) if sub else None)),
+            "this_month_commission": round(float(totals.this_month or 0), 2),
+            "total_earned": round(float(totals.total or 0), 2),
         })
 
-    # Current week summary
-    week_start = _week_start()
-    this_week_result = await db.execute(
-        select(func.sum(AffiliateEarning.commission))
-        .where(
-            AffiliateEarning.affiliate_id == aff.id,
-            AffiliateEarning.week_start == week_start,
-        )
-    )
-    this_week_earnings = this_week_result.scalar() or 0.0
+    # Sort: paying referrals first, then by this-month commission.
+    referrals.sort(key=lambda r: (r["subscribed"], r["this_month_commission"]), reverse=True)
+
+    # This month's accruing total across all referrals.
+    this_month_earnings = (await db.execute(
+        select(func.coalesce(func.sum(AffiliateEarning.commission), 0))
+        .where(AffiliateEarning.affiliate_id == aff.id,
+               AffiliateEarning.week_start == month_start)
+    )).scalar() or 0.0
 
     return {
         "referrals": referrals,
         "summary": {
             "total_referrals": len(referred_traders),
-            "this_week_earnings": round(this_week_earnings, 2),
+            "subscribed_referrals": sum(1 for r in referrals if r["subscribed"]),
+            "this_month_earnings": round(float(this_month_earnings), 2),
             "pending_balance": round(aff.pending_balance, 2),
             "total_earned": round(aff.total_earned, 2),
+            "commission_rate_pct": int(COMMISSION_RATE * 100),
+            "next_payout_note": "Commissions accumulate through the month and are paid out on the 2nd.",
         },
     }
 
@@ -264,6 +289,7 @@ async def admin_list_affiliates(
             "trader_name": trader.full_name,
             "trader_email": trader.email,
             "status": aff.status,
+            "visible": bool(aff.visible),   # per-merchant switch
             "referral_code": aff.referral_code,
             "referral_count": referral_count,
             "pending_balance": round(aff.pending_balance, 2),
@@ -339,6 +365,72 @@ async def admin_reject_affiliate(
     return {"message": "Rejected"}
 
 
+class VisibleToggle(BaseModel):
+    visible: bool
+
+
+@router.put("/admin/{affiliate_id}/visible")
+async def admin_set_affiliate_visible(
+    affiliate_id: int,
+    data: VisibleToggle,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-merchant switch: whether THIS approved affiliate sees their affiliate
+    dashboard. Gated under the master AFFILIATES_ENABLED flag — both must be on
+    for the merchant to see it. Balances/records untouched either way."""
+    aff = (await db.execute(select(Affiliate).where(Affiliate.id == affiliate_id))).scalar_one_or_none()
+    if not aff:
+        raise HTTPException(status_code=404, detail="Affiliate not found")
+    aff.visible = bool(data.visible)
+    await db.commit()
+    logger.info("admin %s set affiliate %s visible=%s", admin.id, affiliate_id, data.visible)
+    return {"id": aff.id, "visible": bool(aff.visible)}
+
+
+class AddReferralRequest(BaseModel):
+    email: Optional[str] = None       # the referred merchant's email
+    trader_id: Optional[int] = None   # …or their id
+
+
+@router.post("/admin/{affiliate_id}/add-referral")
+async def admin_add_referral(
+    affiliate_id: int,
+    data: AddReferralRequest,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually attribute a merchant to an affiliate — for when a referral was
+    missed at sign-up. Sets the referred merchant's referred_by_code to this
+    affiliate's code, so they appear in the affiliate's list and earn commission
+    on their NEXT subscription payment. Does not retro-credit past payments."""
+    aff = (await db.execute(select(Affiliate).where(Affiliate.id == affiliate_id))).scalar_one_or_none()
+    if not aff or not aff.referral_code:
+        raise HTTPException(status_code=404, detail="Affiliate not found or not approved")
+
+    q = select(Trader)
+    if data.trader_id:
+        q = q.where(Trader.id == data.trader_id)
+    elif data.email:
+        q = q.where(func.lower(Trader.email) == data.email.strip().lower())
+    else:
+        raise HTTPException(status_code=400, detail="Provide the merchant's email or id.")
+    referred = (await db.execute(q)).scalar_one_or_none()
+    if not referred:
+        raise HTTPException(status_code=404, detail="No merchant found with that email/id.")
+    if referred.id == aff.trader_id:
+        raise HTTPException(status_code=400, detail="A merchant cannot be their own referral.")
+    if referred.referred_by_code and referred.referred_by_code != aff.referral_code:
+        raise HTTPException(status_code=409,
+                            detail=f"{referred.full_name} is already referred by {referred.referred_by_code}.")
+
+    referred.referred_by_code = aff.referral_code
+    await db.commit()
+    logger.info("admin %s attributed trader %s to affiliate %s (%s)", admin.id, referred.id, affiliate_id, aff.referral_code)
+    return {"message": f"{referred.full_name} added to {aff.referral_code}'s referrals.",
+            "trader_name": referred.full_name, "trader_email": referred.email}
+
+
 @router.get("/admin/stats")
 async def admin_affiliate_stats(
     admin: Trader = Depends(get_admin_trader),
@@ -391,9 +483,10 @@ async def credit_affiliate_commission(
     subscription_price: float,
     plan_label: str = "",
 ):
-    """Credit 20% of subscription price to the referring affiliate.
+    """Credit 15% of subscription price to the referring affiliate.
     Called when a referred trader activates or renews a paid plan.
-    Safe to call even if there is no referrer."""
+    Safe to call even if there is no referrer. Earnings accrue into the current
+    calendar month and are paid out on the 2nd of the next month."""
     if not referred_by_code:
         return
     if subscription_price <= 0:
@@ -410,7 +503,7 @@ async def credit_affiliate_commission(
         return
 
     commission = round(subscription_price * COMMISSION_RATE, 2)
-    week_start = _week_start()
+    week_start = _month_start()   # period column now holds the month's first day
 
     earning = AffiliateEarning(
         affiliate_id=aff.id,
@@ -431,16 +524,16 @@ async def credit_affiliate_commission(
     )
 
 
-# ── Friday payout processing (called by housekeeping scheduler) ───────────────
+# ── Monthly payout processing (2nd of every month) ────────────────────────────
 
-async def process_friday_payouts(db: AsyncSession):
+async def process_monthly_payouts(db: AsyncSession):
     """
-    Create payout records for all approved affiliates whose pending_balance >= KES 5,000.
-    Called every Friday by the background scheduler. Does NOT send money — admin handles that.
+    On the 2nd of each month, settle the PREVIOUS month's accrued commissions:
+    create a payout record for every approved affiliate with a positive balance,
+    mark their earnings paid, and reset pending_balance to 0 for the new month.
+    Does NOT send money — the admin pays and marks each payout paid.
     """
-    today = datetime.now(timezone.utc).date()
-    week_start = _week_start(today)
-    week_end = week_start + timedelta(days=6)
+    period_start, period_end = _prev_month_range()
 
     result = await db.execute(
         select(Affiliate).where(
@@ -455,8 +548,8 @@ async def process_friday_payouts(db: AsyncSession):
         payout = AffiliatePayout(
             affiliate_id=aff.id,
             amount=aff.pending_balance,
-            week_start=week_start,
-            week_end=week_end,
+            week_start=period_start,   # columns repurposed to hold the month range
+            week_end=period_end,
             status=AffiliatePayoutStatus.PENDING,
         )
         db.add(payout)
@@ -477,4 +570,8 @@ async def process_friday_payouts(db: AsyncSession):
 
     if created:
         await db.commit()
-        logger.info(f"[Affiliate] Created {created} Friday payout records")
+        logger.info(f"[Affiliate] Created {created} monthly payout records for {period_start:%B %Y}")
+
+
+# Back-compat alias so any old import keeps resolving.
+process_friday_payouts = process_monthly_payouts
