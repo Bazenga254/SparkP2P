@@ -2116,14 +2116,21 @@ export default function Admin() {
                       ) : pageSlice.map((o, i) => (
                         <div key={o.id} style={{ padding: '11px 20px', borderBottom: i < pageSlice.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span className={`adm-badge ${o.side === 'BUY' ? 'green' : 'red'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{o.side}</span>
+                            <span className={`adm-badge ${String(o.side).toLowerCase() === 'buy' ? 'green' : 'red'}`} style={{ flexShrink: 0, minWidth: 36, textAlign: 'center' }}>{o.side}</span>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ color: '#e5e7eb', fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.trader_name || '—'}</div>
                               <div style={{ color: '#6b7280', fontSize: 11, marginTop: 1 }}>{o.created_at ? fmtDateEAT(o.created_at) : '—'}</div>
                             </div>
                             <div style={{ textAlign: 'right', flexShrink: 0 }}>
                               <div style={{ color: '#10b981', fontWeight: 700, fontSize: 14 }}>{fmtKES(o.fiat_amount)}</div>
-                              <span className={`adm-badge ${o.status === 'completed' ? 'green' : o.status === 'disputed' ? 'red' : o.status === 'cancelled' ? 'dim' : 'yellow'}`} style={{ marginTop: 3, display: 'inline-block', textTransform: 'capitalize' }}>{o.status}</span>
+                              {(() => {
+                                const s = String(o.status || '').toLowerCase();
+                                const cls = (s === 'completed' || s === 'released') ? 'green'
+                                          : s === 'cancelled' ? 'red'
+                                          : s === 'disputed' ? 'silver'
+                                          : 'yellow';
+                                return <span className={`adm-badge ${cls}`} style={{ marginTop: 3, display: 'inline-block', textTransform: 'capitalize' }}>{o.status}</span>;
+                              })()}
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 5, paddingLeft: 46, flexWrap: 'wrap', alignItems: 'center' }}>

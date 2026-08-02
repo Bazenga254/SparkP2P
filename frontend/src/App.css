@@ -3449,6 +3449,13 @@ body {
   color: #9ca3af;
 }
 
+/* Disputed orders — a metallic "silver" pill, distinct from grey 'dim'. */
+.adm-badge.silver {
+  background: rgba(203,213,225,0.18);
+  color: #cbd5e1;
+  border: 1px solid rgba(203,213,225,0.38);
+}
+
 .adm-btn-sm {
   padding: 5px 12px;
   border-radius: 6px;
