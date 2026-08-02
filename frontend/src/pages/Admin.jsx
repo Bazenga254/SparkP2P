@@ -1938,7 +1938,7 @@ export default function Admin() {
                       </span>
                       {fiatLastUpdated && <span style={{ fontSize: 11, color: '#4b5563' }}>Last: {fmtTimeEAT(fiatLastUpdated)}</span>}
                     </div>
-                    <div style={{ overflowX: 'auto', fontFamily: '"Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif' }}>
+                    <div style={{ overflowX: 'auto', fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", sans-serif' }}>
                       {fiatSlice.length === 0 ? (
                         <div style={{ textAlign: 'center', padding: '40px 0', color: '#6b7280', fontSize: 13 }}>No fiat transactions found</div>
                       ) : (
@@ -1981,12 +1981,12 @@ export default function Admin() {
                                     <td style={{ padding: '12px 8px', fontFamily: 'ui-monospace, monospace', color: '#9aa4b2', fontSize: 11.5 }}>
                                       {txId ? (txId.length > 22 ? txId.slice(0, 22) + '…' : txId) : '—'}
                                     </td>
-                                    <td style={{ padding: '12px 8px', color: '#e5e7eb', fontWeight: 600 }}>{tx.trader_name || '—'}</td>
+                                    <td style={{ padding: '12px 8px', color: '#e5e7eb', fontWeight: 400 }}>{tx.trader_name || '—'}</td>
                                     <td style={{ padding: '12px 8px' }}>
-                                      <span style={{ fontSize: 11, fontWeight: 600, color: isIn ? '#3dcf8e' : '#f59e0b' }}>{typeLabel}</span>
+                                      <span style={{ fontSize: 11, fontWeight: 500, color: isIn ? '#3dcf8e' : '#f59e0b' }}>{typeLabel}</span>
                                     </td>
                                     <td style={{ padding: '12px 8px', color: '#8a93a6', fontSize: 11.5, whiteSpace: 'nowrap' }}>{tx.created_at ? fmtDateEAT(tx.created_at) : '—'}</td>
-                                    <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: 700, color: isIn ? '#3dcf8e' : '#f59e0b', whiteSpace: 'nowrap' }}>
+                                    <td style={{ padding: '12px 8px', textAlign: 'right', fontWeight: 500, color: isIn ? '#3dcf8e' : '#f59e0b', whiteSpace: 'nowrap' }}>
                                       {isIn ? '+' : '−'}{fmtKES(tx.amount)}
                                     </td>
                                     <td style={{ padding: '12px 8px', textAlign: 'right', color: '#6b7280', fontSize: 11.5 }}>{tx.fee ? fmtKES(tx.fee) : '0'}</td>
@@ -2011,8 +2011,8 @@ export default function Admin() {
                                             ['Complete Time', tx.created_at ? fmtDateEAT(tx.created_at) : null, '#9aa4b2'],
                                           ].map(([label, val, color, mono], k) => (
                                             <div key={k}>
-                                              <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>{label}</div>
-                                              <div style={{ color: color || '#e5e7eb', fontWeight: label === 'Reference Number' ? 700 : 500, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', wordBreak: 'break-all' }}>{val || '—'}</div>
+                                              <div style={{ color: '#9aa4b2', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>{label}</div>
+                                              <div style={{ color: color || '#e5e7eb', fontWeight: 400, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', wordBreak: 'break-all' }}>{val || '—'}</div>
                                             </div>
                                           ))}
                                         </div>
@@ -2041,8 +2041,8 @@ export default function Admin() {
                                                     ['External Tx ID', cd.external_tx_id, '#9aa4b2', true],
                                                   ].map(([label, val, color, mono], k) => (
                                                     <div key={k}>
-                                                      <div style={{ color: '#6b7280', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>{label}</div>
-                                                      <div style={{ color: val ? (color || '#e5e7eb') : '#6b7280', fontWeight: label === 'Failure Reason' ? 700 : 500, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', wordBreak: 'break-all' }}>{val || (label === 'Failure Reason' ? '— (succeeded)' : '—')}</div>
+                                                      <div style={{ color: '#9aa4b2', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 3 }}>{label}</div>
+                                                      <div style={{ color: val ? (color || '#e5e7eb') : '#6b7280', fontWeight: label === 'Failure Reason' ? 600 : 400, fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', wordBreak: 'break-all' }}>{val || (label === 'Failure Reason' ? '— (succeeded)' : '—')}</div>
                                                     </div>
                                                   ));
                                                 })()}
