@@ -5183,7 +5183,7 @@ export default function Admin() {
                     <Card label="Bot-only (non-clients)" color="var(--info)"
                       value={fmtKES(imRevenue?.bot_only?.deposits)} sub="credit sales · KES 12 each" />
                     <Card label="Credits used" color="var(--brand)"
-                      value={fmtKES(imRevenue?.total?.revenue)}
+                      value={fmtKES(imRevenue?.total?.credit_value ?? imRevenue?.total?.revenue)}
                       sub={`${imRevenue?.total?.payouts || 0} payouts · ${fmtKES(imRevenue?.total?.volume)} moved`} />
                   </div>
                 );
@@ -5256,7 +5256,7 @@ export default function Admin() {
                               <td style={{ textAlign: 'right' }}>{t.payouts}</td>
                               <td style={{ textAlign: 'right', color: 'var(--pos)' }}
                                   title={t.weekly_active ? `Credit value used on the unlimited plan — ${t.weekly_payouts} payout(s) × KES ${t.rate}. Charged KES 0 (covered by the weekly fee).` : undefined}>
-                                {fmtKES(t.credit_value ?? t.revenue)}{t.weekly_active ? '*' : ''}
+                                {fmtKES(t.credit_value ?? t.revenue)}
                               </td>
                               <td style={{ textAlign: 'right' }}>{fmtKES(t.volume)}</td>
                               <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{t.last_seen ? fmtDateEAT(t.last_seen) : '—'}</td>
@@ -5846,7 +5846,7 @@ export default function Admin() {
                         <div className="fin-c-value">{fmtKES(imRevenue?.total?.deposits ?? 0)}</div>
                         <div className="fin-c-note">
                           Money in from credit top-ups.<br/>
-                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts used so far ({fmtKES(imRevenue?.total?.revenue ?? 0)} of credit)
+                          {(imRevenue?.total?.payouts ?? 0).toLocaleString()} payouts used so far ({fmtKES(imRevenue?.total?.credit_value ?? imRevenue?.total?.revenue ?? 0)} of credit)
                         </div>
                       </div>
                       <div className="fin-comp-cell">

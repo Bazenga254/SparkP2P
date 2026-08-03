@@ -3066,6 +3066,26 @@ async def im_revenue(
     sparkp2p = by_pop.get("sparkp2p", {"payouts": 0, "revenue": 0, "volume": 0})
     bot_only = by_pop.get("bot_only", {"payouts": 0, "revenue": 0, "volume": 0})
 
+    # CREDIT VALUE used — the "Credits used" card. Weekly-plan payouts bill at rate
+    # 0 (revenue 0, since the merchant paid the flat weekly fee), so they never
+    # show in 'revenue' and the card would sit frozen. But each one DID consume
+    # value at the merchant's per-credit rate (Gold 7 / Silver 5 / Bronze 4). Count
+    # the rate-0 rows per trader, price them, and add that on top of real revenue so
+    # the card reflects actual usage and keeps climbing.
+    from app.services import im_pricing as _pricing
+    wk_rows = (await db.execute(
+        select(ImCharge.trader_id, func.count(ImCharge.id))
+        .where(*where, ImCharge.account_type == "sparkp2p",
+               ImCharge.rate == 0, ImCharge.trader_id.isnot(None))
+        .group_by(ImCharge.trader_id)
+    )).all()
+    weekly_value = 0
+    for _tid, _cnt in wk_rows:
+        _info = await _pricing.rate_for_trader(db, _tid)
+        weekly_value += int(_cnt or 0) * int(_info.get("rate") or 0)
+    sparkp2p["credit_value"] = sparkp2p["revenue"] + weekly_value
+    bot_only["credit_value"] = bot_only["revenue"]
+
     # DEPOSITS: the KES merchants actually PAID to buy credits (completed
     # CreditPurchase). This is money in the door — it lands at purchase, whereas
     # "revenue" above is only recognised as payouts consume credits. A trader who
@@ -3094,6 +3114,7 @@ async def im_revenue(
         "total": {
             "payouts": sparkp2p["payouts"] + bot_only["payouts"],
             "revenue": sparkp2p["revenue"] + bot_only["revenue"],
+            "credit_value": sparkp2p["credit_value"] + bot_only["credit_value"],
             "volume": sparkp2p["volume"] + bot_only["volume"],
             "deposits": dep_trader + dep_bot,
         },
