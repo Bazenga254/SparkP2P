@@ -5254,7 +5254,10 @@ export default function Admin() {
                               <td style={{ textAlign: 'right', color: t.weekly_active ? '#34d399' : ((t.credits ?? 0) <= 0 ? 'var(--neg)' : '#e5e7eb'), fontWeight: 700 }} title={t.weekly_active ? 'On the weekly unlimited plan' : undefined}>{t.weekly_active ? 'Unlimited' : (t.credits ?? 0).toLocaleString()}</td>
                               <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.deposited)}</td>
                               <td style={{ textAlign: 'right' }}>{t.payouts}</td>
-                              <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.revenue)}</td>
+                              <td style={{ textAlign: 'right', color: 'var(--pos)' }}
+                                  title={t.weekly_active ? `Credit value used on the unlimited plan — ${t.weekly_payouts} payout(s) × KES ${t.rate}. Charged KES 0 (covered by the weekly fee).` : undefined}>
+                                {fmtKES(t.credit_value ?? t.revenue)}{t.weekly_active ? '*' : ''}
+                              </td>
                               <td style={{ textAlign: 'right' }}>{fmtKES(t.volume)}</td>
                               <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{t.last_seen ? fmtDateEAT(t.last_seen) : '—'}</td>
                             </tr>

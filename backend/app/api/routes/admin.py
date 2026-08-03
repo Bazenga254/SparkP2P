@@ -3326,12 +3326,16 @@ async def im_configured_traders(
     if start:
         _cw.append(ImCharge.charged_at >= start)
     charge_by_id = {
-        row.trader_id: (int(row.n or 0), int(row.rev or 0), int(row.vol or 0))
+        row.trader_id: (int(row.n or 0), int(row.rev or 0), int(row.vol or 0), int(row.wk or 0))
         for row in (await db.execute(
             select(ImCharge.trader_id,
                    func.count(ImCharge.id).label("n"),
                    func.coalesce(func.sum(ImCharge.rate), 0).label("rev"),
-                   func.coalesce(func.sum(ImCharge.payout_amount), 0).label("vol"))
+                   func.coalesce(func.sum(ImCharge.payout_amount), 0).label("vol"),
+                   # Weekly-plan payouts are billed at rate 0 (covered by the flat
+                   # weekly fee), so they add nothing to 'rev'. Count them so we can
+                   # still show the credit VALUE the merchant consumed on the plan.
+                   func.count(ImCharge.id).filter(ImCharge.rate == 0).label("wk"))
             .where(*_cw).group_by(ImCharge.trader_id)
         )).all()
     }
@@ -3367,8 +3371,14 @@ async def im_configured_traders(
         # Rate from their real plan (5/7/8/9, or the 10→12 intro allowance).
         # Kept per-trader — it resolves live subscription state.
         info = await pricing.rate_for_trader(db, tid)
-        _n, _rev, _vol = charge_by_id.get(tid, (0, 0, 0))
+        _n, _rev, _vol, _wk = charge_by_id.get(tid, (0, 0, 0, 0))
         stats = (_n, _rev, _vol)
+        # Credit VALUE consumed = real per-payout charges (rev) PLUS the notional
+        # value of weekly-plan payouts (billed at 0, but each one is worth the
+        # merchant's per-credit rate: Gold 7 / Silver 5 / Bronze 4). So a Silver
+        # merchant who did 5 unlimited payouts reads KES 25 of value used, even
+        # though the platform charged them 0 per payout (they paid the weekly fee).
+        _credit_value = int(_rev) + int(_wk) * int(info.get("rate") or 0)
         deposited = dep_by_id.get(tid, 0)
         last_seen = seen_by_id.get(tid)
         # Online = the bot polled within the last 3 minutes (its heartbeat).
@@ -3394,6 +3404,11 @@ async def im_configured_traders(
             "deposited": deposited,
             "payouts": int(stats[0] or 0),
             "revenue": int(stats[1] or 0),
+            # Notional credit value used (== revenue for on-demand traders, since
+            # they have no rate-0 rows). The USED column shows this so weekly-plan
+            # merchants still show what their payouts were worth.
+            "credit_value": _credit_value,
+            "weekly_payouts": int(_wk or 0),
             "volume": int(stats[2] or 0),
         })
 
