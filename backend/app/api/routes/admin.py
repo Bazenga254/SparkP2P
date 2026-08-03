@@ -1084,9 +1084,8 @@ async def update_trader_im_billing_mode(
     trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
     if not trader:
         raise HTTPException(status_code=404, detail="Trader not found")
-    if mode == "weekly" and not weekly.weekly_price(trader):
-        raise HTTPException(status_code=400,
-                            detail="This merchant has no detected Binance tier — set their tier before the weekly plan.")
+    # Every merchant has a weekly price now — tiered, or the KES 8000 default for
+    # an unranked/untiered account. No tier is required to go on the weekly plan.
     trader.im_billing_mode = mode
     await db.commit()
     await write_audit_log(db, admin, "change_im_billing_mode", target_trader_id=trader_id,

@@ -2731,7 +2731,7 @@ export default function Admin() {
                         {/* I&M billing: on-demand credits vs the weekly unlimited package (tier-priced). */}
                         {(t.payout_rail === 'im_bot' || t.buy_payout_via_im) && (
                           <div className="field">
-                            <label title="On-demand: pay per payout from credits (today's behaviour). Weekly: a flat tier fee for UNLIMITED payouts for 7 days — Block 5000 / Gold 4500 / Silver 3000 / Bronze 2000. The merchant pays the fee to start a week; on-demand buying is disabled while on weekly.">I&amp;M Plan</label>
+                            <label title="On-demand: pay per payout from credits (today's behaviour). Weekly: a flat fee for UNLIMITED payouts for 7 days — Block 5000 / Gold 4500 / Silver 3000 / Bronze 2000 / no tier 8000. The merchant pays the fee to start a week; on-demand buying is disabled while on weekly.">I&amp;M Plan</label>
                             <select
                               value={t.im_billing_mode || 'on_demand'}
                               onChange={async (e) => {

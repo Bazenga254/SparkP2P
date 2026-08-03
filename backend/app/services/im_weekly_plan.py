@@ -25,6 +25,8 @@ WEEKLY_PLAN_PRICE = {
     "silver": 3000,
     "bronze": 2000,
 }
+# Merchants with NO detected Binance tier (unranked / normal) still get a plan.
+DEFAULT_WEEKLY_PRICE = 8000
 
 WEEK = timedelta(days=7)
 SAVING_NOTE = "You are saving 15% credit costs on this plan"
@@ -35,9 +37,9 @@ def _now():
 
 
 def weekly_price(trader):
-    """The weekly price for this trader's tier, or None if their tier has no plan
-    (e.g. an unranked/standard account — set a tier before putting them on weekly)."""
-    return WEEKLY_PLAN_PRICE.get(display_tier(trader))
+    """The weekly price for this trader — their tier price, or KES 8000 for an
+    unranked/untiered (normal) merchant. Always returns a usable price."""
+    return WEEKLY_PLAN_PRICE.get(display_tier(trader), DEFAULT_WEEKLY_PRICE)
 
 
 def on_weekly_mode(trader) -> bool:
