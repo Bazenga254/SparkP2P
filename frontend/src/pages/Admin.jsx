@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
 import api from '../services/api';
-import { TIER_COLOR, tierColor, tierLabel, merchantDisplayTier } from '../config/tiers';
+import { TIER_COLOR, merchantDisplayTier } from '../config/tiers';
 import { usePlans } from '../services/plans';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getImRevenue, getImBotAccounts, getImTraders, getImCharges, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
@@ -2596,7 +2596,7 @@ export default function Admin() {
             const tierLabel = planLabel(t.tier);
             const _mt = merchantDisplayTier(t);
             const merchant = (t.binance_api_key_saved && !t.binance_api_key_invalid && _mt && _mt !== 'normal')
-              ? { l: (_mt === 'block' ? '◆ ' : '') + tierLabel(_mt) + ' Merchant', c: tierColor(_mt) } : null;
+              ? { l: (_mt === 'block' ? '◆ ' : '') + _mt.charAt(0).toUpperCase() + _mt.slice(1) + ' Merchant', c: TIER_COLOR[_mt] } : null;
             const seen = fmtLastSeen(t.last_seen_at, t.last_web_active || t.last_login);
 
             return (
