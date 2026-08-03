@@ -1250,6 +1250,78 @@ async def send_money_quote(
     }
 
 
+class ReverseTxRequest(BaseModel):
+    transaction_id: str
+    reason: str = None
+
+
+@router.post("/choice/reverse")
+async def choice_reverse_transaction(
+    body: ReverseTxRequest,
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reverse a Choice Bank transaction the merchant sent by mistake.
+
+    Guardrails: the transaction must (1) belong to THIS merchant, (2) be an
+    OUTBOUND movement (you can only pull back money you SENT), (3) be completed,
+    and (4) have happened within the last 30 days (Choice's own rule). Internal
+    transfers are not reversible — Choice rejects those itself."""
+    from app.services.choice_bank import client as choice
+    from datetime import datetime, timezone, timedelta
+
+    tx_id = (body.transaction_id or "").strip()
+    if not tx_id:
+        raise HTTPException(status_code=400, detail="No transaction id.")
+
+    CHOICE_TYPES = ["CHOICE_DEPOSIT", "CHOICE_INBOUND", "CHOICE_OUTBOUND"]
+    pmt = (await db.execute(
+        select(Payment).where(
+            Payment.trader_id == trader.id,
+            Payment.transaction_type.in_(CHOICE_TYPES),
+            (Payment.mpesa_transaction_id == tx_id) | (Payment.mpesa_receipt_number == tx_id),
+        ).order_by(Payment.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if not pmt:
+        raise HTTPException(status_code=404, detail="That transaction isn't one of your Choice Bank transactions.")
+    if pmt.direction != PaymentDirection.OUTBOUND:
+        raise HTTPException(status_code=400, detail="Only money you SENT can be reversed, not money you received.")
+    if pmt.status != PaymentStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Only a completed transaction can be reversed.")
+
+    now = datetime.now(timezone.utc)
+    created = pmt.created_at
+    if created and created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    if created and (now - created) > timedelta(days=30):
+        raise HTTPException(status_code=400, detail="Transactions older than 1 month can't be reversed.")
+
+    try:
+        r = await choice.reverse_transaction(tx_id, reversal_reason=(body.reason or "Sent by mistake"))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Reversal request failed: {e}")
+    if (r or {}).get("code") != "00000":
+        raise HTTPException(status_code=400, detail=(r or {}).get("msg", "Choice rejected the reversal request."))
+
+    app_id = ((r.get("data") or {}) or {}).get("applicationId") or r.get("applicationId")
+    logger.info("[ChoiceBank] reversal requested by trader %s for tx %s -> applicationId=%s", trader.id, tx_id, app_id)
+    return {"ok": True, "application_id": app_id,
+            "message": "Reversal requested. Choice Bank will process it — watch your statement for the outcome."}
+
+
+@router.post("/choice/reverse/status")
+async def choice_reverse_status(body: dict, trader: Trader = Depends(get_current_trader)):
+    """Poll a reversal request by its applicationId."""
+    from app.services.choice_bank import client as choice
+    app_id = (body or {}).get("application_id") or (body or {}).get("applicationId")
+    if not app_id:
+        raise HTTPException(status_code=400, detail="No application id.")
+    r = await choice.query_tx_reversal(str(app_id))
+    if (r or {}).get("code") != "00000":
+        raise HTTPException(status_code=400, detail=(r or {}).get("msg", "Could not fetch reversal status."))
+    return r.get("data") or r
+
+
 @router.post("/choice/pay/send-money/initiate")
 async def send_money_initiate(body: SendMoneyInitiate, trader: Trader = Depends(get_current_trader)):
     """Step 1: start a Choice Bank → M-Pesa transfer to an arbitrary number; OTP is sent to the

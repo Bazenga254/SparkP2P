@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, reverseChoiceTransaction, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
@@ -912,6 +912,9 @@ export default function Dashboard() {
   const [cbWithdrawBank, setCbWithdrawBank] = useState(null);
   const [allTxns, setAllTxns] = useState([]);
   const [allTxnsLoading, setAllTxnsLoading] = useState(false);
+  const [reverseTarget, setReverseTarget] = useState(null);   // the txn being reversed
+  const [reverseBusy, setReverseBusy] = useState(false);
+  const [reverseMsg, setReverseMsg] = useState(null);         // { ok, text }
   // Choice Bank statement generation
   const [showStmtModal, setShowStmtModal] = useState(false);
   const stmtToday = new Date().toISOString().slice(0, 10);
@@ -2954,10 +2957,71 @@ export default function Dashboard() {
                         {t.status && t.status !== 'completed' && (
                           <div style={{ fontSize: 10, color: t.status === 'failed' ? '#ef4444' : '#f59e0b', marginTop: 1 }}>{t.status}</div>
                         )}
+                        {/* Reverse — only a completed outbound Choice Bank txn (UTRANS ref) within 30 days */}
+                        {(() => {
+                          const eligible = !isIn && t.status === 'completed'
+                            && t.reference && String(t.reference).startsWith('UTRANS')
+                            && (Date.now() - new Date(t.created_at).getTime()) < 30 * 24 * 3600 * 1000;
+                          if (!eligible) return null;
+                          return (
+                            <button onClick={() => { setReverseMsg(null); setReverseTarget(t); }}
+                              style={{ marginTop: 5, padding: '3px 10px', borderRadius: 6, border: '1px solid #7f1d1d', background: 'rgba(239,68,68,0.10)', color: '#f87171', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                              ↩ Reverse
+                            </button>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
                 })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Reverse-transaction confirmation ── */}
+        {reverseTarget && (
+          <div onClick={() => !reverseBusy && setReverseTarget(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+            <div onClick={e => e.stopPropagation()} className="card"
+              style={{ maxWidth: 420, width: '100%', padding: 22 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff', marginBottom: 10 }}>Reverse this transaction?</div>
+              {reverseMsg ? (
+                <>
+                  <div style={{ fontSize: 13, color: reverseMsg.ok ? '#6ee7b7' : '#fca5a5', lineHeight: 1.5, marginBottom: 16 }}>{reverseMsg.text}</div>
+                  <button onClick={() => { setReverseTarget(null); setReverseMsg(null); }}
+                    style={{ width: '100%', padding: '10px', borderRadius: 8, border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Done</button>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, color: '#9aa4b2', lineHeight: 1.55, marginBottom: 8 }}>
+                    You're asking Choice Bank to pull back <strong style={{ color: '#fff' }}>KES {(reverseTarget.amount || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</strong>
+                    {reverseTarget.counterparty_name ? <> sent to <strong style={{ color: '#fff' }}>{reverseTarget.counterparty_name}</strong></> : ''}
+                    {reverseTarget.description ? <> ({reverseTarget.description})</> : ''}.
+                  </div>
+                  <div style={{ fontSize: 11.5, color: '#6b7280', marginBottom: 16 }}>
+                    Ref: {reverseTarget.reference}. Only use this if the payment was sent by mistake — Choice Bank processes the reversal and the outcome shows on your statement. It can't be undone once requested.
+                  </div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button onClick={() => !reverseBusy && setReverseTarget(null)} disabled={reverseBusy}
+                      style={{ flex: 1, padding: '10px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, cursor: reverseBusy ? 'default' : 'pointer' }}>Cancel</button>
+                    <button disabled={reverseBusy}
+                      onClick={async () => {
+                        setReverseBusy(true);
+                        try {
+                          const r = await reverseChoiceTransaction(reverseTarget.reference, 'Sent by mistake');
+                          setReverseMsg({ ok: true, text: r.data?.message || 'Reversal requested. Watch your statement for the outcome.' });
+                          getMyTransactions(100).then(res => { if (res.data) setAllTxns(res.data); }).catch(() => {});
+                        } catch (e) {
+                          setReverseMsg({ ok: false, text: e.response?.data?.detail || 'Reversal failed. Please try again.' });
+                        }
+                        setReverseBusy(false);
+                      }}
+                      style={{ flex: 1, padding: '10px', borderRadius: 8, border: 'none', background: reverseBusy ? '#7f1d1d' : '#ef4444', color: '#fff', fontWeight: 700, cursor: reverseBusy ? 'default' : 'pointer' }}>
+                      {reverseBusy ? 'Requesting…' : 'Reverse money'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

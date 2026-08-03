@@ -313,6 +313,33 @@ async def get_transaction_result(tx_id: str) -> dict:
     return await _post("/query/getTransResult", {"txId": tx_id})
 
 
+# ── Transaction Reversal ──────────────────────────────────────────────────────
+
+async def reverse_transaction(
+    transaction_id: str,
+    reversal_reason: str = None,
+    reversal_receipt_no: str = None,
+    reversed_time: str = None,
+) -> dict:
+    """/trans/txReversal — request a reversal of a transaction sent by mistake.
+    ELIGIBILITY (Choice's rules): the transaction must have occurred within the
+    last month, and internal transfers are NOT reversible via this API.
+    Returns { applicationId } — poll with query_tx_reversal()."""
+    params = {"transactionId": transaction_id}
+    if reversal_reason:
+        params["reversalReason"] = reversal_reason
+    if reversal_receipt_no:
+        params["reversalReceiptNo"] = reversal_receipt_no
+    if reversed_time:
+        params["reversedTime"] = reversed_time
+    return await _post("/trans/txReversal", params)
+
+
+async def query_tx_reversal(application_id: str) -> dict:
+    """/trans/queryTxReversal — fetch a reversal request's status/details by applicationId."""
+    return await _post("/trans/queryTxReversal", {"applicationId": application_id})
+
+
 # ── Account Statements ────────────────────────────────────────────────────────
 
 async def apply_account_statement(account_id: str, start_ms: int, end_ms: int, file_type: str = "pdf") -> dict:
