@@ -2746,11 +2746,29 @@ export default function Admin() {
                               <option value="weekly">Weekly unlimited</option>
                             </select>
                             {t.im_billing_mode === 'weekly' && (
-                              <div style={{ fontSize: 10.5, marginTop: 3, color: t.im_weekly?.active ? '#34d399' : '#f59e0b' }}>
-                                {t.im_weekly?.active
-                                  ? `Active · KES ${t.im_weekly.weekly_price}/wk · until ${new Date(t.im_weekly.active_until).toLocaleString('en-KE')}`
-                                  : `KES ${t.im_weekly?.weekly_price || '—'}/wk · not active${t.im_weekly?.plan_balance ? ` · KES ${t.im_weekly.plan_balance} held` : ''}`}
-                              </div>
+                              <>
+                                <div style={{ fontSize: 10.5, marginTop: 3, color: t.im_weekly?.active ? '#34d399' : '#f59e0b' }}>
+                                  {t.im_weekly?.active
+                                    ? `Active · KES ${t.im_weekly.weekly_price}/wk · until ${new Date(t.im_weekly.active_until).toLocaleString('en-KE')}`
+                                    : `KES ${t.im_weekly?.weekly_price || '—'}/wk · not active${t.im_weekly?.plan_balance ? ` · KES ${t.im_weekly.plan_balance} held` : ''}`}
+                                </div>
+                                {/* Grant a week for a merchant who already paid the fee (e.g. it became
+                                    on-demand credits). Two-click confirm — desktop app blocks confirm(). */}
+                                <button
+                                  onClick={async (e) => {
+                                    if (e.currentTarget.dataset.armed !== '1') {
+                                      e.currentTarget.dataset.armed = '1';
+                                      e.currentTarget.textContent = 'Confirm — clears credits';
+                                      return;
+                                    }
+                                    try { await api.post(`/admin/traders/${t.id}/im-weekly/grant?weeks=1`); }
+                                    catch (err) { alert(err.response?.data?.detail || 'Could not grant week'); }
+                                    await refreshTraderDetail(t.id);
+                                  }}
+                                  style={{ marginTop: 5, padding: '3px 9px', borderRadius: 6, border: '1px solid #7c3aed', background: 'rgba(124,58,237,0.12)', color: '#c4b5fd', fontSize: 10.5, fontWeight: 700, cursor: 'pointer' }}>
+                                  + Grant 1 week (already paid)
+                                </button>
+                              </>
                             )}
                           </div>
                         )}

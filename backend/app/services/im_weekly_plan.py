@@ -97,6 +97,21 @@ def apply_payment(trader, amount_kes: float) -> dict:
     }
 
 
+def grant_week(trader, weeks: int = 1):
+    """Admin override: put the merchant on the weekly package and grant `weeks`
+    full week(s) starting now (stacking onto any remaining time). For a merchant
+    who ALREADY PAID outside the normal flow — e.g. they deposited the weekly fee
+    and it became on-demand credits. Zeroes those on-demand credits, since that
+    deposit IS the weekly fee now and credits are moot on the weekly plan."""
+    weeks = max(1, int(weeks or 1))
+    trader.im_billing_mode = "weekly"
+    base = _active_until(trader)
+    start = base if (base and base > _now()) else _now()
+    trader.im_weekly_active_until = start + (WEEK * weeks)
+    trader.b2c_credits = 0
+    return status(trader)
+
+
 def renew_if_due(trader) -> bool:
     """Called by the expiry poller. If the week has lapsed, try to auto-renew from
     the rolled-over balance. Returns True if a renewal happened. If it can't renew

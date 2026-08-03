@@ -1094,6 +1094,29 @@ async def update_trader_im_billing_mode(
             "weekly": weekly.status(trader)}
 
 
+@router.post("/traders/{trader_id}/im-weekly/grant")
+async def admin_grant_weekly_week(
+    trader_id: int,
+    weeks: int = 1,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Grant a merchant `weeks` full week(s) of the I&M weekly plan RIGHT NOW —
+    for someone who already paid the fee outside the normal flow (e.g. they
+    deposited it and it became on-demand credits). Switches them to weekly, stacks
+    the time onto any remaining week, and clears their on-demand credits (that
+    deposit is now the weekly fee)."""
+    from app.services import im_weekly_plan as weekly
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    st = weekly.grant_week(trader, weeks)
+    await db.commit()
+    await write_audit_log(db, admin, "grant_im_weekly", target_trader_id=trader_id,
+                          detail=f"{trader.full_name}: granted {max(1, int(weeks))} I&M week(s), until {st['active_until']}")
+    return {"status": "granted", "trader_id": trader_id, "weekly": st}
+
+
 @router.put("/traders/{trader_id}/b2c-paybill")
 async def update_trader_b2c_paybill(
     trader_id: int,
