@@ -27,3 +27,14 @@ def merchant_tier_for(p2p_tier):
     if p2p_tier in ("gold", "silver", "bronze"):
         return p2p_tier
     return None
+
+
+def display_tier(trader):
+    """A trader's DISPLAY tier (block/gold/silver/bronze/None) — 'block' from the
+    real P2P medal, else the capability tier. This is what prices the weekly plan
+    and drives the badge. Mirrors frontend merchantDisplayTier()."""
+    p2p = (getattr(trader, "binance_p2p_tier", None) or "").lower()
+    if p2p == "block":
+        return "block"
+    mt = (getattr(trader, "binance_merchant_tier", None) or getattr(trader, "binance_p2p_tier", None) or "").lower()
+    return mt or None

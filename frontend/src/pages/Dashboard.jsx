@@ -2334,11 +2334,17 @@ export default function Dashboard() {
             {credits?.credits_enabled && (() => {
               const bal = credits.credits ?? 0;
               const rate = credits.credit_rate || 0;
-              const paused = credits.paused_no_credits;
-              const low = !paused && bal > 0 && bal <= 20;
-              const accent = paused ? '#ef4444' : low ? '#f59e0b' : '#8b5cf6';
+              // Weekly package (present only when the admin put them on it).
+              const wk = credits.weekly;
+              const onWeekly = !!wk;
+              const wkActive = !!(wk && wk.active);
+              const wkExpiry = wk?.active_until ? new Date(wk.active_until) : null;
+              const paused = onWeekly ? !wkActive : credits.paused_no_credits;
+              const low = !onWeekly && !paused && bal > 0 && bal <= 20;
+              const accent = onWeekly ? (wkActive ? '#10b981' : '#f59e0b') : (paused ? '#ef4444' : low ? '#f59e0b' : '#8b5cf6');
               const peak = Math.max(creditsPeak, bal, 1);
-              const pct = barReady ? Math.min(100, Math.round((bal / peak) * 100)) : 0;
+              // Weekly-active bar is ALWAYS full and green.
+              const pct = onWeekly ? (wkActive ? 100 : 0) : (barReady ? Math.min(100, Math.round((bal / peak) * 100)) : 0);
               return (
                 <div className="card" style={{ marginBottom: 16, border: `1px solid ${accent}44`, background: paused ? 'rgba(239,68,68,0.06)' : '#0f0f16' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
@@ -2347,30 +2353,38 @@ export default function Dashboard() {
                       <div>
                         <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: 600 }}>I&amp;M Automation credits</div>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 2 }}>
-                          <span style={{ fontSize: 30, fontWeight: 800, color: accent }}>{bal.toLocaleString()}</span>
-                          <span style={{ fontSize: 13, color: '#9ca3af' }}>credits · {bal.toLocaleString()} payout{bal === 1 ? '' : 's'} left</span>
+                          <span style={{ fontSize: 30, fontWeight: 800, color: accent }}>{onWeekly ? (wkActive ? 'Unlimited' : 'Expired') : bal.toLocaleString()}</span>
+                          <span style={{ fontSize: 13, color: '#9ca3af' }}>
+                            {onWeekly
+                              ? (wkActive ? `payouts · expires ${wkExpiry?.toLocaleString('en-KE', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'weekly plan · renew to continue')
+                              : `credits · ${bal.toLocaleString()} payout${bal === 1 ? '' : 's'} left`}
+                          </span>
                         </div>
-                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                          1 credit = 1 payout · KES {rate} each · pay to Paybill {credits.paybill}
+                        <div style={{ fontSize: 12, color: onWeekly && wkActive ? '#34d399' : '#6b7280', marginTop: 2, fontWeight: onWeekly && wkActive ? 600 : 400 }}>
+                          {onWeekly
+                            ? (wkActive ? wk.saving_note : `KES ${wk.weekly_price}/week · unlimited I&M payouts${wk.plan_balance ? ` · KES ${wk.plan_balance} balance` : ''}`)
+                            : `1 credit = 1 payout · KES ${rate} each · pay to Paybill ${credits.paybill}`}
                         </div>
                       </div>
                     </div>
-                    <button onClick={() => { setBuyCreditsMsg(''); setBuyCreditsPhone(profile?.phone || ''); setShowBuyCredits(true); }}
+                    <button onClick={() => { setBuyCreditsMsg(''); setBuyCreditsPhone(profile?.phone || ''); if (onWeekly && wk?.weekly_price) setBuyCreditsAmount(String(Math.max(1, wk.weekly_price - (wk.plan_balance || 0)))); setShowBuyCredits(true); }}
                       style={{ padding: '11px 22px', borderRadius: 10, border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 700, background: accent, color: '#fff', flexShrink: 0 }}>
-                      + Buy credits
+                      {onWeekly ? (wkActive ? 'Extend plan' : 'Activate plan') : '+ Buy credits'}
                     </button>
                   </div>
                   {/* Animated usage bar: fills on load, drains as payouts consume credits. */}
                   <div style={{ marginTop: 16, height: 9, borderRadius: 6, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
                     <div style={{
                       height: '100%', width: pct + '%', borderRadius: 6,
-                      background: paused ? '#ef4444' : low ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg,#8b5cf6,#a78bfa)',
+                      background: onWeekly && wkActive ? 'linear-gradient(90deg,#10b981,#34d399)' : paused ? '#ef4444' : low ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' : 'linear-gradient(90deg,#8b5cf6,#a78bfa)',
                       transition: 'width 0.9s cubic-bezier(.34,.1,.2,1)',
                     }} />
                   </div>
                   {paused && (
                     <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 10, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: 13, fontWeight: 600 }}>
-                      ⏸ Automation paused — you're out of credits. New Binance orders are ignored until you top up.
+                      {onWeekly
+                        ? `⏸ Weekly plan expired — pay KES ${wk.weekly_price} to renew. New Binance orders are ignored until you renew.`
+                        : "⏸ Automation paused — you're out of credits. New Binance orders are ignored until you top up."}
                     </div>
                   )}
                   {low && (
@@ -4234,22 +4248,32 @@ export default function Dashboard() {
         const amt = Math.max(0, parseInt(buyCreditsAmount, 10) || 0);
         const est = rate > 0 ? Math.round(amt / rate) : 0;
         const min = credits?.min_deposit || 1000;
+        const wk = credits?.weekly; const onWeekly = !!wk; const planPrice = wk?.weekly_price || 0;
+        const held = wk?.plan_balance || 0;
+        const willActivate = onWeekly && (held + amt) >= planPrice;
         return (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}
             onClick={() => !buyCreditsBusy && setShowBuyCredits(false)}>
             <div style={{ background: 'var(--card-bg, #1a1d27)', borderRadius: 16, padding: 28, width: '100%', maxWidth: 420, border: '1px solid var(--border, #2a2d3a)' }}
               onClick={e => e.stopPropagation()}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 4 }}>Buy I&amp;M credits</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 4 }}>{onWeekly ? 'Weekly unlimited plan' : 'Buy I&​M credits'}</div>
               <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 20 }}>
-                1 credit = 1 payout · KES {rate} each. Paid to Paybill <b style={{ color: '#e5e7eb' }}>{credits?.paybill}</b> via STK.
+                {onWeekly
+                  ? <>KES {planPrice.toLocaleString()}/week for <b style={{ color: '#e5e7eb' }}>unlimited</b> I&amp;M payouts. Pay the full amount to activate a week; any extra rolls over. Paid to Paybill <b style={{ color: '#e5e7eb' }}>{credits?.paybill}</b> via STK.</>
+                  : <>1 credit = 1 payout · KES {rate} each. Paid to Paybill <b style={{ color: '#e5e7eb' }}>{credits?.paybill}</b> via STK.</>}
               </div>
 
               <label style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>Amount (KES)</label>
               <input type="number" min={min} step={100} value={buyCreditsAmount}
                 onChange={e => setBuyCreditsAmount(e.target.value)}
                 style={{ width: '100%', padding: '11px 12px', marginTop: 6, marginBottom: 6, borderRadius: 10, border: '1px solid #2a2d3a', background: '#0f0f16', color: '#fff', fontSize: 15 }} />
-              <div style={{ fontSize: 12, color: est > 0 ? '#8b5cf6' : '#6b7280', marginBottom: 16, fontWeight: 600 }}>
-                {amt < min ? `Minimum is KES ${min.toLocaleString()}` : `≈ ${est.toLocaleString()} credits (${est.toLocaleString()} payouts)`}
+              <div style={{ fontSize: 12, color: (onWeekly ? willActivate : est > 0) ? '#8b5cf6' : '#6b7280', marginBottom: 16, fontWeight: 600 }}>
+                {amt < min ? `Minimum is KES ${min.toLocaleString()}`
+                  : onWeekly
+                    ? (willActivate
+                        ? `✓ Activates a week of unlimited payouts${(held + amt) > planPrice ? ` · KES ${(held + amt - planPrice).toLocaleString()} rolls over` : ''}`
+                        : `Held toward the plan (need KES ${(planPrice - held - amt).toLocaleString()} more to activate)`)
+                    : `≈ ${est.toLocaleString()} credits (${est.toLocaleString()} payouts)`}
               </div>
 
               <label style={{ fontSize: 12, color: '#9ca3af', fontWeight: 600 }}>M-Pesa phone</label>

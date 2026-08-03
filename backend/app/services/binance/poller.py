@@ -60,8 +60,30 @@ class BinanceOrderPoller:
             await self._check_settlement_thresholds(db)
             await self._reconcile_stale_buy_orders(db)
             await self._run_affiliate_monthly_payouts(db)
+            await self._run_weekly_plan_renewals(db)
             # Volume fee removed — revenue from subscriptions + settlement fees only
             # await self._run_daily_volume_fee(db)
+
+    async def _run_weekly_plan_renewals(self, db):
+        """When a merchant's I&M weekly plan lapses, auto-renew it from any
+        rolled-over balance that covers a full week; otherwise it stays expired
+        and the bot pauses until they top up. Cheap datetime check per weekly merchant."""
+        try:
+            from sqlalchemy import select as _select
+            from app.models.trader import Trader as _Trader
+            from app.services import im_weekly_plan as _weekly
+            rows = (await db.execute(
+                _select(_Trader).where(_Trader.im_billing_mode == "weekly")
+            )).scalars().all()
+            renewed = 0
+            for t in rows:
+                if _weekly.renew_if_due(t):
+                    renewed += 1
+            if renewed:
+                await db.commit()
+                logger.info("[WeeklyPlan] auto-renewed %d merchant(s) from rolled-over balance", renewed)
+        except Exception as e:
+            logger.warning("[WeeklyPlan] renewal cycle failed: %s", e)
 
     async def _run_affiliate_monthly_payouts(self, db: AsyncSession):
         """Settle affiliate commissions on the 2nd of every month (previous month)."""

@@ -2728,6 +2728,32 @@ export default function Admin() {
                             <option value="own_paybill">Own Paybill / B2C</option>
                           </select>
                         </div>
+                        {/* I&M billing: on-demand credits vs the weekly unlimited package (tier-priced). */}
+                        {(t.payout_rail === 'im_bot' || t.buy_payout_via_im) && (
+                          <div className="field">
+                            <label title="On-demand: pay per payout from credits (today's behaviour). Weekly: a flat tier fee for UNLIMITED payouts for 7 days — Block 5000 / Gold 4500 / Silver 3000 / Bronze 2000. The merchant pays the fee to start a week; on-demand buying is disabled while on weekly.">I&amp;M Plan</label>
+                            <select
+                              value={t.im_billing_mode || 'on_demand'}
+                              onChange={async (e) => {
+                                const mode = e.target.value;
+                                if (mode === (t.im_billing_mode || 'on_demand')) return;
+                                setViewingTrader(prev => ({ ...prev, im_billing_mode: mode }));
+                                try { await api.put(`/admin/traders/${t.id}/im-billing-mode?mode=${mode}`); }
+                                catch (err) { alert(err.response?.data?.detail || 'Could not change plan'); }
+                                await refreshTraderDetail(t.id);
+                              }}>
+                              <option value="on_demand">On-demand credits</option>
+                              <option value="weekly">Weekly unlimited</option>
+                            </select>
+                            {t.im_billing_mode === 'weekly' && (
+                              <div style={{ fontSize: 10.5, marginTop: 3, color: t.im_weekly?.active ? '#34d399' : '#f59e0b' }}>
+                                {t.im_weekly?.active
+                                  ? `Active · KES ${t.im_weekly.weekly_price}/wk · until ${new Date(t.im_weekly.active_until).toLocaleString('en-KE')}`
+                                  : `KES ${t.im_weekly?.weekly_price || '—'}/wk · not active${t.im_weekly?.plan_balance ? ` · KES ${t.im_weekly.plan_balance} held` : ''}`}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 

@@ -416,7 +416,15 @@ async def poll(
     # order we can't bill. Choice Bank traders never reach here (they can't have
     # buy_payout_via_im and Choice Bank at once).
     from app.services import credits as creditsvc
-    if creditsvc.trader_credits_enabled(trader) and creditsvc.trader_balance(trader) <= 0:
+    from app.services import im_weekly_plan as weekly
+    # A merchant on an ACTIVE weekly plan has UNLIMITED payouts — never pause them.
+    # On weekly mode but expired (no rolled-over balance to renew), pause with a
+    # plan-specific reason so the UI can say "renew" rather than "buy credits".
+    if weekly.on_weekly_mode(trader):
+        if not weekly.on_active_weekly_plan(trader):
+            logger.info("im-bot poll: trader %s weekly plan expired — paused until renewed", trader_id)
+            return {"jobs": [], "enabled": True, "paused": True, "reason": "plan_expired", "credits": 0}
+    elif creditsvc.trader_credits_enabled(trader) and creditsvc.trader_balance(trader) <= 0:
         logger.info("im-bot poll: trader %s has 0 credits — paused, no jobs served", trader_id)
         return {"jobs": [], "enabled": True, "paused": True, "reason": "no_credits", "credits": 0}
 
@@ -998,8 +1006,10 @@ async def credits_status(
     top-up (min deposit, the paybill to pay)."""
     from app.core.config import settings
     from app.services import credits as creditsvc
+    from app.services import im_weekly_plan as weekly
     account_type, owner_id = owner
 
+    _weekly_status = None   # set for a trader on the weekly package
     from app.models.subscription import CreditPurchase
     from sqlalchemy import func as _func
     if account_type == pricing_ACCOUNT_BOT_ONLY():
@@ -1023,8 +1033,10 @@ async def credits_status(
             select(_func.coalesce(_func.sum(CreditPurchase.amount), 0))
             .where(CreditPurchase.trader_id == owner_id, CreditPurchase.status == "completed")
         )).scalar_one() or 0)
+        if trader and weekly.on_weekly_mode(trader):
+            _weekly_status = weekly.status(trader)
 
-    return {
+    resp = {
         "credits_enabled": enabled,
         "credits": balance,
         "credit_rate": rate,
@@ -1035,6 +1047,14 @@ async def credits_status(
         "account_type": account_type,
         "deposited": deposited,   # total KES this account has paid to buy credits
     }
+    if _weekly_status:
+        # On the weekly package: the bot + portals render UNLIMITED (green, full bar,
+        # expiry, saving note) when active, and 'renew' when expired. On-demand
+        # buying is disabled; the "buy" flow tops up the plan at weekly_price.
+        resp["weekly"] = _weekly_status
+        resp["unlimited"] = _weekly_status["active"]
+        resp["paused_no_credits"] = not _weekly_status["active"]  # paused = plan expired
+    return resp
 
 
 def pricing_ACCOUNT_BOT_ONLY():

@@ -560,6 +560,9 @@ async def get_trader_detail(
         "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
         "b2c_own_paybill_enabled": bool(getattr(trader, "b2c_own_paybill_enabled", False)),
         "buy_payout_via_im": bool(getattr(trader, "buy_payout_via_im", False)),
+        # I&M billing: on_demand credits vs the weekly unlimited package (+ live status).
+        "im_billing_mode": getattr(trader, "im_billing_mode", "on_demand"),
+        "im_weekly": __import__("app.services.im_weekly_plan", fromlist=["status"]).status(trader),
         # The ONE buy-order payout rail (choice_bank | im_bot | own_paybill),
         # derived from the two flags above so the admin has a single control.
         "payout_rail": payout_rail_of(trader),
@@ -1061,6 +1064,35 @@ async def update_trader_price_tracker(
     await db.commit()
     await write_audit_log(db, admin, "toggle_price_tracker", target_trader_id=trader_id, detail=f"{trader.full_name}: price tracker {'enabled' if enabled else 'disabled'}")
     return {"status": "updated", "trader_id": trader_id, "price_tracker_enabled": bool(enabled)}
+
+
+@router.put("/traders/{trader_id}/im-billing-mode")
+async def update_trader_im_billing_mode(
+    trader_id: int,
+    mode: str,   # 'on_demand' | 'weekly'
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Put a merchant on the I&M WEEKLY package (flat tier fee, unlimited payouts)
+    or back on ON-DEMAND credits. Switching to weekly does NOT activate a week —
+    the merchant pays the tier price to start one. Switching back to on-demand
+    keeps any rolled-over plan balance and their on-demand credit balance."""
+    from app.services import im_weekly_plan as weekly
+    mode = (mode or "").strip().lower()
+    if mode not in ("on_demand", "weekly"):
+        raise HTTPException(status_code=400, detail="mode must be 'on_demand' or 'weekly'")
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    if mode == "weekly" and not weekly.weekly_price(trader):
+        raise HTTPException(status_code=400,
+                            detail="This merchant has no detected Binance tier — set their tier before the weekly plan.")
+    trader.im_billing_mode = mode
+    await db.commit()
+    await write_audit_log(db, admin, "change_im_billing_mode", target_trader_id=trader_id,
+                          detail=f"{trader.full_name}: I&M billing -> {mode}")
+    return {"status": "updated", "trader_id": trader_id, "im_billing_mode": mode,
+            "weekly": weekly.status(trader)}
 
 
 @router.put("/traders/{trader_id}/b2c-paybill")

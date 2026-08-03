@@ -100,6 +100,17 @@ class Trader(Base):
     b2c_own_paybill_enabled = Column(Boolean, default=False, server_default="false")
     b2c_credits = Column(Integer, default=0, server_default="0")
 
+    # ── I&M weekly payout plan (admin-set alternative to on-demand credits) ──
+    # 'on_demand' (default): pay per payout from b2c_credits, like today.
+    # 'weekly': pay a flat weekly fee (by merchant tier) for UNLIMITED payouts for
+    #   7 days. While a week is active the bot never pauses and payouts don't
+    #   consume credits. im_plan_balance holds KES paid toward the plan (partial
+    #   payments accumulate until the full price activates a week; overpayment
+    #   rolls over toward the next week).
+    im_billing_mode = Column(String(12), default="on_demand", server_default="on_demand")
+    im_weekly_active_until = Column(DateTime(timezone=True), nullable=True)
+    im_plan_balance = Column(Float, default=0, server_default="0")
+
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)
     auto_pay_enabled = Column(Boolean, default=True)  # Buy side auto-payment

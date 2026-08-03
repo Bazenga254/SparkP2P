@@ -154,6 +154,7 @@ async def get_credits(
     meaningful on the prepaid rails (I&M Bot / Own-Paybill) — a Choice Bank trader
     gets credits_enabled=false and no card is shown."""
     from app.services.credits import trader_credits_enabled, trader_balance, credit_rate_for_trader, MIN_DEPOSIT_KES
+    from app.services import im_weekly_plan as weekly
     from app.core.config import settings
     from app.models.subscription import CreditPurchase
     enabled = trader_credits_enabled(trader)
@@ -164,7 +165,7 @@ async def get_credits(
                                      CreditPurchase.status == "completed")
         .order_by(CreditPurchase.created_at.desc()).limit(10)
     )).scalars().all()
-    return {
+    resp = {
         "credits_enabled": enabled,
         "credits": balance,
         "credit_rate": rate,
@@ -178,6 +179,14 @@ async def get_credits(
             for c in recent
         ],
     }
+    if weekly.on_weekly_mode(trader):
+        # Weekly package: UNLIMITED when active (green, full bar, expiry, saving note);
+        # 'renew' when expired. On-demand buying is disabled — the buy flow tops up
+        # the plan at weekly_price. Excess sits in plan_balance toward the next week.
+        resp["weekly"] = weekly.status(trader)
+        resp["unlimited"] = resp["weekly"]["active"]
+        resp["paused_no_credits"] = not resp["weekly"]["active"]
+    return resp
 
 
 @router.post("/buy-credits")

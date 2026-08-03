@@ -240,10 +240,19 @@ async def grant_b2c_credits(db, trader_id: int, amount: float, receipt: str = ""
     # / B2C 5 / no-sub 10 / …), round(deposit / rate). The rate is locked in here,
     # at purchase.
     from app.services.credits import credit_rate_for_trader, credits_for
+    from app.services import im_weekly_plan as _weekly
     rate = await credit_rate_for_trader(db, trader_id)
     credits = credits_for(amount, rate)
     trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
-    if trader:
+    if trader and _weekly.on_weekly_mode(trader):
+        # WEEKLY plan: the KES accumulates toward the tier price; once it covers a
+        # full week it activates 7 days of UNLIMITED payouts and any excess rolls
+        # over. No on-demand credits are granted while on the weekly package.
+        credits = 0
+        _res = _weekly.apply_payment(trader, amount)
+        logger.info("[Credits] weekly-plan payment KES %s for trader %s -> activated=%s until=%s balance=%s",
+                    amount, trader_id, _res["activated"], _res["active_until"], _res["balance"])
+    elif trader:
         trader.b2c_credits = int(trader.b2c_credits or 0) + credits
     if cp is None:
         # No prior pending purchase — e.g. the merchant paid the paybill directly

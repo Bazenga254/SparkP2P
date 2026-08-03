@@ -90,17 +90,25 @@ async def record_charge(
 
     # Resolve the rate from real state. For a bot-only account this is always 12;
     # for a trader it reads their actual active plan (or the intro allowance).
+    _weekly_unlimited = False
     if account_type == ACCOUNT_BOT_ONLY:
         info = pricing.rate_for_bot_only()
     else:
         info = await pricing.rate_for_trader(db, trader_id)
+        # On an ACTIVE weekly plan this payout is already paid for by the flat
+        # weekly fee — bill it at rate 0 and consume no credit (the revenue is the
+        # weekly fee, recorded as a plan payment, not a per-payout charge).
+        from app.models.trader import Trader as _Trader
+        from app.services import im_weekly_plan as _weekly
+        _t = await db.get(_Trader, trader_id)
+        _weekly_unlimited = bool(_t and _weekly.on_active_weekly_plan(_t))
 
     charge = ImCharge(
         trader_id=trader_id,
         bot_account_id=bot_account_id,
         account_type=account_type,
         order_id=order_id,
-        rate=info["rate"],
+        rate=0 if _weekly_unlimited else info["rate"],
         payout_amount=amount,
         plan=info.get("plan"),
         bank_ref=bank_ref,
@@ -136,7 +144,7 @@ async def record_charge(
             creditsvc.consume_bot(acct, 1)
     else:
         trader = await db.get(Trader, trader_id)
-        if trader is not None and creditsvc.trader_credits_enabled(trader):
+        if trader is not None and not _weekly_unlimited and creditsvc.trader_credits_enabled(trader):
             creditsvc.consume_trader(trader, 1)
 
     logger.info(
