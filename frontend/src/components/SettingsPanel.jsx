@@ -1299,10 +1299,13 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                   {profile?.binance_api_key_saved && (
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(16,185,129,0.15)', color: '#10b981', letterSpacing: '0.4px' }}>✓ SAVED</span>
                   )}
-                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier === 'gold' && (
+                  {profile?.binance_api_key_saved && profile?.binance_p2p_tier === 'block' && (
+                    <span title="Binance Block Merchant — top P2P tier" style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(168,85,247,0.18)', color: '#c084fc', letterSpacing: '0.4px', border: '1px solid rgba(168,85,247,0.4)' }}>◆ BLOCK MERCHANT</span>
+                  )}
+                  {profile?.binance_api_key_saved && profile?.binance_p2p_tier !== 'block' && profile?.binance_merchant_tier === 'gold' && (
                     <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(245,158,11,0.18)', color: '#f59e0b', letterSpacing: '0.4px', border: '1px solid rgba(245,158,11,0.35)' }}>⭐ GOLD MERCHANT</span>
                   )}
-                  {profile?.binance_api_key_saved && profile?.binance_merchant_tier !== 'gold' && (
+                  {profile?.binance_api_key_saved && profile?.binance_p2p_tier !== 'block' && profile?.binance_merchant_tier !== 'gold' && (
                     <span title="Counterparty filters require a Binance Gold Merchant account" style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 20, background: 'rgba(107,114,128,0.15)', color: '#9ca3af', letterSpacing: '0.4px', border: '1px solid rgba(107,114,128,0.25)', cursor: 'help' }}>STANDARD ACCOUNT</span>
                   )}
                 </div>
