@@ -682,10 +682,13 @@ async def detect_binance_name(
         raise HTTPException(status_code=404, detail="No live USDT/KES ad found to read your name from. Post an ad on Binance and try again.")
     trader.binance_nickname = nick
     if p2p_tier:
+        from app.core.tiers import merchant_tier_for
         trader.binance_p2p_tier = p2p_tier
-        # Keep the merchant badge in sync with the reliable P2P medal (see save_binance_api_key).
-        if p2p_tier in ("gold", "silver", "bronze"):
-            trader.binance_merchant_tier = p2p_tier
+        # Keep the merchant badge in sync with the reliable P2P medal. Block maps to
+        # 'gold' for capabilities; binance_p2p_tier carries the true 'block' badge.
+        _mt = merchant_tier_for(p2p_tier)
+        if _mt:
+            trader.binance_merchant_tier = _mt
     await db.commit()
     # Auto-assign the subscription plan to match the detected Binance tier (from next renewal).
     try:
@@ -1834,12 +1837,15 @@ async def save_binance_api_key(
         if nick:
             trader.binance_nickname = nick
         if p2p_tier:
+            from app.core.tiers import merchant_tier_for
             trader.binance_p2p_tier = p2p_tier
             # The public P2P medal (from vipLevel) is the RELIABLE Gold/Silver/Bronze signal. The
             # EP-7 probe above is fragile — it can fail with 187049 on a valid merchant's ad — so
             # trust the detected tier for the merchant badge instead of relying only on EP-7.
-            if p2p_tier in ("gold", "silver", "bronze"):
-                trader.binance_merchant_tier = p2p_tier
+            # Block maps to 'gold' for capabilities (see app.core.tiers).
+            _mt = merchant_tier_for(p2p_tier)
+            if _mt:
+                trader.binance_merchant_tier = _mt
     except Exception:
         pass
 

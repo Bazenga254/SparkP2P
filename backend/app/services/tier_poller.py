@@ -49,7 +49,8 @@ async def _check_one(trader_id: int):
         nick, p2p_tier = await detect_nickname_from_ads(ads)
     except Exception:
         return   # relay offline / API error — SKIP (never change on a failed read)
-    if not p2p_tier or p2p_tier not in ("gold", "silver", "bronze"):
+    from app.core.tiers import DETECTABLE_TIERS, merchant_tier_for
+    if not p2p_tier or p2p_tier not in DETECTABLE_TIERS:
         return   # couldn't read a clear tier — SKIP
 
     # 3. Fresh short session: persist the tier + move the plan to match if it changed.
@@ -59,9 +60,13 @@ async def _check_one(trader_id: int):
             return
         if nick and not trader.binance_nickname:
             trader.binance_nickname = nick
-        if trader.binance_p2p_tier != p2p_tier or trader.binance_merchant_tier != p2p_tier:
+        # 'block' is the display tier (binance_p2p_tier); binance_merchant_tier maps
+        # to 'gold' so a block merchant keeps every Gold-gated capability.
+        _mt = merchant_tier_for(p2p_tier)
+        if trader.binance_p2p_tier != p2p_tier or (_mt and trader.binance_merchant_tier != _mt):
             trader.binance_p2p_tier = p2p_tier
-            trader.binance_merchant_tier = p2p_tier
+            if _mt:
+                trader.binance_merchant_tier = _mt
             await db.commit()
         changed = await apply_tier_plan(trader, db)
         if changed:

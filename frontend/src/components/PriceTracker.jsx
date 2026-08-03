@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { SPK_CSS, spark, CVAR } from './trackerTheme';
 import CostBasisCard from './CostBasisCard';
+import { TIER_COLOR } from '../config/tiers';
 
 // Live Binance P2P competitor order book (admin-gated). Redesigned cockpit UI.
-const TIER_COLOR = { block: '#A855F7', gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C', normal: '#929AA6' };
 const TIERS = [{ key: 'all', label: 'All' }, { key: 'block', label: '◆ Block' }, { key: 'gold', label: 'Gold' }, { key: 'silver', label: 'Silver' }, { key: 'bronze', label: 'Bronze' }];
 // Subscription plan → which tier tabs the user can access
 const PLAN_TIER_ACCESS = { starter: ['bronze'], pro: ['bronze', 'silver'], pro_max: ['all', 'block', 'gold', 'silver', 'bronze'] };

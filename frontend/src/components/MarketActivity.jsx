@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
 import { SPK_CSS } from './trackerTheme';
+import { TIER_COLOR } from '../config/tiers';
 
 const fmtU = n => { const v = Number(n) || 0; if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M'; if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K'; return Math.round(v).toLocaleString(); };
 
@@ -23,7 +24,6 @@ export default function MarketActivity({ enabled }) {
   const upd = new Date(updatedAt || Date.now()).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const partial = data && data.incomplete_day;
 
-  const TIER_COLOR = { block: '#A855F7', gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C' };
   const allowedTiers = (data?.allowed_tiers || ['block', 'gold', 'silver', 'bronze']).filter(t => t !== 'normal');
   const byTier = data?.by_tier || {};
   // Traded / liquidity / active-merchant cards follow the tier filter; spread cards stay market-wide.
