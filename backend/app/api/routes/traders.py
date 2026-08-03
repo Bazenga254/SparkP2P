@@ -322,11 +322,12 @@ async def verify_settlement_phone_otp(
 
 # Subscription plan -> which competitor merchant tiers the trader may see the stats for.
 # starter (Bronze) -> bronze only; pro (Silver) -> bronze+silver; pro_max (Gold) -> all.
-_PLAN_TIER_ACCESS = {"starter": ("bronze",), "pro": ("bronze", "silver"), "pro_max": ("gold", "silver", "bronze")}
+# 'block' is Binance's top tier (above gold) — bundled with the Gold plan's access.
+_PLAN_TIER_ACCESS = {"starter": ("bronze",), "pro": ("bronze", "silver"), "pro_max": ("block", "gold", "silver", "bronze")}
 
 
 def _allowed_merchant_tiers(plan) -> set:
-    return set(_PLAN_TIER_ACCESS.get(plan, ("gold", "silver", "bronze")))
+    return set(_PLAN_TIER_ACCESS.get(plan, ("block", "gold", "silver", "bronze")))
 
 
 async def _active_sub_plan(trader, db=None) -> str | None:
@@ -386,7 +387,7 @@ async def get_price_tracker(
             bd = get_tier_breakdown(_nick_tier_from_board(board))
             board["tier_stats"] = {
                 t: {"online": bd[t]["online"], "vol": bd[t]["traded"], "avail": bd[t]["avail"]}
-                for t in ("gold", "silver", "bronze") if t in allowed
+                for t in ("block", "gold", "silver", "bronze") if t in allowed
             }
             board["allowed_tiers"] = sorted(allowed)
         except Exception as _e:
@@ -478,7 +479,7 @@ async def get_market_activity(
             else:
                 m["spread"] = None
 
-        summary["by_tier"] = {t: bd[t] for t in ("gold", "silver", "bronze") if t in allowed}
+        summary["by_tier"] = {t: bd[t] for t in ("block", "gold", "silver", "bronze") if t in allowed}
         summary["allowed_tiers"] = sorted(allowed)
 
         # Restricted plans: never expose merchants/totals for tiers above the plan. Full-access

@@ -302,7 +302,7 @@ def get_tier_breakdown(nick_tier: dict) -> dict:
     currently advertising. Returns {tier: {traded, bought, sold, avail, online}}."""
     now = time.time()
     cut = _day_start(now)
-    tiers = ("gold", "silver", "bronze", "normal")
+    tiers = ("block", "gold", "silver", "bronze", "normal")
     agg = {t: {"traded": 0.0, "bought": 0.0, "sold": 0.0, "avail": 0.0, "online": 0} for t in tiers}
     # Online-now + advertised inventory, grouped by the tier on the current board.
     for nick, t in nick_tier.items():

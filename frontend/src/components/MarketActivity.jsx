@@ -23,8 +23,8 @@ export default function MarketActivity({ enabled }) {
   const upd = new Date(updatedAt || Date.now()).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const partial = data && data.incomplete_day;
 
-  const TIER_COLOR = { gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C' };
-  const allowedTiers = (data?.allowed_tiers || ['gold', 'silver', 'bronze']).filter(t => t !== 'normal');
+  const TIER_COLOR = { block: '#A855F7', gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C' };
+  const allowedTiers = (data?.allowed_tiers || ['block', 'gold', 'silver', 'bronze']).filter(t => t !== 'normal');
   const byTier = data?.by_tier || {};
   // Traded / liquidity / active-merchant cards follow the tier filter; spread cards stay market-wide.
   const bt = filter !== 'all' ? (byTier[filter] || { traded: 0, bought: 0, sold: 0, avail: 0, online: 0 }) : null;
@@ -97,7 +97,7 @@ export default function MarketActivity({ enabled }) {
                   ? <tr><td className="l" colSpan="6" style={{ textAlign: 'center', color: 'var(--text-3)' }}>No fills observed yet — give it a few minutes of tracking.</td></tr>
                   : shownMerchants.map((m, i) => (
                     <tr key={m.nick + i}>
-                      <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8 }}>{m.nick}</span>{m.tier && m.tier !== 'normal' && <span style={{ marginLeft: 8, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '2px 6px', borderRadius: 5, color: TIER_COLOR[m.tier], border: `1px solid ${TIER_COLOR[m.tier]}55`, textTransform: 'uppercase' }}>{m.tier}</span>}</td>
+                      <td className="l row-head"><span className="rank">{i + 1}</span> <span className="m-name" style={{ marginLeft: 8, color: m.tier === 'block' ? TIER_COLOR.block : undefined }}>{m.nick}</span>{m.tier && m.tier !== 'normal' && <span style={{ marginLeft: 8, fontSize: 9.5, fontWeight: 800, letterSpacing: 0.4, padding: '2px 6px', borderRadius: 5, color: TIER_COLOR[m.tier], border: `1px solid ${TIER_COLOR[m.tier]}55`, background: m.tier === 'block' ? `${TIER_COLOR.block}1e` : 'transparent', textTransform: 'uppercase' }}>{m.tier === 'block' ? '◆ block' : m.tier}</span>}</td>
                       <td data-label="Bought" className="v-bought">{m.bought ? fmtU(m.bought) : <span className="muted">—</span>}</td>
                       <td data-label="Sold" className="v-sold">{m.sold ? fmtU(m.sold) : <span className="muted">—</span>}</td>
                       <td data-label="Avail Now">{m.avail ? <span style={m.avail_stale ? { opacity: 0.45 } : undefined} title={m.avail_stale ? 'Ads currently off — last known available' : undefined}>{fmtU(m.avail)}</span> : <span className="muted">0</span>}</td>

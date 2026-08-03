@@ -4,10 +4,10 @@ import { SPK_CSS, spark, CVAR } from './trackerTheme';
 import CostBasisCard from './CostBasisCard';
 
 // Live Binance P2P competitor order book (admin-gated). Redesigned cockpit UI.
-const TIER_COLOR = { gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C', normal: '#929AA6' };
-const TIERS = [{ key: 'all', label: 'All' }, { key: 'gold', label: 'Gold' }, { key: 'silver', label: 'Silver' }, { key: 'bronze', label: 'Bronze' }];
+const TIER_COLOR = { block: '#A855F7', gold: '#FFBE52', silver: '#D6DBE2', bronze: '#F08A3C', normal: '#929AA6' };
+const TIERS = [{ key: 'all', label: 'All' }, { key: 'block', label: '◆ Block' }, { key: 'gold', label: 'Gold' }, { key: 'silver', label: 'Silver' }, { key: 'bronze', label: 'Bronze' }];
 // Subscription plan → which tier tabs the user can access
-const PLAN_TIER_ACCESS = { starter: ['bronze'], pro: ['bronze', 'silver'], pro_max: ['all', 'gold', 'silver', 'bronze'] };
+const PLAN_TIER_ACCESS = { starter: ['bronze'], pro: ['bronze', 'silver'], pro_max: ['all', 'block', 'gold', 'silver', 'bronze'] };
 
 const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const medOf = arr => { const s = [...arr].filter(x => x > 0).sort((a, b) => a - b); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
@@ -137,7 +137,7 @@ export default function PriceTracker({ enabled, binanceName, profile }) {
 
   // Subscription-gated tier access
   const subPlan = profile?.subscription_plan; // 'starter'|'pro'|'pro_max'|null
-  const allowedTierKeys = PLAN_TIER_ACCESS[subPlan] || ['all', 'gold', 'silver', 'bronze'];
+  const allowedTierKeys = PLAN_TIER_ACCESS[subPlan] || ['all', 'block', 'gold', 'silver', 'bronze'];
   const visibleTiers = TIERS.filter(t => allowedTierKeys.includes(t.key));
   // Clamp the selected tier to what the plan allows
   const effectiveTier = allowedTierKeys.includes(tier) ? tier : allowedTierKeys[0];

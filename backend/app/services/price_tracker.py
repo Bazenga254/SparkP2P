@@ -25,7 +25,13 @@ _cache: dict[str, tuple[float, dict]] = {}
 _CACHE_TTL = 20  # seconds
 
 
-def _tier(user_type: str, vip: int) -> str:
+def _tier(user_type: str, vip: int, identity: str = "") -> str:
+    # Block Merchants — Binance's top P2P tier (the PURPLE DIAMOND badge: "advanced
+    # trading experience and high trading volume"). It sits ABOVE Gold, so it wins
+    # over vipLevel. Checked first, and derived fresh every fetch — the moment a
+    # merchant is no longer BLOCK_MERCHANT they fall back to gold/silver/bronze.
+    if (identity or "").upper() == "BLOCK_MERCHANT":
+        return "block"
     # Non-merchants (regular users selling/buying crypto) -> "normal".
     # Verified merchants -> the P2P Merchant tier from vipLevel (verified against the web-UI medals):
     # 3 -> Gold, 2 -> Silver, 1/0 -> Bronze. (This is the P2P Merchant VIP Program, NOT the spot VIP.)
@@ -52,7 +58,7 @@ def _parse(items: list, start: int = 0) -> list[dict]:
             "userNo": a.get("userNo"),
             "identity": a.get("userIdentity"),         # MASS_MERCHANT / BLOCK_MERCHANT / '' (user)
             "vip": vip,
-            "tier": _tier(a.get("userType"), vip),
+            "tier": _tier(a.get("userType"), vip, a.get("userIdentity")),
             "orders30d": int(a.get("monthOrderCount") or 0),
             "finishRate": round((a.get("monthFinishRate") or 0) * 100, 1),
             "available": float(adv.get("tradableQuantity") or adv.get("surplusAmount") or 0),
