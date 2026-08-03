@@ -69,9 +69,11 @@ class ImCharge(Base):
             "(trader_id IS NULL AND bot_account_id IS NOT NULL)",
             name="ck_im_charges_one_owner",
         ),
-        # A charge with no rate, or a rate we do not offer, is a bug that must
-        # not reach the ledger. 5/7/8/9/10/12 are the only legal rates.
-        CheckConstraint("rate IN (5, 7, 8, 9, 10, 12)", name="ck_im_charges_known_rate"),
+        # A charge with a rate we do not offer is a bug that must not reach the
+        # ledger. 5/7/8/9/10/12 are the per-payout rates; 0 is a payout on the
+        # weekly unlimited plan (covered by the flat weekly fee, so no per-payout
+        # charge) — it still lands on the ledger so payouts/volume keep counting.
+        CheckConstraint("rate IN (0, 5, 7, 8, 9, 10, 12)", name="ck_im_charges_known_rate"),
         CheckConstraint("payout_amount > 0", name="ck_im_charges_positive_payout"),
     )
 
