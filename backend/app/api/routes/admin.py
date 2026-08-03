@@ -3388,6 +3388,9 @@ async def im_configured_traders(
             "online": online,
             "last_seen": last_seen.isoformat() if last_seen else None,
             "credits": int(getattr(trader, "b2c_credits", 0) or 0),
+            # On the weekly package, credits read UNLIMITED (payouts/used still tracked).
+            "im_billing_mode": getattr(trader, "im_billing_mode", "on_demand"),
+            "weekly_active": __import__("app.services.im_weekly_plan", fromlist=["on_active_weekly_plan"]).on_active_weekly_plan(trader),
             "deposited": deposited,
             "payouts": int(stats[0] or 0),
             "revenue": int(stats[1] or 0),

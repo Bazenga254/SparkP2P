@@ -5251,7 +5251,7 @@ export default function Admin() {
                               <td style={{ textAlign: 'center' }}>
                                 <span className={`chip ${t.online ? 'chip--pos' : ''}`} style={{ fontSize: 10 }}>{t.online ? 'online' : 'offline'}</span>
                               </td>
-                              <td style={{ textAlign: 'right', color: (t.credits ?? 0) <= 0 ? 'var(--neg)' : '#e5e7eb', fontWeight: 700 }}>{(t.credits ?? 0).toLocaleString()}</td>
+                              <td style={{ textAlign: 'right', color: t.weekly_active ? '#34d399' : ((t.credits ?? 0) <= 0 ? 'var(--neg)' : '#e5e7eb'), fontWeight: 700 }} title={t.weekly_active ? 'On the weekly unlimited plan' : undefined}>{t.weekly_active ? 'Unlimited' : (t.credits ?? 0).toLocaleString()}</td>
                               <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.deposited)}</td>
                               <td style={{ textAlign: 'right' }}>{t.payouts}</td>
                               <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.revenue)}</td>
