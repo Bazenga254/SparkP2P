@@ -84,11 +84,11 @@ export default function MobileLogin({ mode = 'login', onUnlock, onRegister }) {
         const role = res.data.role || 'trader';
         localStorage.setItem('remembered_email', email);
         if (res.data.full_name) localStorage.setItem('remembered_name', res.data.full_name);
-        loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+        const profile = await loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
         // Remember the sign-in for fingerprint login if biometrics are enabled.
         if (bioEnabled()) localStorage.setItem('bio_token', res.data.access_token);
         if (isLock && onUnlock) onUnlock();
-        navigate(role === 'employee' ? '/employee' : '/dashboard');
+        navigate(role === 'employee' ? '/employee' : (profile?.onboarding_complete ? '/dashboard' : '/onboarding'));
       }
     } catch (err) {
       const d = err.response?.data?.detail;

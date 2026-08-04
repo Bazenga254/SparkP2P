@@ -53,7 +53,7 @@ const STEPS = [
 ];
 
 export default function Onboarding() {
-  const { user, setUser } = useAuth();
+  const { user, setUser, refreshUser } = useAuth();
   const navigate = useNavigate();
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -367,7 +367,11 @@ export default function Onboarding() {
     setCompleted(true);
   };
 
-  const handleGoToDashboard = () => {
+  const handleGoToDashboard = async () => {
+    // Refresh the profile into auth context FIRST so the onboarding gate sees
+    // onboarding_complete=true and lets us onto the dashboard (otherwise the
+    // still-stale user would bounce us straight back here).
+    await refreshUser();
     navigate('/dashboard?scanning=1');
   };
 
@@ -407,13 +411,6 @@ export default function Onboarding() {
         <img src="/logo.png" alt="SparkP2P" className="onb-logo" />
         <h1>Setup Your Account</h1>
         <p>Complete these steps to start automating your P2P trades</p>
-        <button
-          type="button"
-          onClick={() => navigate('/dashboard')}
-          style={{ marginTop: 10, background: 'none', border: 'none', color: '#9ca3af', fontSize: 13, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
-        >
-          Skip for now — go to my dashboard →
-        </button>
       </div>
 
       {/* Progress Bar */}

@@ -87,13 +87,34 @@ export function AuthProvider({ children }) {
     checkAuth();
   }, []);
 
-  const loginUser = (token, userData) => {
+  const loginUser = async (token, userData) => {
     localStorage.setItem('token', token);
-    setUser(userData);
+    setUser(userData);                 // instant minimal user (id/name/role) so the UI reacts now
+    // Upgrade to the FULL profile so onboarding_complete (and the rest) is known
+    // immediately — the onboarding gate relies on it right after sign-up/login.
+    try {
+      const res = await getProfile();
+      setUser(res.data);
+      return res.data;
+    } catch {
+      return userData;                 // network hiccup: keep the minimal user, gate falls back safely
+    }
   };
 
+  // Re-pull the profile into context (e.g. after finishing onboarding) so the
+  // onboarding gate immediately sees onboarding_complete=true and doesn't bounce.
+  const refreshUser = useCallback(async () => {
+    try {
+      const res = await getProfile();
+      setUser(res.data);
+      return res.data;
+    } catch {
+      return null;
+    }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, loginUser, logout, setUser }}>
+    <AuthContext.Provider value={{ user, loading, loginUser, logout, setUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

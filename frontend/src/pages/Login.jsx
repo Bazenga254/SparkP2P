@@ -83,12 +83,14 @@ export default function Login() {
       } else {
         // Mirror the email/password login so the greeting shows the name and the biometric lock
         // screen recognises the user (otherwise it looks like a fresh logout with no name).
-        loginUser(googleToken, { id, full_name: name, role });
-        if (name) localStorage.setItem('remembered_name', name);
-        const gEmail = searchParams.get('email') || '';
-        if (gEmail) localStorage.setItem('remembered_email', gEmail);
-        if (isNative() && bioEnabled()) localStorage.setItem('bio_token', googleToken);
-        navigate('/dashboard');
+        (async () => {
+          const profile = await loginUser(googleToken, { id, full_name: name, role });
+          if (name) localStorage.setItem('remembered_name', name);
+          const gEmail = searchParams.get('email') || '';
+          if (gEmail) localStorage.setItem('remembered_email', gEmail);
+          if (isNative() && bioEnabled()) localStorage.setItem('bio_token', googleToken);
+          navigate(role === 'employee' ? '/employee' : (profile?.onboarding_complete ? '/dashboard' : '/onboarding'));
+        })();
       }
     }
     const googleError = searchParams.get('error');
@@ -177,11 +179,11 @@ export default function Login() {
         body: JSON.stringify({ full_name: profileForm.full_name.toUpperCase(), phone: profileForm.phone, otp_code: profileOtpCode }),
       });
       if (res.ok) {
-        loginUser(googleProfile.token, { id: googleProfile.id, full_name: profileForm.full_name, role: googleProfile.role });
+        const profile = await loginUser(googleProfile.token, { id: googleProfile.id, full_name: profileForm.full_name, role: googleProfile.role });
         if (profileForm.full_name) localStorage.setItem('remembered_name', profileForm.full_name);
         if (googleProfile.email) localStorage.setItem('remembered_email', googleProfile.email);
         if (isNative() && bioEnabled()) localStorage.setItem('bio_token', googleProfile.token);
-        navigate('/dashboard');
+        navigate(profile?.onboarding_complete ? '/dashboard' : '/onboarding');
       } else {
         const data = await res.json();
         setError(data.detail || 'Failed to save profile');
@@ -272,8 +274,8 @@ export default function Login() {
           ...(referralCode ? { referral_code: referralCode } : {}),
         });
         const role = res.data.role || 'trader';
-        loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
-        navigate(role === 'employee' ? '/employee' : '/dashboard');
+        const profile = await loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+        navigate(role === 'employee' ? '/employee' : (profile?.onboarding_complete ? '/dashboard' : '/onboarding'));
       } else {
         // Login with optional OTP
         const res = await login(form.email, form.password, otpRequired ? otpCode : undefined);
@@ -289,8 +291,8 @@ export default function Login() {
           const role = res.data.role || 'trader';
           if (rememberMe) localStorage.setItem('remembered_email', form.email);
           else localStorage.removeItem('remembered_email');
-          loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
-          navigate(role === 'employee' ? '/employee' : '/dashboard');
+          const profile = await loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+          navigate(role === 'employee' ? '/employee' : (profile?.onboarding_complete ? '/dashboard' : '/onboarding'));
         }
       }
     } catch (err) {

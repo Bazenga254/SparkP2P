@@ -114,8 +114,9 @@ export default function RegisterWizard({ referralCode = '', referralName = '', o
         ...(form.referral ? { referral_code: form.referral } : {}),
       });
       const role = res.data.role || 'trader';
-      loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
-      navigate(role === 'employee' ? '/employee' : '/dashboard');
+      const profile = await loginUser(res.data.access_token, { id: res.data.trader_id, full_name: res.data.full_name, role });
+      // A brand-new account is never onboarded yet — go finish setup.
+      navigate(role === 'employee' ? '/employee' : (profile?.onboarding_complete ? '/dashboard' : '/onboarding'));
     } catch (err) {
       const detail = err.response?.data?.detail;
       setError(Array.isArray(detail) ? detail.map((d) => d.msg).join('. ') : (typeof detail === 'string' ? detail : detail?.message || 'Something went wrong'));

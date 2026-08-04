@@ -29,6 +29,22 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+// Onboarding gate: a trader who signed up but hasn't finished setup (Binance +
+// settlement + security question + 2FA) is sent to /onboarding and can't reach
+// the dashboard until it's done — so "finishing signup" means "onboarded".
+// Admins/employees are exempt, and accounts that have already traded are
+// grandfathered so an active merchant is never locked out of a dashboard they
+// were already using.
+function RequireOnboarded({ children }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="loading">Loading...</div>;
+  if (!user) return <Navigate to="/login" />;
+  const isTrader = (user.role || 'trader') === 'trader' && !user.is_admin;
+  const mustOnboard = isTrader && user.onboarding_complete === false && !(user.total_trades > 0);
+  if (mustOnboard) return <Navigate to="/onboarding" replace />;
+  return children;
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -37,8 +53,8 @@ function App() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
-          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-          <Route path="/payments" element={<ProtectedRoute><Payments /></ProtectedRoute>} />
+          <Route path="/dashboard" element={<RequireOnboarded><Dashboard /></RequireOnboarded>} />
+          <Route path="/payments" element={<RequireOnboarded><Payments /></RequireOnboarded>} />
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin" element={<ProtectedRoute><Admin /></ProtectedRoute>} />
           <Route path="/subscribe" element={<ProtectedRoute><Subscribe /></ProtectedRoute>} />
