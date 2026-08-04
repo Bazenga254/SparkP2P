@@ -266,6 +266,7 @@ export default function Admin() {
   // KYC admin state
   const [kycTraders, setKycTraders] = useState([]);
   const [onbReqs, setOnbReqs] = useState([]);          // onboarding requests awaiting/after review
+  const [kycSubTab, setKycSubTab] = useState('onboarding');  // 'onboarding' | 'kyc' sub-tab on the KYC/Onboarding page
   const [onbBusy, setOnbBusy] = useState(null);        // trader id currently being approved/rejected
   const [onbRejecting, setOnbRejecting] = useState(null);  // trader id whose reject box is open (window.prompt is blocked in desktop)
   const [onbRejectReason, setOnbRejectReason] = useState('');
@@ -6269,8 +6270,15 @@ export default function Admin() {
                 </div>
               </div>
 
+              {/* Sub-tabs: Onboarding requests vs Choice Bank KYC — keep each on its own view */}
+              <div className="adm-period-filter" style={{ marginBottom: 22 }}>
+                {[['onboarding', `Onboarding${onbReqs.filter(r => r.status === 'submitted').length ? ` (${onbReqs.filter(r => r.status === 'submitted').length})` : ''}`], ['kyc', 'KYC Verification']].map(([k, label]) => (
+                  <button key={k} className={`adm-period-btn ${kycSubTab === k ? 'active' : ''}`} onClick={() => setKycSubTab(k)}>{label}</button>
+                ))}
+              </div>
+
               {/* ── Onboarding Requests — merchants who submitted setup for approval ── */}
-              {(() => {
+              {kycSubTab === 'onboarding' && (() => {
                 const pendingReqs = onbReqs.filter(r => r.status === 'submitted');
                 const STEP_LABELS = { binance: 'Binance', settlement: 'Settlement', security_question: 'Security Q', totp: '2FA', choice_bank: 'Choice Bank', im_bot: 'I&M Bot' };
                 return (
@@ -6325,6 +6333,7 @@ export default function Admin() {
                 );
               })()}
 
+              {kycSubTab === 'kyc' && (<>
               {/* Stats row */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 30 }}>
                 {[
@@ -6565,6 +6574,7 @@ export default function Admin() {
                   </table>
                 </div>
               </div>
+              </>)}
 
               {/* Live KYC result panel */}
               {kycLiveResult && (
