@@ -2581,7 +2581,7 @@ async def cb_withdraw_initiate(
             )
 
     remark = "".join(
-        c for c in f"SparkP2P withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"
+        c for c in f"Spark Freelance withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"
         if c.isalnum() or c == " "
     )[:100]
 
