@@ -1781,6 +1781,16 @@ async def update_trading_config(
                 return {"status": "updated", "filters_pushed": pushed, "synced": False, "reason": "no_usdt",
                         "warning": "Couldn't apply the filter — your sell ad has no USDT available to trade. "
                                    "Top up your sell ad's USDT on Binance, then click Save again."}
+            # 83229 = the merchant's Binance P2P business is CLOSED, so their ads are
+            # offline and Binance won't let anything edit them. The bot config still
+            # saved — only the counterparty-filter push can't reach offline ads. Say so
+            # plainly instead of dumping the per-ad EP-7 errors.
+            if "83229" in warns:
+                return {"status": "updated", "filters_pushed": pushed, "synced": False, "reason": "business_closed",
+                        "warning": "Your settings were saved. But your counterparty filters can't be applied "
+                                   "right now because your Binance P2P business is currently CLOSED — your ads are "
+                                   "offline. Open your P2P business on Binance (so your ads go live), then click "
+                                   "Save again to apply the filters."}
             if mismatch:
                 return {"status": "updated", "filters_pushed": pushed, "synced": False,
                         "warning": f"Saved, but Binance still shows {mismatch[0]} (expected {mismatch[1]}). "
