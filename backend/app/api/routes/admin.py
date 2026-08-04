@@ -3796,12 +3796,23 @@ async def get_trader_revenue_detail(
     cb_total = {k: (round(v, 2) if k == "volume" else round(v)) for k, v in cb_total.items()}
 
     # ── 2. I&M credits consumed (period) ─────────────────────────────────────
+    # Weekly-plan payouts bill at rate 0 (covered by the flat weekly fee), so a
+    # plain sum(rate) would read 0 for an unlimited-plan trader. Count those
+    # rate-0 payouts and price them at the trader's per-credit rate (Gold 7 /
+    # Silver 5 / Bronze 4) so "Credits used" reflects the value they consumed.
     cr = (await db.execute(
         select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
-               func.coalesce(func.sum(ImCharge.payout_amount), 0))
+               func.coalesce(func.sum(ImCharge.payout_amount), 0),
+               func.count(ImCharge.id).filter(ImCharge.rate == 0))
         .where(ImCharge.trader_id == trader_id, ImCharge.charged_at >= start, ImCharge.charged_at < end)
     )).one()
-    credits = {"used_kes": int(cr[1] or 0), "payouts": int(cr[0] or 0), "volume": int(cr[2] or 0)}
+    _wk = int(cr[3] or 0)
+    _per_credit = 0
+    if _wk:
+        from app.services import im_pricing as _pricing
+        _info = await _pricing.rate_for_trader(db, trader_id)
+        _per_credit = int(_info.get("rate") or 0)
+    credits = {"used_kes": int(cr[1] or 0) + _wk * _per_credit, "payouts": int(cr[0] or 0), "volume": int(cr[2] or 0)}
 
     # ── 3. Subscription payments — REAL, successful, deduped ──────────────────
     # A single M-Pesa payment can spawn several subscription rows (a plan switch
