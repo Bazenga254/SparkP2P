@@ -44,12 +44,12 @@ def _resolve_otp(otp: str, account_last_4: str, source: str):
         entry["otp"] = otp
         entry["ts"] = _t.time()
         entry["event"].set()
-        logger.info(f"[{source}] Resolved transaction OTP waiter for ****{account_last_4}")
+        logger.warning(f"[{source}] Resolved transaction OTP waiter for ****{account_last_4} (a withdrawal WAS waiting)")
         resolved = True
     else:
         # No active waiter — cache OTP for up to 5 minutes so confirm-sms can pick it up
         _pending_sms_otps[account_last_4] = {"otp": otp, "ts": _t.time(), "event": None}
-        logger.info(f"[{source}] Cached OTP for ****{account_last_4} (no active waiter yet)")
+        logger.warning(f"[{source}] Cached OTP for ****{account_last_4} — NO waiter was listening (confirm step not running, or keyed to a different account last-4)")
 
     # Email verification (admin setup-otp-email)
     ev = pending_email_verifications.get(account_last_4)
@@ -84,10 +84,14 @@ async def inbound_sms_webhook(request: Request):
 
     otp, account_last_4 = _parse_choice_otp(body)
     if not otp:
-        logger.info(f"[SMS-OTP] not a Choice Bank OTP — ignored")
+        # WARNING (visible in journalctl) WITH the body: a forwarded SMS that does
+        # NOT parse as a Choice OTP is the exact failure behind "the OTP came but
+        # the webhook didn't pick it up" — auto-withdraw then times out. Seeing the
+        # real wording is how we catch a Choice SMS-format change vs the regex.
+        logger.warning(f"[SMS-OTP] inbound from {mobile} did NOT parse as a Choice OTP — ignored. Body: {body[:200]!r}")
         return {"ok": True}
 
-    logger.info(f"[SMS-OTP] OTP {otp} for account ****{account_last_4}")
+    logger.warning(f"[SMS-OTP] parsed OTP {otp} for account ****{account_last_4} (from {mobile})")
     _resolve_otp(otp, account_last_4, "SMS-OTP")
     return {"ok": True}
 

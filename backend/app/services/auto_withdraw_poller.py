@@ -122,7 +122,7 @@ async def _sweep_one(trader_id: int):
 
         _draining[trader_id] = True   # a drain is in progress until the account is empty
 
-        logger.info("[auto-withdraw] trader %s: balance %.0f >= threshold %.0f -> sweeping KES %s in %d leg(s) %s to %s (PesaLink)",
+        logger.warning("[auto-withdraw] trader %s: balance %.0f >= threshold %.0f -> sweeping KES %s in %d leg(s) %s to %s (PesaLink)",
                     trader_id, balance, threshold, sum(legs), len(legs), legs, trader.cb_withdrawal_bank_name)
 
         for i, amount in enumerate(legs):
@@ -132,7 +132,7 @@ async def _sweep_one(trader_id: int):
             try:
                 await cb_withdraw_initiate(body, trader, db)
             except HTTPException as e:
-                logger.info("[auto-withdraw] trader %s leg %d initiate declined: %s", trader_id, i + 1, e.detail)
+                logger.warning("[auto-withdraw] trader %s leg %d initiate declined: %s", trader_id, i + 1, e.detail)
                 _retry_after[trader_id] = time.time() + FAIL_BACKOFF
                 return
             except Exception as e:
@@ -142,7 +142,7 @@ async def _sweep_one(trader_id: int):
 
             try:
                 await cb_withdraw_to_bank_auto(trader, db)
-                logger.info("[auto-withdraw] trader %s: leg %d/%d KES %s swept", trader_id, i + 1, len(legs), amount)
+                logger.warning("[auto-withdraw] trader %s: leg %d/%d KES %s swept OK", trader_id, i + 1, len(legs), amount)
             except HTTPException as e:
                 logger.warning("[auto-withdraw] trader %s leg %d confirm failed (%s) — stopping; rest stays for next cycle",
                                trader_id, i + 1, e.detail)
