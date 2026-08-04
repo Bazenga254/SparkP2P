@@ -911,6 +911,15 @@ async def request_buy_approval(
     if not trader.telegram_chat_id:
         return {"ok": True, "auto_approved": True}
 
+    # Respect the merchant's Telegram alert preference. This is a BUY-order alert,
+    # so a "Sell orders only" trader must NOT get the "paying automatically /
+    # paying to <seller>" running commentary — the payment still goes out exactly
+    # the same, they just watch it live in the app instead of by Telegram. (The
+    # persist above always runs; only the notification is gated.)
+    _scope = (getattr(trader, "telegram_notify_scope", "both") or "both")
+    if _scope == "sell":
+        return {"ok": True, "auto_approved": True}
+
     if data.method in ("im_bank", "other_bank"):
         dest = f"{'PesaLink' if data.method == 'im_bank' else 'Bank'} {data.bank_name or ''} a/c {data.account_number or '?'}"
     else:
