@@ -243,6 +243,13 @@ export default function Onboarding() {
       const s = p.onboarding_steps || {};
       const merchantSkipVerify = p.binance_api_key_saved && !p.binance_api_key_invalid;
       if (p.settlement_method) setSettlementSaved(true);
+      // Mark the 2FA sub-steps done if they were already set on a previous visit —
+      // otherwise a returning user whose security question / authenticator is
+      // already saved is stuck (can't re-save, and Continue stays disabled).
+      const sqAlready = !!(s.security_question || p.security_question);
+      const totpAlready = !!(s.totp || p.has_totp);
+      if (sqAlready) setSqDone(true);
+      if (totpAlready) setTotpSetupDone(true);
       let step;
       if (!s.binance) step = 1;
       else if (!s.settlement && !(p.verify_method || merchantSkipVerify)) step = 2;   // verification
@@ -251,7 +258,11 @@ export default function Onboarding() {
       else if (!s.choice_bank) step = 5;                                               // Choice Bank
       else step = 6;                                                                   // I&M Bot / submit
       setCurrentStep(step);
-      if (step === 4) getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
+      if (step === 4) {
+        // If the security question is already set, land on the Authenticator sub-step.
+        if (sqAlready && !totpAlready) setSecSubStep('totp');
+        getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
+      }
     } catch (err) {
       console.error('Failed to load profile', err);
     }
@@ -1262,7 +1273,19 @@ export default function Onboarding() {
                             }
                           }, 800);
                         } catch (err) {
-                          setSqMsg(err.response?.data?.detail || 'Failed to save. Try again.');
+                          const msg = err.response?.data?.detail || '';
+                          if (/already set/i.test(msg)) {
+                            // Already saved on a previous visit — that counts as done, so advance
+                            // instead of trapping the user on this step.
+                            setSqDone(true);
+                            setSecSubStep('totp');
+                            if (!totpSetupData) {
+                              setTotpSetupLoading(true);
+                              getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {}).finally(() => setTotpSetupLoading(false));
+                            }
+                          } else {
+                            setSqMsg(msg || 'Failed to save. Try again.');
+                          }
                         }
                         setSqSaving(false);
                       }}
