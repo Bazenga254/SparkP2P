@@ -509,7 +509,9 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   };
 
   const handleConnectBinance = () => {
-    if (!profile?.choice_account_id) { setShowKycGate(true); return; }
+    // NOTE: Binance connect is intentionally NOT gated on Choice Bank verification —
+    // Choice KYC can be under review for a day, and blocking Binance until then
+    // strands the merchant. They can connect Binance now and finish Choice later.
     if (window.sparkp2p?.isDesktop) {
       window.sparkp2p.connectBinance();
     }
@@ -1001,7 +1003,7 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
                 Reads Binance email verification codes via a connected browser session.
               </div>
-              <button onClick={() => { if (!profile?.choice_account_id) { setShowKycGate(true); return; } wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
+              <button onClick={() => { wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
                 style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                 {gmailConfigured ? 'Re-connect Gmail' : 'Connect Gmail'}
               </button>
