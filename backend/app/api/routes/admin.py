@@ -391,6 +391,7 @@ async def delete_trader(
     from app.models.chat import ChatMessage
     from app.models.im_sweep import ImSweep
     from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
 
     # 1. Null out trader_id on payments (they have nullable trader_id)
     await db.execute(
@@ -433,8 +434,41 @@ async def delete_trader(
         ChatMessage.__table__.delete().where(ChatMessage.sender_id == trader_id)
     )
 
-    await db.delete(trader)
-    await db.commit()
+    # 9. Every OTHER table that FKs to traders (added as the platform grew — I&M
+    #    keys, credit purchases, KYC, bot logs, ad configs, batch items, squad
+    #    membership). A zero-order trader can still hold any of these, and each one
+    #    is a foreign key that blocks the final DELETE. Clean them ALL so a missing
+    #    table can never turn a delete into a generic 500 again. Nullable financial
+    #    links are preserved (set NULL); operational rows and useless keys are removed.
+    for _stmt in (
+        "UPDATE credit_purchases SET trader_id = NULL WHERE trader_id = :tid",
+        "UPDATE im_charges       SET trader_id = NULL WHERE trader_id = :tid",
+        "UPDATE im_bot_accounts  SET linked_trader_id = NULL WHERE linked_trader_id = :tid",
+        "DELETE FROM merchant_api_keys WHERE trader_id = :tid",
+        "DELETE FROM im_payouts        WHERE trader_id = :tid",
+        "DELETE FROM kyc_submissions   WHERE trader_id = :tid",
+        "DELETE FROM ad_automation     WHERE trader_id = :tid",
+        "DELETE FROM batch_items       WHERE trader_id = :tid",
+        "DELETE FROM bot_logs          WHERE trader_id = :tid",
+        "DELETE FROM squad_members     WHERE trader_id = :tid",
+        "DELETE FROM squad_members     WHERE squad_id IN (SELECT id FROM squads WHERE captain_trader_id = :tid)",
+        "DELETE FROM squads            WHERE captain_trader_id = :tid",
+    ):
+        await db.execute(text(_stmt), {"tid": trader_id})
+
+    try:
+        await db.delete(trader)
+        await db.commit()
+    except IntegrityError as e:
+        # A table still FKs to this trader that we didn't clean up above. Surface
+        # WHICH one (instead of a generic "Delete failed.") so it's a one-line fix.
+        await db.rollback()
+        constraint = getattr(getattr(e, "orig", None), "constraint_name", None) or str(e.orig or e)
+        logger.warning("[Admin] delete_trader %s blocked by %s", trader_id, constraint)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete: this trader is still referenced by another record ({constraint}). Tell support to add it to the cleanup.",
+        )
 
     logger.info(f"[Admin] Trader {trader_id} ({trader.full_name}) deleted by admin {admin.id}")
     return {"deleted": True, "trader_id": trader_id, "name": trader.full_name}
