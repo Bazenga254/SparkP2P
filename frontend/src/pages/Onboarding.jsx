@@ -12,8 +12,7 @@ import {
   verifyAndSaveTotp,
   saveBinanceApiKey,
   submitOnboarding,
-  choiceOnboardWallet,
-  choiceConfirmOtp,
+  kycCreateSession,
 } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
@@ -70,14 +69,10 @@ export default function Onboarding() {
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState('');
 
-  // Choice Bank onboarding (step 5)
-  const [cbForm, setCbForm] = useState({ firstName: '', lastName: '', middleName: '', mobile: '', idNumber: '', birthday: '', gender: '1', email: '', address: '' });
-  const [cbFiles, setCbFiles] = useState({});
-  const [cbStage, setCbStage] = useState('form'); // form | otp
-  const [cbReqId, setCbReqId] = useState('');
-  const [cbOtp, setCbOtp] = useState('');
-  const [cbBusy, setCbBusy] = useState(false);
-  const [cbMsg, setCbMsg] = useState(null);
+  // Choice Bank onboarding (step 5) — QR to complete KYC on the phone
+  const [cbToken, setCbToken] = useState('');
+  const [cbTokenLoading, setCbTokenLoading] = useState(false);
+  const [cbTokenErr, setCbTokenErr] = useState('');
   // I&M Bot connect check (step 6)
   const [imChecking, setImChecking] = useState(false);
 
@@ -442,46 +437,33 @@ export default function Onboarding() {
     return () => clearInterval(iv);
   }, [profile?.onboarding_status]);
 
-  // --- Step 5: Choice Bank onboarding (compact reuse of the Settings KYC flow) ---
-  const cbFileToB64 = (file) => new Promise((res, rej) => {
-    const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.onerror = rej; r.readAsDataURL(file);
-  });
-  const handleCbFile = async (e, key) => {
-    const f = e.target.files?.[0]; if (!f) return;
-    const b64 = await cbFileToB64(f);
-    setCbFiles(prev => ({ ...prev, [key]: b64 }));
-  };
-  const handleCbSubmit = async () => {
-    const { firstName, lastName, mobile, idNumber, birthday } = cbForm;
-    if (!firstName || !lastName || !mobile || !idNumber || !birthday) { setCbMsg({ type: 'error', text: 'Please fill in all required fields.' }); return; }
-    if (!cbFiles.front || !cbFiles.back || !cbFiles.selfie) { setCbMsg({ type: 'error', text: 'Please upload ID front, ID back and a selfie.' }); return; }
-    setCbBusy(true); setCbMsg(null);
+  // --- Step 5: Choice Bank — create a KYC session and show a QR the merchant
+  // scans to finish on their phone (the established mobile KYC flow). ---
+  const startChoiceKyc = async () => {
+    setCbTokenLoading(true); setCbTokenErr('');
     try {
-      const res = await choiceOnboardWallet({
-        trader_id: profile.id, first_name: firstName, last_name: lastName, middle_name: cbForm.middleName,
-        mobile: mobile.replace(/^(254|0)/, ''), id_number: idNumber, birthday, gender: parseInt(cbForm.gender),
-        email: cbForm.email, address: cbForm.address,
-        front_photo_b64: cbFiles.front, back_photo_b64: cbFiles.back, selfie_b64: cbFiles.selfie,
-      });
-      setCbReqId(res.data.onboardingRequestId);
-      setCbStage('otp');
-      setCbMsg({ type: 'info', text: 'An OTP has been sent to your phone. Enter it below to finish.' });
+      const res = await kycCreateSession();
+      setCbToken(res.data.token);
     } catch (err) {
-      setCbMsg({ type: 'error', text: err.response?.data?.detail || 'Could not start Choice Bank onboarding. Try again.' });
+      setCbTokenErr(err.response?.data?.detail || 'Could not start Choice Bank onboarding. Try again.');
     }
-    setCbBusy(false);
+    setCbTokenLoading(false);
   };
-  const handleCbOtp = async () => {
-    setCbBusy(true); setCbMsg(null);
-    try {
-      await choiceConfirmOtp({ trader_id: profile.id, onboarding_request_id: cbReqId, otp: cbOtp.trim() });
-      setCbMsg({ type: 'success', text: 'Choice Bank account submitted — KYC review is now underway.' });
-      await refreshProfile();
-    } catch (err) {
-      setCbMsg({ type: 'error', text: err.response?.data?.detail || 'Invalid OTP. Try again.' });
-    }
-    setCbBusy(false);
-  };
+
+  // Generate the QR as soon as the merchant reaches the Choice step (unless it's
+  // already done), and poll the profile so it flips to ✓ the moment the phone
+  // finishes — no manual refresh needed.
+  useEffect(() => {
+    if (currentStep !== 5) return;
+    if (profile?.onboarding_steps?.choice_bank) return;
+    if (!cbToken && !cbTokenLoading) startChoiceKyc();
+    const iv = setInterval(async () => {
+      const p = await refreshProfile();
+      if (p?.onboarding_steps?.choice_bank) clearInterval(iv);
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [currentStep, profile?.onboarding_steps?.choice_bank]);
+
   const handleImCheck = async () => { setImChecking(true); await refreshProfile(); setImChecking(false); };
 
   const canAdvanceStep2 = profile?.binance_connected;
@@ -1398,40 +1380,30 @@ export default function Onboarding() {
                   Status: {profile.choice_kyc_status || 'submitted'} · KYC approval is tracked separately and won&rsquo;t hold up your setup.
                 </div>
               </div>
-            ) : cbStage === 'otp' ? (
-              <div style={{ maxWidth: 360, margin: '0 auto 20px' }}>
-                <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 8 }}>Enter the OTP sent to your phone</label>
-                <input type="text" inputMode="numeric" value={cbOtp} onChange={e => setCbOtp(e.target.value.replace(/\D/g, ''))} placeholder="000000"
-                  style={{ width: '100%', padding: 14, borderRadius: 10, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 22, letterSpacing: 6, textAlign: 'center', boxSizing: 'border-box', marginBottom: 12 }} />
-                <button className="onb-btn-primary" style={{ width: '100%' }} disabled={cbBusy || cbOtp.length < 4} onClick={handleCbOtp}>
-                  {cbBusy ? 'Confirming…' : 'Confirm OTP'}
-                </button>
-              </div>
             ) : (
-              <div style={{ maxWidth: 460, margin: '0 auto 20px', display: 'grid', gap: 10 }}>
-                {[['firstName', 'First name*'], ['lastName', 'Last name*'], ['middleName', 'Middle name'], ['mobile', 'M-Pesa phone*'], ['idNumber', 'National ID number*'], ['email', 'Email'], ['address', 'Address']].map(([k, label]) => (
-                  <input key={k} placeholder={label} value={cbForm[k]} onChange={e => setCbForm(f => ({ ...f, [k]: e.target.value }))}
-                    style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', boxSizing: 'border-box' }} />
-                ))}
-                <label style={{ fontSize: 12, color: '#9ca3af' }}>Date of birth*</label>
-                <input type="date" value={cbForm.birthday} onChange={e => setCbForm(f => ({ ...f, birthday: e.target.value }))}
-                  style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', boxSizing: 'border-box' }} />
-                <select value={cbForm.gender} onChange={e => setCbForm(f => ({ ...f, gender: e.target.value }))}
-                  style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', boxSizing: 'border-box' }}>
-                  <option value="1">Male</option><option value="2">Female</option>
-                </select>
-                {[['front', 'ID front*'], ['back', 'ID back*'], ['selfie', 'Selfie*']].map(([k, label]) => (
-                  <label key={k} style={{ fontSize: 13, color: cbFiles[k] ? '#34d399' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {cbFiles[k] ? <Check size={15} /> : null}{label}: <input type="file" accept="image/*" onChange={e => handleCbFile(e, k)} />
-                  </label>
-                ))}
-                {cbMsg && <p style={{ fontSize: 13, color: cbMsg.type === 'error' ? '#ef4444' : cbMsg.type === 'success' ? '#34d399' : '#9ca3af' }}>{cbMsg.text}</p>}
-                <button className="onb-btn-primary" style={{ width: '100%' }} disabled={cbBusy} onClick={handleCbSubmit}>
-                  {cbBusy ? 'Submitting…' : 'Submit Choice Bank details'}
-                </button>
+              <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                {cbTokenLoading || !cbToken ? (
+                  <div style={{ color: '#9ca3af', padding: '24px 0' }}>{cbTokenErr ? cbTokenErr : 'Preparing your secure link…'}</div>
+                ) : (
+                  <>
+                    <div style={{ display: 'inline-block', background: '#fff', padding: 14, borderRadius: 14 }}>
+                      <QRCodeSVG value={`${window.location.origin}/kyc/${cbToken}`} size={200} />
+                    </div>
+                    <p style={{ color: '#e5e7eb', fontWeight: 600, marginTop: 16 }}>Scan this with your phone to finish Choice Bank KYC</p>
+                    <ol style={{ textAlign: 'left', maxWidth: 380, margin: '10px auto 0', color: '#c7cbd6', fontSize: 13.5, lineHeight: 1.7, paddingLeft: 18 }}>
+                      <li>Open your phone camera and scan the code above.</li>
+                      <li>Fill in your details and upload your ID + a selfie on your phone.</li>
+                      <li>This page updates automatically the moment you&rsquo;re done.</li>
+                    </ol>
+                    <p style={{ color: '#6b7280', fontSize: 12.5, marginTop: 12 }}>Waiting for you to complete verification on your phone…</p>
+                    {cbTokenErr && <p style={{ color: '#ef4444', fontSize: 13, marginTop: 8 }}>{cbTokenErr}</p>}
+                    <button className="onb-btn-ghost" style={{ marginTop: 10 }} onClick={startChoiceKyc} disabled={cbTokenLoading}>
+                      {cbTokenLoading ? 'Refreshing…' : 'New code'}
+                    </button>
+                  </>
+                )}
               </div>
             )}
-            {cbMsg && cbStage === 'otp' && <p style={{ textAlign: 'center', fontSize: 13, color: cbMsg.type === 'error' ? '#ef4444' : '#9ca3af' }}>{cbMsg.text}</p>}
 
             <div className="onb-actions" style={{ marginTop: 20 }}>
               <button className="onb-btn-ghost" onClick={() => setCurrentStep(4)}><ChevronLeft size={18} /> Back</button>
