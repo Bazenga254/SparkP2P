@@ -11,6 +11,9 @@ import {
   getTotpSetup,
   verifyAndSaveTotp,
   saveBinanceApiKey,
+  submitOnboarding,
+  choiceOnboardWallet,
+  choiceConfirmOtp,
 } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
@@ -31,6 +34,8 @@ import {
   Key,
   Lock,
   Smartphone,
+  Landmark,
+  Clock,
 } from 'lucide-react';
 
 const BANK_PAYBILLS = {
@@ -50,6 +55,8 @@ const STEPS = [
   { key: 'verification', title: 'Verification', icon: Shield },
   { key: 'settlement', title: 'Settlement', icon: Banknote },
   { key: 'authenticator', title: '2FA Setup', icon: Smartphone },
+  { key: 'choice', title: 'Choice Bank', icon: Landmark },
+  { key: 'imbot', title: 'I&M Bot', icon: Download },
 ];
 
 export default function Onboarding() {
@@ -60,6 +67,19 @@ export default function Onboarding() {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [completed, setCompleted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr, setSubmitErr] = useState('');
+
+  // Choice Bank onboarding (step 5)
+  const [cbForm, setCbForm] = useState({ firstName: '', lastName: '', middleName: '', mobile: '', idNumber: '', birthday: '', gender: '1', email: '', address: '' });
+  const [cbFiles, setCbFiles] = useState({});
+  const [cbStage, setCbStage] = useState('form'); // form | otp
+  const [cbReqId, setCbReqId] = useState('');
+  const [cbOtp, setCbOtp] = useState('');
+  const [cbBusy, setCbBusy] = useState(false);
+  const [cbMsg, setCbMsg] = useState(null);
+  // I&M Bot connect check (step 6)
+  const [imChecking, setImChecking] = useState(false);
 
   // Extension step
   const [extensionInstalled, setExtensionInstalled] = useState(false);
@@ -209,26 +229,29 @@ export default function Onboarding() {
       const res = await getProfile();
       const p = res.data;
       setProfile(p);
-      if (p.onboarding_complete) {
+      // Approved → into the app. Submitted → the waiting screen renders (below),
+      // so don't route anywhere. Otherwise resume at the first incomplete step.
+      if (p.onboarding_status === 'approved') {
         navigate('/dashboard');
         return;
       }
-      // Resume at the furthest completed step
-      if (p.settlement_method) setSettlementSaved(true);
-      if (p.binance_connected && p.settlement_method) {
-        // Settlement done, go to 2FA setup (final step)
-        setCurrentStep(4);
-        getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
-      } else if (p.binance_connected && (p.verify_method || (p.binance_api_key_saved && !p.binance_api_key_invalid))) {
-        // Verification done OR a verified merchant (TOTP not required) — go to settlement
-        setCurrentStep(3);
-      } else if (p.binance_connected) {
-        // Binance connected (non-merchant) — go to verification
-        setCurrentStep(2);
-      } else {
-        // Start from Connect Binance (skip Install App step)
-        setCurrentStep(1);
+      if (p.onboarding_status === 'submitted') {
+        setLoading(false);
+        return;
       }
+      // Resume at the first incomplete step (now includes Choice Bank + I&M Bot).
+      const s = p.onboarding_steps || {};
+      const merchantSkipVerify = p.binance_api_key_saved && !p.binance_api_key_invalid;
+      if (p.settlement_method) setSettlementSaved(true);
+      let step;
+      if (!s.binance) step = 1;
+      else if (!s.settlement && !(p.verify_method || merchantSkipVerify)) step = 2;   // verification
+      else if (!s.settlement) step = 3;                                                // settlement
+      else if (!s.security_question || !s.totp) step = 4;                              // 2FA
+      else if (!s.choice_bank) step = 5;                                               // Choice Bank
+      else step = 6;                                                                   // I&M Bot / submit
+      setCurrentStep(step);
+      if (step === 4) getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {});
     } catch (err) {
       console.error('Failed to load profile', err);
     }
@@ -369,11 +392,86 @@ export default function Onboarding() {
 
   const handleGoToDashboard = async () => {
     // Refresh the profile into auth context FIRST so the onboarding gate sees
-    // onboarding_complete=true and lets us onto the dashboard (otherwise the
+    // the approved status and lets us onto the dashboard (otherwise the
     // still-stale user would bounce us straight back here).
     await refreshUser();
     navigate('/dashboard?scanning=1');
   };
+
+  // Final step: submit the finished setup for admin approval.
+  const handleSubmitForReview = async () => {
+    setSubmitting(true); setSubmitErr('');
+    try {
+      await submitOnboarding();
+      await refreshProfile();   // onboarding_status becomes 'submitted' → waiting screen renders
+    } catch (err) {
+      const d = err.response?.data?.detail;
+      setSubmitErr((d && d.message) || 'Could not submit — please make sure every step is complete.');
+    }
+    setSubmitting(false);
+  };
+
+  // While waiting for approval, poll: the moment an admin approves, drop the
+  // waiting screen and go to the dashboard. A rejection drops back to the steps.
+  useEffect(() => {
+    if (profile?.onboarding_status !== 'submitted') return;
+    const iv = setInterval(async () => {
+      try {
+        const res = await getProfile();
+        setProfile(res.data);
+        if (res.data.onboarding_status === 'approved') {
+          clearInterval(iv);
+          await refreshUser();
+          navigate('/dashboard?scanning=1');
+        } else if (res.data.onboarding_status === 'rejected') {
+          clearInterval(iv);
+        }
+      } catch { /* keep polling */ }
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [profile?.onboarding_status]);
+
+  // --- Step 5: Choice Bank onboarding (compact reuse of the Settings KYC flow) ---
+  const cbFileToB64 = (file) => new Promise((res, rej) => {
+    const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.onerror = rej; r.readAsDataURL(file);
+  });
+  const handleCbFile = async (e, key) => {
+    const f = e.target.files?.[0]; if (!f) return;
+    const b64 = await cbFileToB64(f);
+    setCbFiles(prev => ({ ...prev, [key]: b64 }));
+  };
+  const handleCbSubmit = async () => {
+    const { firstName, lastName, mobile, idNumber, birthday } = cbForm;
+    if (!firstName || !lastName || !mobile || !idNumber || !birthday) { setCbMsg({ type: 'error', text: 'Please fill in all required fields.' }); return; }
+    if (!cbFiles.front || !cbFiles.back || !cbFiles.selfie) { setCbMsg({ type: 'error', text: 'Please upload ID front, ID back and a selfie.' }); return; }
+    setCbBusy(true); setCbMsg(null);
+    try {
+      const res = await choiceOnboardWallet({
+        trader_id: profile.id, first_name: firstName, last_name: lastName, middle_name: cbForm.middleName,
+        mobile: mobile.replace(/^(254|0)/, ''), id_number: idNumber, birthday, gender: parseInt(cbForm.gender),
+        email: cbForm.email, address: cbForm.address,
+        front_photo_b64: cbFiles.front, back_photo_b64: cbFiles.back, selfie_b64: cbFiles.selfie,
+      });
+      setCbReqId(res.data.onboardingRequestId);
+      setCbStage('otp');
+      setCbMsg({ type: 'info', text: 'An OTP has been sent to your phone. Enter it below to finish.' });
+    } catch (err) {
+      setCbMsg({ type: 'error', text: err.response?.data?.detail || 'Could not start Choice Bank onboarding. Try again.' });
+    }
+    setCbBusy(false);
+  };
+  const handleCbOtp = async () => {
+    setCbBusy(true); setCbMsg(null);
+    try {
+      await choiceConfirmOtp({ trader_id: profile.id, onboarding_request_id: cbReqId, otp: cbOtp.trim() });
+      setCbMsg({ type: 'success', text: 'Choice Bank account submitted — KYC review is now underway.' });
+      await refreshProfile();
+    } catch (err) {
+      setCbMsg({ type: 'error', text: err.response?.data?.detail || 'Invalid OTP. Try again.' });
+    }
+    setCbBusy(false);
+  };
+  const handleImCheck = async () => { setImChecking(true); await refreshProfile(); setImChecking(false); };
 
   const canAdvanceStep2 = profile?.binance_connected;
   const canAdvanceStep3 = settlementSaved || profile?.settlement_method;
@@ -385,6 +483,28 @@ export default function Onboarding() {
     return (
       <div className="onb-container">
         <div className="loading">Loading...</div>
+      </div>
+    );
+  }
+
+  // Submitted → waiting for an admin to approve. Polls in the background; the
+  // moment it's approved this disappears and we go to the dashboard.
+  if (profile?.onboarding_status === 'submitted') {
+    return (
+      <div className="onb-container">
+        <div className="onb-completion">
+          <div className="onb-completion-icon"><Clock size={56} color="#f59e0b" /></div>
+          <h1>Waiting for admin approval</h1>
+          <p>
+            Your setup is complete and has been sent to our team for review. This
+            usually takes a short while — you don&rsquo;t need to do anything. The
+            moment it&rsquo;s approved, this screen will take you straight to your
+            dashboard.
+          </p>
+          <p style={{ fontSize: 13, color: '#9ca3af', marginTop: 8 }}>
+            Checking automatically… you can leave this page open.
+          </p>
+        </div>
       </div>
     );
   }
@@ -411,6 +531,11 @@ export default function Onboarding() {
         <img src="/logo.png" alt="SparkP2P" className="onb-logo" />
         <h1>Setup Your Account</h1>
         <p>Complete these steps to start automating your P2P trades</p>
+        {profile?.onboarding_status === 'rejected' && (
+          <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 8, color: '#fca5a5', fontSize: 13, maxWidth: 520, marginLeft: 'auto', marginRight: 'auto' }}>
+            <strong>Your submission was sent back:</strong> {profile.onboarding_reject_reason || 'Please review your setup and resubmit.'}
+          </div>
+        )}
       </div>
 
       {/* Progress Bar */}
@@ -1218,15 +1343,131 @@ export default function Onboarding() {
                 className="onb-btn-primary"
                 disabled={!sqDone || !totpSetupDone}
                 style={{ opacity: sqDone && totpSetupDone ? 1 : 0.4, cursor: sqDone && totpSetupDone ? 'pointer' : 'not-allowed' }}
-                onClick={() => setCompleted(true)}
+                onClick={() => setCurrentStep(5)}
               >
-                Finish Setup
+                Continue
                 <ChevronRight size={18} />
               </button>
             </div>
             {(!sqDone || !totpSetupDone) && (
               <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
                 Both security question and Google Authenticator must be completed to continue.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Step 5 — Choice Bank onboarding */}
+        {currentStep === 5 && (
+          <div className="onb-step-content">
+            <div className="onb-step-icon"><Landmark size={28} /></div>
+            <h2>Choice Bank account</h2>
+            <p className="onb-step-desc">
+              This is the account that receives M-Pesa payments from your buyers. Set it up once —
+              final KYC approval can finish in the background.
+            </p>
+
+            {profile?.onboarding_steps?.choice_bank ? (
+              <div style={{ padding: 16, background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.4)', borderRadius: 10, textAlign: 'center', marginBottom: 20 }}>
+                <Check size={26} color="#34d399" />
+                <div style={{ color: '#34d399', fontWeight: 700, marginTop: 6 }}>Choice Bank onboarding submitted</div>
+                <div style={{ color: '#9ca3af', fontSize: 13, marginTop: 4 }}>
+                  Status: {profile.choice_kyc_status || 'submitted'} · KYC approval is tracked separately and won&rsquo;t hold up your setup.
+                </div>
+              </div>
+            ) : cbStage === 'otp' ? (
+              <div style={{ maxWidth: 360, margin: '0 auto 20px' }}>
+                <label style={{ fontSize: 13, color: '#9ca3af', display: 'block', marginBottom: 8 }}>Enter the OTP sent to your phone</label>
+                <input type="text" inputMode="numeric" value={cbOtp} onChange={e => setCbOtp(e.target.value.replace(/\D/g, ''))} placeholder="000000"
+                  style={{ width: '100%', padding: 14, borderRadius: 10, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', fontSize: 22, letterSpacing: 6, textAlign: 'center', boxSizing: 'border-box', marginBottom: 12 }} />
+                <button className="onb-btn-primary" style={{ width: '100%' }} disabled={cbBusy || cbOtp.length < 4} onClick={handleCbOtp}>
+                  {cbBusy ? 'Confirming…' : 'Confirm OTP'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ maxWidth: 460, margin: '0 auto 20px', display: 'grid', gap: 10 }}>
+                {[['firstName', 'First name*'], ['lastName', 'Last name*'], ['middleName', 'Middle name'], ['mobile', 'M-Pesa phone*'], ['idNumber', 'National ID number*'], ['email', 'Email'], ['address', 'Address']].map(([k, label]) => (
+                  <input key={k} placeholder={label} value={cbForm[k]} onChange={e => setCbForm(f => ({ ...f, [k]: e.target.value }))}
+                    style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', boxSizing: 'border-box' }} />
+                ))}
+                <label style={{ fontSize: 12, color: '#9ca3af' }}>Date of birth*</label>
+                <input type="date" value={cbForm.birthday} onChange={e => setCbForm(f => ({ ...f, birthday: e.target.value }))}
+                  style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', boxSizing: 'border-box' }} />
+                <select value={cbForm.gender} onChange={e => setCbForm(f => ({ ...f, gender: e.target.value }))}
+                  style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: '#0d0f1e', color: '#fff', boxSizing: 'border-box' }}>
+                  <option value="1">Male</option><option value="2">Female</option>
+                </select>
+                {[['front', 'ID front*'], ['back', 'ID back*'], ['selfie', 'Selfie*']].map(([k, label]) => (
+                  <label key={k} style={{ fontSize: 13, color: cbFiles[k] ? '#34d399' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {cbFiles[k] ? <Check size={15} /> : null}{label}: <input type="file" accept="image/*" onChange={e => handleCbFile(e, k)} />
+                  </label>
+                ))}
+                {cbMsg && <p style={{ fontSize: 13, color: cbMsg.type === 'error' ? '#ef4444' : cbMsg.type === 'success' ? '#34d399' : '#9ca3af' }}>{cbMsg.text}</p>}
+                <button className="onb-btn-primary" style={{ width: '100%' }} disabled={cbBusy} onClick={handleCbSubmit}>
+                  {cbBusy ? 'Submitting…' : 'Submit Choice Bank details'}
+                </button>
+              </div>
+            )}
+            {cbMsg && cbStage === 'otp' && <p style={{ textAlign: 'center', fontSize: 13, color: cbMsg.type === 'error' ? '#ef4444' : '#9ca3af' }}>{cbMsg.text}</p>}
+
+            <div className="onb-actions" style={{ marginTop: 20 }}>
+              <button className="onb-btn-ghost" onClick={() => setCurrentStep(4)}><ChevronLeft size={18} /> Back</button>
+              <button className="onb-btn-primary" disabled={!profile?.onboarding_steps?.choice_bank}
+                style={{ opacity: profile?.onboarding_steps?.choice_bank ? 1 : 0.4, cursor: profile?.onboarding_steps?.choice_bank ? 'pointer' : 'not-allowed' }}
+                onClick={() => setCurrentStep(6)}>
+                Continue <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 6 — I&M Bot download + connect, then submit for review */}
+        {currentStep === 6 && (
+          <div className="onb-step-content">
+            <div className="onb-step-icon"><Download size={28} /></div>
+            <h2>Download &amp; connect the I&amp;M Bot</h2>
+            <p className="onb-step-desc">
+              The I&amp;M Bot runs on your computer and pays sellers from your own I&amp;M account.
+              Download it, sign in with your SparkP2P account, and it will link automatically.
+            </p>
+
+            {profile?.onboarding_steps?.im_bot ? (
+              <div style={{ padding: 16, background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.4)', borderRadius: 10, textAlign: 'center', marginBottom: 20 }}>
+                <Check size={26} color="#34d399" />
+                <div style={{ color: '#34d399', fontWeight: 700, marginTop: 6 }}>I&amp;M Bot connected to SparkP2P</div>
+              </div>
+            ) : (
+              <div style={{ maxWidth: 460, margin: '0 auto 16px' }}>
+                <a href="/api/download/im-bot" className="onb-btn-primary" style={{ display: 'inline-flex', textDecoration: 'none', marginBottom: 14 }}>
+                  <Download size={18} /> Download I&amp;M Bot for Windows
+                </a>
+                <ol style={{ textAlign: 'left', color: '#c7cbd6', fontSize: 13.5, lineHeight: 1.7, paddingLeft: 18 }}>
+                  <li>Install and open the I&amp;M Bot on your computer.</li>
+                  <li>Choose <strong>Continue with SparkP2P</strong> and sign in with this account.</li>
+                  <li>Come back here and click <strong>Check connection</strong>.</li>
+                </ol>
+                <button className="onb-btn-ghost" style={{ width: '100%', marginTop: 12 }} disabled={imChecking} onClick={handleImCheck}>
+                  {imChecking ? 'Checking…' : 'Check connection'}
+                </button>
+                <p style={{ fontSize: 12.5, color: '#6b7280', marginTop: 8, textAlign: 'center' }}>
+                  We&rsquo;ll detect it the moment the bot signs in with your account.
+                </p>
+              </div>
+            )}
+
+            {submitErr && <p style={{ textAlign: 'center', fontSize: 13, color: '#ef4444', marginTop: 6 }}>{submitErr}</p>}
+
+            <div className="onb-actions" style={{ marginTop: 20 }}>
+              <button className="onb-btn-ghost" onClick={() => setCurrentStep(5)}><ChevronLeft size={18} /> Back</button>
+              <button className="onb-btn-primary" disabled={!profile?.onboarding_steps?.im_bot || submitting}
+                style={{ opacity: profile?.onboarding_steps?.im_bot && !submitting ? 1 : 0.4, cursor: profile?.onboarding_steps?.im_bot && !submitting ? 'pointer' : 'not-allowed' }}
+                onClick={handleSubmitForReview}>
+                {submitting ? 'Submitting…' : 'Submit for review'} <ChevronRight size={18} />
+              </button>
+            </div>
+            {!profile?.onboarding_steps?.im_bot && (
+              <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
+                Connect the I&amp;M Bot to submit your account for approval.
               </p>
             )}
           </div>

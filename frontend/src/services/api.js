@@ -168,6 +168,12 @@ export const deleteEmployee = (id) => api.delete(`/admin/employees/${id}`);
 export const deleteTrader = (id) => api.delete(`/admin/traders/${id}`);
 export const getMyPermissions = () => api.get('/traders/my-permissions');
 
+// Onboarding review workflow
+export const submitOnboarding = () => api.post('/traders/onboarding/submit');
+export const getOnboardingRequests = () => api.get('/admin/onboarding/requests');
+export const approveOnboarding = (id) => api.post(`/admin/traders/${id}/onboarding/approve`);
+export const rejectOnboarding = (id, reason) => api.post(`/admin/traders/${id}/onboarding/reject`, { reason });
+
 // Affiliates
 export const getMyAffiliate = () => api.get('/affiliates/me');
 export const getMyReferrals = () => api.get('/affiliates/me/referrals');

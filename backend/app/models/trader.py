@@ -255,6 +255,14 @@ class Trader(Base):
     choice_kyc_status = Column(String(100), nullable=True)      # approved/rejected, or pending:<onboardingId> / onboarding:<onboardingId>
     choice_email_verified = Column(Boolean, default=False)      # True once the account's email is verified with Choice → email OTP fallback available
 
+    # Onboarding review workflow: a merchant completes every setup step, SUBMITS,
+    # and an admin approves before they get dashboard access.
+    # in_progress -> submitted -> approved | rejected
+    onboarding_status = Column(String(16), default="in_progress", server_default="in_progress")
+    onboarding_submitted_at = Column(DateTime(timezone=True), nullable=True)
+    onboarding_reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    onboarding_reject_reason = Column(String(300), nullable=True)
+
     # Telegram integration
     telegram_chat_id = Column(String(50), nullable=True)  # Set when trader links via /link command
     telegram_approval_enabled = Column(Boolean, default=False)  # Require Telegram YES/NO for every sell order

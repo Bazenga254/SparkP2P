@@ -26,7 +26,7 @@ const sidebarSections = [
       { key: 'disputes', icon: AlertTriangle, label: 'Disputes' },
       { key: 'unmatched', icon: Banknote, label: 'Unmatched Payments' },
       { key: 'affiliates', icon: Share2, label: 'Affiliates' },
-      { key: 'kyc', icon: UserCheck, label: 'KYC Verification' },
+      { key: 'kyc', icon: UserCheck, label: 'KYC / Onboarding' },
     ],
   },
   {
@@ -265,6 +265,29 @@ export default function Admin() {
   const [viewingTraderWallet, setViewingTraderWallet] = useState(null);
   // KYC admin state
   const [kycTraders, setKycTraders] = useState([]);
+  const [onbReqs, setOnbReqs] = useState([]);          // onboarding requests awaiting/after review
+  const [onbBusy, setOnbBusy] = useState(null);        // trader id currently being approved/rejected
+  const [onbRejecting, setOnbRejecting] = useState(null);  // trader id whose reject box is open (window.prompt is blocked in desktop)
+  const [onbRejectReason, setOnbRejectReason] = useState('');
+  const loadOnbReqs = async () => {
+    try { const r = await api.get('/admin/onboarding/requests'); setOnbReqs(r.data.requests || []); }
+    catch { /* ignore */ }
+  };
+  const approveOnb = async (id) => {
+    setOnbBusy(id);
+    try { await api.post(`/admin/traders/${id}/onboarding/approve`); await loadOnbReqs(); }
+    catch (e) { alert(e.response?.data?.detail || 'Approve failed.'); }
+    setOnbBusy(null);
+  };
+  const rejectOnb = async (id) => {
+    setOnbBusy(id);
+    try {
+      await api.post(`/admin/traders/${id}/onboarding/reject`, { reason: onbRejectReason.trim() });
+      setOnbRejecting(null); setOnbRejectReason('');
+      await loadOnbReqs();
+    } catch (e) { alert(e.response?.data?.detail || 'Reject failed.'); }
+    setOnbBusy(null);
+  };
   const [kycLiveResult, setKycLiveResult] = useState(null);
   const [kycLiveLoading, setKycLiveLoading] = useState(false);
   const [kycResetting, setKycResetting] = useState(null); // trader_id being reset
@@ -1143,6 +1166,7 @@ export default function Admin() {
     if (activeTab === 'kyc') {
       adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {});
       adminGetKycSubmissions().then(r => setKycSubmissions(r.data.submissions || [])).catch(() => {});
+      loadOnbReqs();
     }
     if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('today', 'all', 1); loadImBot('today'); setExpSubView('revenue'); }
     if (activeTab === 'settings') { loadEmployees(); }
@@ -6231,18 +6255,75 @@ export default function Admin() {
               {/* Page header */}
               <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', marginBottom: 26 }}>
                 <div>
-                  <h1 style={{ fontFamily: 'inherit', fontSize: 27, fontWeight: 700, letterSpacing: '-0.02em', margin: 0, color: '#EAEEF5' }}>KYC Verification</h1>
-                  <p style={{ color: '#8A94A6', marginTop: 4, fontSize: 13.5 }}>Review trader identity submissions and approve accounts for trading.</p>
+                  <h1 style={{ fontFamily: 'inherit', fontSize: 27, fontWeight: 700, letterSpacing: '-0.02em', margin: 0, color: '#EAEEF5' }}>KYC / Onboarding</h1>
+                  <p style={{ color: '#8A94A6', marginTop: 4, fontSize: 13.5 }}>Approve onboarding requests to grant dashboard access, and review Choice Bank KYC submissions.</p>
                 </div>
                 <div style={{ display: 'flex', gap: 10 }}>
                   <button onClick={() => {
                     adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {});
                     adminGetKycSubmissions().then(r => setKycSubmissions(r.data.submissions || [])).catch(() => {});
+                    loadOnbReqs();
                   }} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 16px', borderRadius: 10, fontWeight: 600, fontSize: 13, cursor: 'pointer', border: '1px solid #232B3A', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', boxShadow: '0 8px 18px -8px rgba(245,165,36,0.6)' }}>
                     <RefreshCw size={14} /> Refresh
                   </button>
                 </div>
               </div>
+
+              {/* ── Onboarding Requests — merchants who submitted setup for approval ── */}
+              {(() => {
+                const pendingReqs = onbReqs.filter(r => r.status === 'submitted');
+                const STEP_LABELS = { binance: 'Binance', settlement: 'Settlement', security_question: 'Security Q', totp: '2FA', choice_bank: 'Choice Bank', im_bot: 'I&M Bot' };
+                return (
+                  <div style={{ ...S.surface, padding: '18px 20px', marginBottom: 30 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#EAEEF5' }}>Onboarding Requests</h2>
+                      <span style={{ padding: '2px 9px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: pendingReqs.length ? 'rgba(245,165,36,0.15)' : 'rgba(96,110,135,0.14)', color: pendingReqs.length ? '#F5A524' : '#8A94A6' }}>{pendingReqs.length} pending</span>
+                    </div>
+                    <p style={{ color: '#8A94A6', margin: '0 0 14px', fontSize: 13 }}>Approving grants the merchant access to their dashboard.</p>
+                    {onbReqs.length === 0 ? (
+                      <div style={{ color: '#5C6577', fontSize: 13, padding: '10px 0' }}>No onboarding submissions yet.</div>
+                    ) : (
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        {onbReqs.map(r => (
+                          <div key={r.id} style={{ border: '1px solid #1A2130', borderRadius: 10, padding: '12px 14px', background: '#0F1420' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+                              <div>
+                                <div style={{ color: '#EAEEF5', fontWeight: 700, fontSize: 14 }}>{r.full_name || r.email}</div>
+                                <div style={{ color: '#8A94A6', fontSize: 12 }}>{r.email} · {r.phone || '—'}{r.submitted_at ? ` · submitted ${fmtDateEAT(r.submitted_at)}` : ''}</div>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                {r.status === 'approved' && <span style={{ color: '#34D399', fontWeight: 700, fontSize: 13 }}>✓ Approved</span>}
+                                {r.status === 'rejected' && <span style={{ color: '#ef4444', fontWeight: 700, fontSize: 13 }}>Sent back</span>}
+                                {r.status === 'submitted' && (
+                                  <>
+                                    <button disabled={onbBusy === r.id} onClick={() => approveOnb(r.id)} style={{ padding: '7px 14px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer', background: '#16794A', color: '#D6FFE9' }}>{onbBusy === r.id ? '…' : 'Approve'}</button>
+                                    <button disabled={onbBusy === r.id} onClick={() => { setOnbRejecting(onbRejecting === r.id ? null : r.id); setOnbRejectReason(''); }} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid #3A2530', fontWeight: 700, fontSize: 13, cursor: 'pointer', background: 'transparent', color: '#fca5a5' }}>Reject</button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            {/* step chips */}
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+                              {Object.entries(STEP_LABELS).map(([k, label]) => {
+                                const ok = r.steps?.[k];
+                                return <span key={k} style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: ok ? 'rgba(52,211,153,0.12)' : 'rgba(239,68,68,0.1)', color: ok ? '#34D399' : '#ef4444' }}>{ok ? '✓' : '✕'} {label}</span>;
+                              })}
+                              {r.choice_kyc_status && <span style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, background: 'rgba(96,110,135,0.14)', color: '#8A94A6' }}>Choice KYC: {r.choice_kyc_status}</span>}
+                            </div>
+                            {r.reject_reason && r.status === 'rejected' && <div style={{ marginTop: 8, fontSize: 12, color: '#fca5a5' }}>Reason: {r.reject_reason}</div>}
+                            {onbRejecting === r.id && (
+                              <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <input value={onbRejectReason} onChange={e => setOnbRejectReason(e.target.value)} placeholder="Reason the merchant will see…" style={{ flex: 1, minWidth: 220, padding: '8px 10px', borderRadius: 8, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                                <button disabled={onbBusy === r.id} onClick={() => rejectOnb(r.id)} style={{ padding: '8px 14px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer', background: '#7F1D1D', color: '#fecaca' }}>Send back</button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Stats row */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 30 }}>
@@ -6792,7 +6873,7 @@ export default function Admin() {
               { key: 'withdrawals', label: 'Withdrawals',       icon: Wallet        },
               { key: 'paybill',     label: 'Paybill Txns',      icon: Banknote      },
               { key: 'unmatched',   label: 'Unmatched Payments',icon: Banknote      },
-              { key: 'kyc',         label: 'KYC Verification',  icon: UserCheck     },
+              { key: 'kyc',         label: 'KYC / Onboarding',  icon: UserCheck     },
               { key: 'expenses',    label: 'Revenue',           icon: Receipt       },
               { key: 'affiliates',  label: 'Affiliates',        icon: Share2        },
               { key: 'security',    label: 'Security',          icon: Shield        },

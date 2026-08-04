@@ -4327,6 +4327,78 @@ async def admin_list_kyc_traders(
     return {"traders": data}
 
 
+# ── Onboarding review — merchants who SUBMITTED their setup for approval ──────
+
+@router.get("/onboarding/requests")
+async def admin_onboarding_requests(
+    admin: Trader = Depends(get_employee_or_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Merchants who submitted onboarding (awaiting approval) plus recently reviewed
+    ones, each with the per-step breakdown so the admin can review at a glance."""
+    from app.services import onboarding as _onb
+    rows = (await db.execute(
+        select(Trader)
+        .where(Trader.onboarding_status.in_(["submitted", "approved", "rejected"]))
+        .order_by(Trader.onboarding_submitted_at.desc().nullslast())
+    )).scalars().all()
+    out = []
+    for t in rows:
+        st = await _onb.state(db, t)
+        out.append({
+            "id": t.id,
+            "full_name": t.full_name,
+            "email": t.email,
+            "phone": t.phone,
+            "status": t.onboarding_status,
+            "submitted_at": t.onboarding_submitted_at.isoformat() if t.onboarding_submitted_at else None,
+            "reviewed_at": t.onboarding_reviewed_at.isoformat() if t.onboarding_reviewed_at else None,
+            "reject_reason": t.onboarding_reject_reason,
+            "steps": st["steps"],
+            "choice_kyc_status": t.choice_kyc_status or None,
+            "payout_rail": payout_rail_of(t),
+        })
+    return {"requests": out, "pending": sum(1 for r in out if r["status"] == "submitted")}
+
+
+@router.post("/traders/{trader_id}/onboarding/approve")
+async def admin_approve_onboarding(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve a submitted onboarding → the merchant gets dashboard access."""
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.onboarding_status = "approved"
+    trader.onboarding_reviewed_at = datetime.now(timezone.utc)
+    trader.onboarding_reject_reason = None
+    await db.commit()
+    logger.info("[Admin] onboarding APPROVED for trader %s by admin %s", trader_id, admin.id)
+    return {"status": "approved", "trader_id": trader_id}
+
+
+@router.post("/traders/{trader_id}/onboarding/reject")
+async def admin_reject_onboarding(
+    trader_id: int,
+    body: dict,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a submitted onboarding back with a reason → merchant fixes + resubmits."""
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.onboarding_status = "rejected"
+    trader.onboarding_reviewed_at = datetime.now(timezone.utc)
+    trader.onboarding_reject_reason = ((body or {}).get("reason") or "").strip()[:300] \
+        or "Please review your setup and resubmit."
+    await db.commit()
+    logger.info("[Admin] onboarding REJECTED for trader %s by admin %s", trader_id, admin.id)
+    return {"status": "rejected", "trader_id": trader_id}
+
+
 @router.get("/kyc/status/{trader_id}")
 async def admin_get_kyc_live_status(
     trader_id: int,

@@ -40,7 +40,12 @@ function RequireOnboarded({ children }) {
   if (loading) return <div className="loading">Loading...</div>;
   if (!user) return <Navigate to="/login" />;
   const isTrader = (user.role || 'trader') === 'trader' && !user.is_admin;
-  const mustOnboard = isTrader && user.onboarding_complete === false && !(user.total_trades > 0);
+  // Dashboard access needs an ADMIN-APPROVED onboarding. Anything else
+  // (in_progress / submitted / rejected) is sent to /onboarding, which shows the
+  // right screen — the steps, or a "waiting for approval" message. Accounts that
+  // have already traded are grandfathered so no active merchant is locked out.
+  const approved = user.onboarding_status === 'approved';
+  const mustOnboard = isTrader && !approved && !(user.total_trades > 0);
   if (mustOnboard) return <Navigate to="/onboarding" replace />;
   return children;
 }

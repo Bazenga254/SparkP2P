@@ -150,6 +150,9 @@ class TraderProfileResponse(BaseModel):
     subscription_status: Optional[str] = None
     subscription_expires: Optional[str] = None
     onboarding_complete: bool = False
+    onboarding_status: str = "in_progress"     # in_progress | submitted | approved | rejected
+    onboarding_steps: Optional[dict] = None    # per-step booleans for the wizard
+    onboarding_reject_reason: Optional[str] = None
     security_question: Optional[str] = None
     last_extension_sync: Optional[str] = None
     last_web_active: Optional[str] = None
@@ -1192,6 +1195,9 @@ async def get_profile(
         and bool(trader.security_question)
         and bool(trader.totp_secret)
     )
+    # Full onboarding state (adds Choice Bank + I&M Bot steps and the review status)
+    from app.services import onboarding as _onb
+    _onb_state = await _onb.state(db, trader)
 
     return TraderProfileResponse(
         id=trader.id,
@@ -1218,6 +1224,9 @@ async def get_profile(
         subscription_status=sub_status,
         subscription_expires=sub_expires,
         onboarding_complete=bool(onboarding_complete),
+        onboarding_status=_onb_state["status"],
+        onboarding_steps=_onb_state["steps"],
+        onboarding_reject_reason=_onb_state["reject_reason"],
         security_question=trader.security_question,
         last_extension_sync=trader.last_extension_sync.isoformat() if trader.last_extension_sync else None,
         last_web_active=trader.last_web_active.isoformat() if trader.last_web_active else None,
@@ -1299,6 +1308,33 @@ async def get_profile(
         choice_kyc_status=trader.choice_kyc_status or None,
         choice_paybill=settings.CHOICE_BANK_PAYBILL,
     )
+
+
+@router.post("/onboarding/submit")
+async def submit_onboarding(
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Merchant finished every setup step and submits for admin approval. Sets the
+    status to 'submitted' — the account then appears on the admin KYC/Onboarding
+    page for review, and the merchant sees a 'waiting for approval' screen until an
+    admin approves (→ dashboard) or rejects (→ back to the steps with a reason)."""
+    from app.services import onboarding as _onb
+    if trader.onboarding_status == "approved":
+        return {"status": "approved"}
+    st = await _onb.state(db, trader)
+    if not st["all_steps_done"]:
+        missing = [k for k, v in st["steps"].items() if not v]
+        raise HTTPException(status_code=400, detail={
+            "code": "onboarding_incomplete",
+            "message": "Please finish every setup step before submitting.",
+            "missing": missing,
+        })
+    trader.onboarding_status = "submitted"
+    trader.onboarding_submitted_at = datetime.now(timezone.utc)
+    trader.onboarding_reject_reason = None
+    await db.commit()
+    return {"status": "submitted"}
 
 
 @router.post("/connect-binance")
