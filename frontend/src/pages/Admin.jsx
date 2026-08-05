@@ -371,9 +371,9 @@ export default function Admin() {
   const [choiceDetailLoading, setChoiceDetailLoading] = useState({}); // tx.id -> bool
   const [orders, setOrders] = useState({ total: 0, orders: [] });
   const [txPeriod, setTxPeriod] = useState('today');   // fiat period
-  const [cryptoPeriod, setCryptoPeriod] = useState('all'); // crypto period — default all
+  const [cryptoPeriod, setCryptoPeriod] = useState('today'); // crypto period — default today
   const [txType, setTxType] = useState('fiat'); // 'fiat' | 'crypto' | 'imbot'
-  const [imTxPeriod, setImTxPeriod] = useState('all');   // I&M charges period
+  const [imTxPeriod, setImTxPeriod] = useState('today');   // I&M charges period — default today
   const [imCharges, setImCharges] = useState([]);
   const [imChargesTotal, setImChargesTotal] = useState(0);
   const [imChargesLoading, setImChargesLoading] = useState(false);
@@ -508,7 +508,7 @@ export default function Admin() {
   const [paybillLoading, setPaybillLoading] = useState(false);
   // Subscriptions tab state
   const [subView, setSubView] = useState('plans');
-  const [subPeriod, setSubPeriod] = useState('all');
+  const [subPeriod, setSubPeriod] = useState('today');
   const [subPage, setSubPage] = useState(1);
   const [subData, setSubData] = useState({ transactions: [], total: 0, pages: 1, summary: {} });
   const [subLoading, setSubLoading] = useState(false);
@@ -1162,7 +1162,7 @@ export default function Admin() {
   useEffect(() => {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
     if (activeTab === 'withdrawals') { loadWithdrawals(); }
-    if (activeTab === 'paybill') { loadSubData('plans', 'all', 1); }
+    if (activeTab === 'paybill') { setSubPeriod('today'); loadSubData('plans', 'today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'kyc') {
       adminGetKycTraders().then(r => setKycTraders(r.data.traders || [])).catch(() => {});
@@ -1274,6 +1274,12 @@ export default function Admin() {
     }
     setImChargesLoading(false);
   };
+
+  // Default the Transactions sub-tabs (Crypto + I&M Bot) to Today every time the
+  // page is opened, rather than remembering a previous 'All' selection.
+  useEffect(() => {
+    if (activeTab === 'transactions') { setCryptoPeriod('today'); setImTxPeriod('today'); }
+  }, [activeTab]);
 
   // Keep the dashboard's "Recent orders" widget live — it otherwise only loads
   // once on mount and freezes, so new orders never appear until a manual reload.
