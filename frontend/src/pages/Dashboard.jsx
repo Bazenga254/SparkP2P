@@ -901,6 +901,7 @@ export default function Dashboard() {
     cbDepositTimers.current = [];
   }, []);
   const [txFilter, setTxFilter] = useState('all');
+  const [expandedTx, setExpandedTx] = useState(null);   // merchant tx row expanded for full details
   // Part 1: I&M outbound tracker (Day/Week/Month, trading-day boundary)
   const [imOutPeriod, setImOutPeriod] = useState('day');
   const [imOutData, setImOutData] = useState(null);
@@ -2899,21 +2900,21 @@ export default function Dashboard() {
               const wdTotal  = allTxns.filter(t => t.kind === 'withdrawal').reduce((s, t) => s + t.amount, 0);
               const fmt = v => 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
               return (
-                <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
-                  <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+                  <div style={{ flex: '1 1 45%', minWidth: 140, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 12, padding: '14px 18px' }}>
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total Inbound</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#10b981' }}>{fmt(inTotal)}</div>
                   </div>
-                  <div style={{ flex: 1, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                  <div style={{ flex: '1 1 45%', minWidth: 140, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 12, padding: '14px 18px' }}>
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Total Outbound</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#ef4444' }}>{fmt(outTotal)}</div>
                   </div>
-                  <div style={{ flex: 1, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: '14px 18px' }}>
+                  <div style={{ flex: '1 1 45%', minWidth: 140, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 12, padding: '14px 18px' }}>
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Withdrawn</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#f59e0b' }}>{fmt(wdTotal)}</div>
                   </div>
                   {/* Part 1 — I&M outbound, tracked over the trading day/week/month */}
-                  <div style={{ flex: 1, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', borderRadius: 12, padding: '14px 18px' }}>
+                  <div style={{ flex: '1 1 45%', minWidth: 140, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', borderRadius: 12, padding: '14px 18px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                       <div style={{ fontSize: 11, color: '#6b7280' }}>I&amp;M Sent</div>
                       <div style={{ display: 'flex', gap: 2 }}>
@@ -2931,7 +2932,7 @@ export default function Dashboard() {
             })()}
 
             {/* Filters + Refresh */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
               {[['all', 'All'], ['in', 'Inbound'], ['out', 'Outbound'], ['withdrawal', 'Withdrawals']].map(([v, l]) => (
                 <button key={v} onClick={() => setTxFilter(v)} style={{ padding: '6px 16px', borderRadius: 20, border: '1px solid', borderColor: txFilter === v ? '#10b981' : 'var(--border)', background: txFilter === v ? 'rgba(16,185,129,0.15)' : 'transparent', color: txFilter === v ? '#10b981' : '#6b7280', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                   {l}
@@ -2984,48 +2985,75 @@ export default function Dashboard() {
                   const isIn = t.direction === 'in';
                   const dateStr = new Date(t.created_at).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: true });
                   const fmtAmt = v => 'KES ' + v.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                  const open = expandedTx === t.id;
+                  const fullDate = new Date(t.created_at).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+                  const details = [
+                    ['Reference', t.reference],
+                    ['M-Pesa / bank code', t.mpesa_receipt && t.mpesa_receipt !== t.reference ? t.mpesa_receipt : ''],
+                    [isIn ? 'From' : 'To', t.destination || t.phone],
+                    ['Counterparty', t.counterparty_name],
+                    ['Type', t.description !== t.label ? t.description : t.label],
+                    ['Fee', (t.fee || t.tx_fee) ? `KES ${t.fee || t.tx_fee}` : (isIn ? '—' : 'KES 0')],
+                    ['Status', t.status || 'completed'],
+                    ['Date & time', fullDate],
+                  ].filter(([, v]) => v);
                   return (
-                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 18px', borderBottom: i < arr.length - 1 ? '1px solid #111827' : 'none' }}>
-                      <div style={{ width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isIn ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)', fontSize: 17, flexShrink: 0 }}>
-                        {t.icon || (isIn ? '↙️' : '↗️')}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 2 }}>
-                          {t.label}
-                          {t.counterparty_name && <span style={{ color: '#9aa4b2', fontWeight: 500 }}> · {t.counterparty_name}</span>}
+                    <div key={t.id} style={{ borderBottom: i < arr.length - 1 ? '1px solid #111827' : 'none' }}>
+                      <div onClick={() => setExpandedTx(open ? null : t.id)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '13px 18px', cursor: 'pointer', background: open ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
+                        <div style={{ width: 38, height: 38, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: isIn ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)', fontSize: 17, flexShrink: 0 }}>
+                          {t.icon || (isIn ? '↙️' : '↗️')}
                         </div>
-                        <div style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {t.description !== t.label ? t.description : ''}{t.phone ? ' · ' + t.phone : ''} · {dateStr}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: '#fff', marginBottom: 2 }}>
+                            {t.label}
+                            {t.counterparty_name && <span style={{ color: '#9aa4b2', fontWeight: 500 }}> · {t.counterparty_name}</span>}
+                          </div>
+                          <div style={{ fontSize: 11, color: '#6b7280', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {t.description !== t.label ? t.description : ''}{t.phone ? ' · ' + t.phone : ''} · {dateStr}
+                          </div>
+                          {t.reference && <div style={{ fontSize: 10, color: '#4b5563', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Ref: {t.reference}</div>}
                         </div>
-                        {t.reference && <div style={{ fontSize: 10, color: '#4b5563', marginTop: 1 }}>Ref: {t.reference}</div>}
-                      </div>
-                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
-                          {isIn ? '+' : '-'}{fmtAmt(t.amount)}
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: isIn ? '#10b981' : '#ef4444' }}>
+                            {isIn ? '+' : '-'}{fmtAmt(t.amount)}
+                          </div>
+                          {!isIn && t.tx_fee > 0 && (
+                            <div style={{ fontSize: 10, color: '#6b7280', marginTop: 1 }}>Fee: KES {t.tx_fee}</div>
+                          )}
+                          {t.status === 'completed' && !isIn && (
+                            <div style={{ fontSize: 10, color: '#10b981', marginTop: 1 }}>✓ completed</div>
+                          )}
+                          {t.status && t.status !== 'completed' && (
+                            <div style={{ fontSize: 10, color: t.status === 'failed' ? '#ef4444' : '#f59e0b', marginTop: 1 }}>{t.status}</div>
+                          )}
                         </div>
-                        {!isIn && t.tx_fee > 0 && (
-                          <div style={{ fontSize: 10, color: '#6b7280', marginTop: 1 }}>Fee: KES {t.tx_fee}</div>
-                        )}
-                        {t.status === 'completed' && !isIn && (
-                          <div style={{ fontSize: 10, color: '#10b981', marginTop: 1 }}>✓ completed</div>
-                        )}
-                        {t.status && t.status !== 'completed' && (
-                          <div style={{ fontSize: 10, color: t.status === 'failed' ? '#ef4444' : '#f59e0b', marginTop: 1 }}>{t.status}</div>
-                        )}
-                        {/* Reverse — only a completed outbound Choice Bank txn (UTRANS ref) within 30 days */}
-                        {(() => {
-                          const eligible = !isIn && t.status === 'completed'
-                            && t.reference && String(t.reference).startsWith('UTRANS')
-                            && (Date.now() - new Date(t.created_at).getTime()) < 30 * 24 * 3600 * 1000;
-                          if (!eligible) return null;
-                          return (
-                            <button onClick={() => { setReverseMsg(null); setReverseTarget(t); }}
-                              style={{ marginTop: 5, padding: '3px 10px', borderRadius: 6, border: '1px solid #7f1d1d', background: 'rgba(239,68,68,0.10)', color: '#f87171', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-                              ↩ Reverse
-                            </button>
-                          );
-                        })()}
+                        <span style={{ color: '#4b5563', fontSize: 13, flexShrink: 0, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s' }}>›</span>
                       </div>
+                      {open && (
+                        <div style={{ padding: '2px 18px 14px 70px', background: 'rgba(255,255,255,0.02)' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '9px 16px' }}>
+                            {details.map(([k, v]) => (
+                              <div key={k}>
+                                <div style={{ color: '#6b7280', fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 1 }}>{k}</div>
+                                <div style={{ color: '#e5e7eb', fontSize: 12, wordBreak: 'break-all' }}>{v}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {/* Reverse — only a completed outbound Choice Bank txn (UTRANS ref) within 30 days */}
+                          {(() => {
+                            const eligible = !isIn && t.status === 'completed'
+                              && t.reference && String(t.reference).startsWith('UTRANS')
+                              && (Date.now() - new Date(t.created_at).getTime()) < 30 * 24 * 3600 * 1000;
+                            if (!eligible) return null;
+                            return (
+                              <button onClick={(e) => { e.stopPropagation(); setReverseMsg(null); setReverseTarget(t); }}
+                                style={{ marginTop: 12, padding: '5px 14px', borderRadius: 7, border: '1px solid #7f1d1d', background: 'rgba(239,68,68,0.10)', color: '#f87171', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                ↩ Reverse this transaction
+                              </button>
+                            );
+                          })()}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
