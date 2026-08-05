@@ -7694,6 +7694,10 @@ body {
 .fin-comp-fee .fin-c-value{color:var(--fin-blue)}
 .fin-comp-im .fin-c-value{color:#f59e0b}
 .fin-c-note{font-size:12px;color:var(--fin-dim);line-height:1.55}
+/* Horizontal-scroll wrapper for wide finance tables so nothing is cut on mobile */
+.fin-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.fin-scroll .fin-table{min-width:640px}
+.fin-scroll .fin-table thead th,.fin-scroll .fin-table tbody td{white-space:nowrap}
 .fin-table{width:100%;border-collapse:collapse}
 .fin-table thead th{text-align:left;font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;
   color:var(--fin-dim);font-weight:600;padding:14px 24px 14px}

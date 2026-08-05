@@ -5900,6 +5900,7 @@ export default function Admin() {
                       <span className="fin-badge">{(obBreakdown?.total?.count ?? 0).toLocaleString()} transactions</span>
                     </div>
                     <div className="fin-card">
+                      <div className="fin-scroll">
                       <table className="fin-table">
                         <thead>
                           <tr>
@@ -5934,6 +5935,7 @@ export default function Admin() {
                           </tr>
                         </tfoot>
                       </table>
+                      </div>
                       {/* Invoice generator */}
                       <div className="fin-table-toolbar">
                         <div className="fin-tt-label">
