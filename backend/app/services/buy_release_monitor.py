@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 DELAY_MINUTES = 10          # nag once the seller is this many minutes late releasing
 MAX_AGE_MINUTES = 180       # keep watching a paid order for up to 3h, then give up
-_CHECK_EVERY = 25           # seconds between scans (release should surface within ~25s)
+_CHECK_EVERY = 5            # seconds between scans — fast re-mark/release so a stuck
+                            # order doesn't park the queue (orders are paid one-by-one)
 _notified: set[int] = set()  # order ids already nagged (in-memory; resets on restart)
 
 
