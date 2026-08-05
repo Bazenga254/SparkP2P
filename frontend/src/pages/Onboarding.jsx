@@ -35,6 +35,7 @@ import {
   Smartphone,
   Landmark,
   Clock,
+  Bell,
 } from 'lucide-react';
 
 const BANK_PAYBILLS = {
@@ -56,6 +57,7 @@ const STEPS = [
   { key: 'authenticator', title: '2FA Setup', icon: Smartphone },
   { key: 'choice', title: 'Choice Bank', icon: Landmark },
   { key: 'imbot', title: 'I&M Bot', icon: Download },
+  { key: 'telegram', title: 'Telegram', icon: Bell },
 ];
 
 export default function Onboarding() {
@@ -75,6 +77,9 @@ export default function Onboarding() {
   const [cbTokenErr, setCbTokenErr] = useState('');
   // I&M Bot connect check (step 6)
   const [imChecking, setImChecking] = useState(false);
+  // Telegram connect (step 7)
+  const [tgCode, setTgCode] = useState(null);
+  const [tgCodeLoading, setTgCodeLoading] = useState(false);
 
   // Extension step
   const [extensionInstalled, setExtensionInstalled] = useState(false);
@@ -251,7 +256,8 @@ export default function Onboarding() {
       else if (!s.settlement) step = 3;                                                // settlement
       else if (!s.security_question || !s.totp) step = 4;                              // 2FA
       else if (!s.choice_bank) step = 5;                                               // Choice Bank
-      else step = 6;                                                                   // I&M Bot / submit
+      else if (!s.im_bot) step = 6;                                                    // I&M Bot
+      else step = 7;                                                                   // Telegram / submit
       setCurrentStep(step);
       if (step === 4) {
         // If the security question is already set, land on the Authenticator sub-step.
@@ -465,6 +471,23 @@ export default function Onboarding() {
   }, [currentStep, profile?.onboarding_steps?.choice_bank]);
 
   const handleImCheck = async () => { setImChecking(true); await refreshProfile(); setImChecking(false); };
+
+  // --- Step 7: connect Telegram (generate a /link code, poll until linked) ---
+  const handleTgConnect = async () => {
+    setTgCodeLoading(true);
+    try {
+      const r = await api.post('/telegram/generate-link-code');
+      setTgCode(r.data);
+      const poll = setInterval(async () => {
+        try {
+          const s = await api.get('/telegram/status');
+          if (s.data?.connected) { clearInterval(poll); setTgCode(null); await refreshProfile(); }
+        } catch { /* keep polling */ }
+      }, 5000);
+      setTimeout(() => clearInterval(poll), 180000);
+    } catch { /* ignore */ }
+    setTgCodeLoading(false);
+  };
 
   const canAdvanceStep2 = profile?.binance_connected;
   const canAdvanceStep3 = settlementSaved || profile?.settlement_method;
@@ -1450,19 +1473,69 @@ export default function Onboarding() {
               </div>
             )}
 
-            {submitErr && <p style={{ textAlign: 'center', fontSize: 13, color: '#ef4444', marginTop: 6 }}>{submitErr}</p>}
-
             <div className="onb-actions" style={{ marginTop: 20 }}>
               <button className="onb-btn-ghost" onClick={() => setCurrentStep(5)}><ChevronLeft size={18} /> Back</button>
-              <button className="onb-btn-primary" disabled={!profile?.onboarding_steps?.im_bot || submitting}
-                style={{ opacity: profile?.onboarding_steps?.im_bot && !submitting ? 1 : 0.4, cursor: profile?.onboarding_steps?.im_bot && !submitting ? 'pointer' : 'not-allowed' }}
-                onClick={handleSubmitForReview}>
-                {submitting ? 'Submitting…' : 'Submit for review'} <ChevronRight size={18} />
+              <button className="onb-btn-primary" disabled={!profile?.onboarding_steps?.im_bot}
+                style={{ opacity: profile?.onboarding_steps?.im_bot ? 1 : 0.4, cursor: profile?.onboarding_steps?.im_bot ? 'pointer' : 'not-allowed' }}
+                onClick={() => setCurrentStep(7)}>
+                Continue <ChevronRight size={18} />
               </button>
             </div>
             {!profile?.onboarding_steps?.im_bot && (
               <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
-                Connect the I&amp;M Bot to submit your account for approval.
+                Connect the I&amp;M Bot to continue.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Step 7 — Telegram notifications (optional but recommended), then submit */}
+        {currentStep === 7 && (
+          <div className="onb-step-content">
+            <div className="onb-step-icon"><Bell size={28} /></div>
+            <h2>Telegram notifications</h2>
+            <p className="onb-step-desc">
+              Connect Telegram to get sell-order approval requests, payment alerts and
+              withdrawal notices in real time. Recommended — you can also set this up later in Settings.
+            </p>
+
+            {profile?.telegram_connected ? (
+              <div style={{ padding: 16, background: 'rgba(52,211,153,0.1)', border: '1px solid rgba(52,211,153,0.4)', borderRadius: 10, textAlign: 'center', marginBottom: 20 }}>
+                <Check size={26} color="#34d399" />
+                <div style={{ color: '#34d399', fontWeight: 700, marginTop: 6 }}>Telegram connected</div>
+                <div style={{ color: '#9ca3af', fontSize: 13, marginTop: 4 }}>You&rsquo;ll receive alerts in @Sparkp2p_bot.</div>
+              </div>
+            ) : tgCode ? (
+              <div style={{ maxWidth: 420, margin: '0 auto 20px', padding: '18px 20px', background: 'rgba(79,70,229,0.08)', border: '1px solid rgba(79,70,229,0.3)', borderRadius: 12 }}>
+                <ol style={{ color: '#d1d5db', fontSize: 14, lineHeight: 1.9, paddingLeft: 20, margin: 0, textAlign: 'left' }}>
+                  <li>Open Telegram and start <strong>@Sparkp2p_bot</strong>.</li>
+                  <li>Send this message to the bot:</li>
+                </ol>
+                <div style={{ margin: '12px 0', padding: '12px 16px', background: '#0f1117', borderRadius: 8, fontFamily: 'monospace', fontSize: 18, fontWeight: 700, color: '#a5b4fc', textAlign: 'center', letterSpacing: 4 }}>
+                  /link {tgCode.code}
+                </div>
+                <a href="https://t.me/Sparkp2p_bot" target="_blank" rel="noreferrer" className="onb-btn-ghost" style={{ display: 'inline-flex', textDecoration: 'none' }}>Open @Sparkp2p_bot</a>
+                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 10 }}>This page updates automatically once connected.</div>
+              </div>
+            ) : (
+              <button className="onb-btn-primary" style={{ margin: '0 auto 20px' }} disabled={tgCodeLoading} onClick={handleTgConnect}>
+                {tgCodeLoading ? 'Generating…' : 'Connect Telegram'}
+              </button>
+            )}
+
+            {submitErr && <p style={{ textAlign: 'center', fontSize: 13, color: '#ef4444', marginTop: 6 }}>{submitErr}</p>}
+
+            <div className="onb-actions" style={{ marginTop: 20 }}>
+              <button className="onb-btn-ghost" onClick={() => setCurrentStep(6)}><ChevronLeft size={18} /> Back</button>
+              <button className="onb-btn-primary" disabled={submitting}
+                style={{ opacity: submitting ? 0.5 : 1 }}
+                onClick={handleSubmitForReview}>
+                {submitting ? 'Submitting…' : 'Submit for review'} <ChevronRight size={18} />
+              </button>
+            </div>
+            {!profile?.telegram_connected && (
+              <p style={{ textAlign: 'center', fontSize: 12, color: '#6b7280', marginTop: 10 }}>
+                Telegram is optional — connect it now or later in Settings.
               </p>
             )}
           </div>
