@@ -1704,6 +1704,24 @@ async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_c
     if body.amount > 250000:
         raise HTTPException(status_code=400, detail="M-Pesa payments are limited to KES 250,000 per transaction")
 
+    # HARD BLOCK: confirm the Paybill/Till shortcode resolves to a registered
+    # business (confirmation-of-payee) BEFORE any money moves. M-Pesa doesn't
+    # validate the account number, but this catches a mistyped shortcode — the
+    # common cause of "debited on Choice but never arrived" on bank paybills like
+    # NCBA Loop / Equity. No verified name → no send.
+    try:
+        _cop = await choice._post("/account/validateAccount", {"accountId": biz, "accountType": 1, "bankCode": "M-PESA"})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Couldn't verify the Paybill/Till before sending — payment blocked to protect your funds. ({exc})")
+    _cop_code = _cop.get("code")
+    if _cop_code == "10001":
+        raise HTTPException(status_code=503, detail="The name check is busy right now — please try again in a moment. (Payment not sent.)")
+    if _cop_code != "00000":
+        raise HTTPException(status_code=400, detail="We couldn't verify this Paybill/Till number — double-check it. Payment blocked to protect your funds.")
+    _payee_name = ((_cop.get("data") or {}).get("accountName") or "").strip()
+    if not _payee_name:
+        raise HTTPException(status_code=400, detail="This Paybill/Till number has no registered business name — payment blocked. Verify the number and try again.")
+
     try:
         result = await choice.mpesa_business_transfer(
             payer_account_id=trader.choice_account_id,
@@ -1728,7 +1746,8 @@ async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_c
         logger.warning(f"[ChoiceBank] paybill sendOtp failed: {exc}")
 
     _pending_paybill[trader.id] = {"tx_id": tx_id, "amount": body.amount, "biz": biz, "acct": acct, "is_paybill": body.is_paybill}
-    return {"status": "otp_sent", "message": "Enter the OTP Choice Bank sent to your registered phone to confirm this payment."}
+    return {"status": "otp_sent", "payee_name": _payee_name,
+            "message": f"Verified: {_payee_name}. Enter the OTP Choice Bank sent to your registered phone to confirm this payment."}
 
 
 @router.post("/choice/pay/paybill/confirm")
