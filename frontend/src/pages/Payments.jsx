@@ -984,7 +984,7 @@ function Paybill({ onDone, onCancel, defaultTill = false }) {
             <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
               <span style={{ fontSize: 16, lineHeight: 1.3 }}>ℹ️</span>
               <div style={{ fontSize: 12.5, color: '#e2c893', lineHeight: 1.55 }}>
-                <strong style={{ color: '#f59e0b' }}>Paying a bank paybill?</strong> For bank paybills (e.g. Equity <b>247247</b>, KCB, Co-op and similar), we recommend using <b>PesaLink</b>, or sending the funds to your <b>M-Pesa</b> and completing the payment from there. M-Pesa cannot verify a bank account number before it is sent, so a mismatched account can be debited without reaching the recipient.
+                <strong style={{ color: '#f59e0b' }}>Paying a bank paybill?</strong> For bank paybills (e.g. Equity <b>247247</b>, KCB, Co-op and similar), we recommend using <b>PesaLink</b>, or sending the funds to your <b>M-Pesa</b> and completing the payment from there. Choice Microfinance Bank cannot verify a bank account number before it is sent, so a mismatched account can be debited without reaching the recipient.
               </div>
             </div>
           </div>
