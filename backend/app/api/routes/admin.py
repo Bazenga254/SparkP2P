@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import create_access_token
-from app.core.trading_day import trading_day_start, trading_month_start, trading_day_key, now_utc
+from app.core.trading_day import trading_day_start, trading_month_start, trading_week_start, trading_day_key, now_utc
 from app.models import Trader, TraderStatus, Order, OrderStatus, Payment, PaymentDirection, PaymentStatus, ChatMessage
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.models.message_template import MessageTemplate
@@ -1550,7 +1550,7 @@ def _get_period_start(period: str):
     if period == "today":
         return trading_day_start(now)
     elif period == "week":
-        return now - timedelta(days=7)
+        return trading_week_start(now)
     elif period == "month":
         return trading_month_start(now)   # calendar month, resets on the 1st
     elif period == "year":
@@ -1776,7 +1776,7 @@ async def admin_analytics(
     """Comprehensive platform analytics."""
     now = datetime.now(timezone.utc)
     today_start = trading_day_start(now)
-    week_start = now - timedelta(days=7)
+    week_start = trading_week_start(now)
     month_start = trading_month_start(now)   # calendar month, resets on the 1st
     year_start = now - timedelta(days=365)
 
@@ -2418,7 +2418,7 @@ async def get_withdrawals(
     if period == "today":
         filters.append(Payment.created_at >= today_start)
     elif period == "week":
-        filters.append(Payment.created_at >= now - timedelta(days=7))
+        filters.append(Payment.created_at >= trading_week_start(now))
     elif period == "month":
         filters.append(Payment.created_at >= trading_month_start(now))
 
@@ -2580,7 +2580,7 @@ async def revenue_breakdown(
     today_start_utc = trading_day_start(now)
     period_starts = {
         "today": today_start_utc,
-        "week":  now - timedelta(days=7),
+        "week":  trading_week_start(now),
         "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
@@ -2773,9 +2773,9 @@ async def outbound_revenue_breakdown(
         start, end = _month_range(month.strip())
         label = start.strftime("%B %Y")
     else:
-        start = {"today": trading_day_start(now), "week": now - timedelta(days=7),
+        start = {"today": trading_day_start(now), "week": trading_week_start(now),
                  "month": trading_month_start(now)}.get(period)
-        end = None; label = {"today": "Today", "week": "Last 7 days", "month": "This month"}.get(period, "All time")
+        end = None; label = {"today": "Today", "week": "This week", "month": "This month"}.get(period, "All time")
     data = await _compute_outbound_breakdown(db, start, end)
     return {**data, "period": period, "month": month or None, "label": label}
 
@@ -2909,7 +2909,7 @@ async def revenue_subscriptions(
     today_start_utc = trading_day_start(now)
     period_starts = {
         "today": today_start_utc,
-        "week":  now - timedelta(days=7),
+        "week":  trading_week_start(now),
         "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
@@ -3076,7 +3076,7 @@ async def im_revenue(
     now = datetime.now(timezone.utc)
     period_starts = {
         "today": trading_day_start(now),
-        "week":  now - timedelta(days=7),
+        "week":  trading_week_start(now),
         "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
@@ -3172,7 +3172,7 @@ async def im_charges_list(
     now = datetime.now(timezone.utc)
     period_starts = {
         "today": trading_day_start(now),
-        "week":  now - timedelta(days=7),
+        "week":  trading_week_start(now),
         "month": trading_month_start(now),   # calendar month, resets on the 1st
         "year":  now - timedelta(days=365),
     }
@@ -3359,7 +3359,7 @@ async def im_configured_traders(
     # bot's current credit balance / online / last-seen stay "now" facts.
     period_starts = {
         "today": trading_day_start(now),
-        "week":  now - timedelta(days=7),
+        "week":  trading_week_start(now),
         "month": trading_month_start(now),   # calendar month, resets on the 1st
     }
     start = period_starts.get(period)
@@ -3543,7 +3543,7 @@ def _apply_period(q, model_col, period, now):
     if period == "today":
         return q.where(model_col >= trading_day_start(now))
     elif period == "week":
-        return q.where(model_col >= now - timedelta(days=7))
+        return q.where(model_col >= trading_week_start(now))
     elif period == "month":
         return q.where(model_col >= trading_month_start(now))
     elif period == "year":

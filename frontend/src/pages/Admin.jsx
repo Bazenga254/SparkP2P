@@ -3260,7 +3260,7 @@ export default function Admin() {
                       <div className="range-toggle">
                         {['today', 'week', 'month'].map(p => (
                           <button key={p} className={`range-btn ${pnlPeriod === p ? 'active' : ''}`} onClick={async () => { setPnlPeriod(p); await loadTraderPnl(t.id, p); }}>
-                            {p === 'today' ? 'Today' : p === 'week' ? '7 days' : '30 days'}
+                            {p === 'today' ? 'Today' : p === 'week' ? 'This week' : 'This month'}
                           </button>
                         ))}
                       </div>
@@ -3337,7 +3337,7 @@ export default function Admin() {
                           {['today', 'week', 'month'].map(pd => (
                             <button key={pd} className={revDetailPeriod === pd ? 'active' : ''}
                               onClick={() => loadTraderRevenueDetail(t.id, pd)}>
-                              {pd === 'today' ? 'Today' : pd === 'week' ? '7 Days' : '30 Days'}
+                              {pd === 'today' ? 'Today' : pd === 'week' ? 'This week' : 'This month'}
                             </button>
                           ))}
                         </div>
@@ -3347,7 +3347,7 @@ export default function Admin() {
                         {revDetail?.total_revenue && (() => {
                           const tr = revDetail.total_revenue;
                           const kes = n => `KES ${Math.round(n || 0).toLocaleString('en-KE')}`;
-                          const perLbl = revDetailPeriod === 'today' ? 'today' : revDetailPeriod === 'week' ? 'last 7 days' : 'last 30 days';
+                          const perLbl = revDetailPeriod === 'today' ? 'today' : revDetailPeriod === 'week' ? 'this week' : 'this month';
                           return (
                             <div style={{ position: 'relative', overflow: 'hidden', border: '1px solid rgba(61,207,142,.28)', background: 'rgba(61,207,142,.06)', borderRadius: 'var(--rad)', padding: '16px 18px', marginBottom: 16 }}>
                               <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: 'var(--pos)' }} />
