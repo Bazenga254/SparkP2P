@@ -899,8 +899,8 @@ export default function Admin() {
     setWdActionLoading(null);
   };
 
-  const loadImBot = async (period = imPeriod, month = '') => {
-    setImLoading(true);
+  const loadImBot = async (period = imPeriod, month = '', silent = false) => {
+    if (!silent) setImLoading(true);
     setImPeriod(period);
     try {
       const [rev, accts, traders] = await Promise.allSettled([
@@ -920,7 +920,7 @@ export default function Admin() {
     } catch (err) {
       console.error('I&M load error:', err);
     }
-    setImLoading(false);
+    if (!silent) setImLoading(false);
   };
 
   const loadRevenueBreakdown = async (period = revPeriod, plan = revPlan, page = revPage, month = revMonth) => {
@@ -1279,9 +1279,17 @@ export default function Admin() {
   // once on mount and freezes, so new orders never appear until a manual reload.
   useEffect(() => {
     if (activeTab !== 'dashboard') return;
-    const poll = setInterval(() => loadOrders(cryptoPeriod, ordersSearch), 15000);
+    const poll = setInterval(() => loadOrders(cryptoPeriod, ordersSearch), 10000);
     return () => clearInterval(poll);
   }, [activeTab, cryptoPeriod, ordersSearch]);
+
+  // Keep the I&M Automation tab live — silently refresh revenue/traders every 10s
+  // (no spinner flicker) so payouts/credits reflect without a manual reload.
+  useEffect(() => {
+    if (activeTab !== 'imbot') return;
+    const poll = setInterval(() => loadImBot(imPeriod, '', true), 10000);
+    return () => clearInterval(poll);
+  }, [activeTab, imPeriod]);
 
   const handleStatusChange = async (traderId, newStatus) => {
     await updateTraderStatus(traderId, newStatus);
