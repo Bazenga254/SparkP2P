@@ -965,9 +965,9 @@ function Paybill({ onDone, onCancel, defaultTill = false }) {
 
   if (step === 'done') return (
     <div className="pm-flow pm-success">
-      <div style={{ fontSize: 56 }}>✅</div>
-      <h2>Payment sent</h2>
-      <p>{fmtKES(amount)} paid to {isPaybill ? `Paybill ${biz} (acc ${acct})` : `Till ${biz}`}.</p>
+      <div style={{ fontSize: 56 }}>⏳</div>
+      <h2>Payment processing</h2>
+      <p>{fmtKES(amount)} to {isPaybill ? `Paybill ${biz} (acc ${acct})` : `Till ${biz}`} is being processed. You'll get a Telegram confirmation the moment it completes — or a notice if it doesn't go through and the money is returned.</p>
       <button className="pm-btn" onClick={onDone}>Done</button>
     </div>
   );
@@ -1069,9 +1069,9 @@ function UtilityBill({ service, onDone, onCancel }) {
 
   if (step === 'done') return (
     <div className="pm-flow pm-success">
-      <div style={{ fontSize: 56 }}>✅</div>
-      <h2>Payment sent</h2>
-      <p>{fmtKES(amount)} paid to {cfg.name} ({cfg.acctLabel.toLowerCase()}: {acct}).</p>
+      <div style={{ fontSize: 56 }}>⏳</div>
+      <h2>Payment processing</h2>
+      <p>{fmtKES(amount)} to {cfg.name} ({cfg.acctLabel.toLowerCase()}: {acct}) is being processed. You'll get a Telegram confirmation once it completes — or a notice if it doesn't go through and the money is returned.</p>
       <button className="pm-btn" onClick={onDone}>Done</button>
     </div>
   );

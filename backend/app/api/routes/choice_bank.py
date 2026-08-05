@@ -191,6 +191,11 @@ async def _handle_transaction_result(params: dict, raw: dict):
 
                     _credits_refunded = False
                     if _existing and _existing.status == PaymentStatus.PENDING:
+                        # Paybill/Till payments are only truly done on this final result —
+                        # notify the merchant of the real outcome so a FAILED transfer
+                        # (money debited but the destination never credited) is never silent.
+                        _is_paybill = (_existing.destination_type or "") in ("mpesa_paybill", "mpesa_till", "kra_paybill")
+                        _ref = tx_id or _existing.mpesa_transaction_id
                         if _tx_success:
                             _existing.status = PaymentStatus.COMPLETED
                             if tx_id:
@@ -202,11 +207,23 @@ async def _handle_transaction_result(params: dict, raw: dict):
                                 _existing.destination_type = _channel
                             await _db.commit()
                             logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->COMPLETED, fee={fee_amount}, channel={_channel}")
+                            if _is_paybill and _trader:
+                                try:
+                                    from app.api.routes.telegram import notify_trader as _nt
+                                    await _nt(_trader, f"✅ KES {int(_existing.amount):,} to {_existing.destination} completed via Choice Bank. Ref: {_ref}")
+                                except Exception:
+                                    pass
                         elif _tx_failed:
                             _existing.status = PaymentStatus.FAILED
                             await _db.commit()
                             # Credits retired — no refund needed (withdrawal fee is withheld by Choice Bank).
                             logger.info(f"[ChoiceBank] 0002: Payment {_existing.id} PENDING->FAILED")
+                            if _is_paybill and _trader:
+                                try:
+                                    from app.api.routes.telegram import notify_trader as _nt
+                                    await _nt(_trader, f"❌ KES {int(_existing.amount):,} to {_existing.destination} did NOT go through — the money was not sent and is returned to your Choice Bank balance. Double-check the paybill/till and account number, then try again. Ref: {_ref}")
+                                except Exception:
+                                    pass
                     elif _tx_success:
                         _db.add(Payment(
                             trader_id=_trader.id,
@@ -1766,12 +1783,19 @@ async def paybill_confirm(body: PaybillConfirm, trader: Trader = Depends(get_cur
         await db.commit()
     except Exception:
         pass
+    # Do NOT claim the money has arrived yet. Confirming the OTP only advances
+    # Choice to 2-PROCESSING (per applyForMpesaBusinessTransfer). The transfer is
+    # only truly done when the 0002 result / getTransResult reports SUCCESS — the
+    # 0002 webhook reconciles that and then notifies the merchant of the real
+    # outcome. Telling them "paid" here made a later-FAILED transfer (e.g. a wrong
+    # bank-paybill account on NCBA Loop / Equity, which M-Pesa doesn't validate at
+    # send time) look successful when the money never landed.
     try:
         from app.api.routes.telegram import notify_trader
-        await notify_trader(trader, f"\U0001F9FE KES {pending['amount']:,.0f} paid via Choice Bank to {_dest}\nRef: {pending['tx_id']}")
+        await notify_trader(trader, f"⏳ KES {pending['amount']:,.0f} to {_dest} is processing via Choice Bank. We'll confirm the moment it completes. Ref: {pending['tx_id']}")
     except Exception:
         pass
-    return {"status": "success", "tx_id": pending["tx_id"], "amount": pending["amount"]}
+    return {"status": "processing", "tx_id": pending["tx_id"], "amount": pending["amount"]}
 
 
 # ── Payments Hub — bank list & account name lookup ────────────────────────────
