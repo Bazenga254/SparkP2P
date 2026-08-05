@@ -36,6 +36,7 @@ guards against paying a seller twice, and one rule against lying about it:
 import logging
 from datetime import datetime, timezone
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -842,16 +843,33 @@ async def result(
                 _tr = await db.get(Trader, trader_id)
                 _ak, _as = _sapi_creds(_tr)
                 relay_trader.set(trader_id)
-                _mp_start = _time.monotonic()
-                _mp = await mark_order_as_paid(_ak, _as, data.order_id)
-                _markpaid_ms = int((_time.monotonic() - _mp_start) * 1000)
-                _ok = _mp.get("code") == "000000" or _mp.get("success") is True
-                logger.info("im-bot result: EP-17 mark-paid for %s -> %s (%s ms)", data.order_id, "ok" if _ok else _mp, _markpaid_ms)
+                # RETRY: a very fast payout can race the relay and the first mark-paid
+                # can fail — which used to leave the order UNPAID on Binance until it
+                # EXPIRED (merchant already paid the seller → money lost). Try a few
+                # times right here; the buy_release_monitor re-marks it as a final net.
+                _ok = False
+                _mp = None
+                for _attempt in range(3):
+                    _mp_start = _time.monotonic()
+                    try:
+                        _mp = await mark_order_as_paid(_ak, _as, data.order_id)
+                        _markpaid_ms = int((_time.monotonic() - _mp_start) * 1000)
+                        _ok = _mp.get("code") == "000000" or _mp.get("success") is True
+                    except Exception as _me:
+                        _mp = {"error": str(_me)}
+                        _ok = False
+                    logger.info("im-bot result: EP-17 mark-paid for %s attempt %d -> %s (%s ms)",
+                                data.order_id, _attempt + 1, "ok" if _ok else _mp, _markpaid_ms)
+                    if _ok:
+                        break
+                    await asyncio.sleep(1.5)   # brief backoff before retrying
                 if not _ok:
-                    await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but marking it PAID on Binance failed. Mark it as paid on Binance manually so the seller releases.")
+                    # Left it for the buy_release_monitor to re-mark automatically; still
+                    # tell the merchant so they can tap 'Paid' themselves if needed.
+                    await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but marking it PAID on Binance failed after 3 tries — we'll keep retrying automatically. If the seller doesn't release soon, open Binance and tap 'Transferred / Paid'.")
             except Exception as _e:
                 logger.error("im-bot result: EP-17 mark-paid errored for %s: %s", data.order_id, _e)
-                await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but could not mark it PAID on Binance ({_e}). Mark it as paid manually so the seller releases.")
+                await _alert(trader_id, f"⚠️ I&M paid buy order …{data.order_id[-8:]} but could not mark it PAID on Binance ({_e}). We'll keep retrying; if the seller doesn't release, mark it paid on Binance manually.")
         else:
             # Already advanced by an earlier result — a duplicate PAID is a no-op.
             # 'applied' must reflect what THIS call did, so the bot never reads a

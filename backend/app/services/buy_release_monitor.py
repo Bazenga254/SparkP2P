@@ -80,7 +80,31 @@ async def buy_release_monitor():
                             logger.info("[BuyReleaseMonitor] order %s is now %s (status %s) — stop watching",
                                         o.binance_order_number, o.status.value, st)
                             continue
-                        # st in ("2","3") -> still awaiting release; fall through to the nag.
+                        if st == "1":
+                            # SAFETY NET for the dangerous case: we PAID this order (it's
+                            # PAYMENT_SENT here), but Binance still shows it as PENDING PAYMENT
+                            # (status 1) — the mark-paid didn't stick when the bot paid (relay
+                            # was busy/racing on a very fast payout). If we don't fix it, the
+                            # order EXPIRES and the merchant loses the money they already sent.
+                            # Re-mark it PAID now (idempotent) so the seller is asked to release.
+                            try:
+                                from app.services.binance.sapi_client import mark_order_as_paid
+                                _mp = await mark_order_as_paid(_ak, _as, o.binance_order_number)
+                                _ok = _mp.get("code") == "000000" or _mp.get("success") is True
+                                logger.warning("[BuyReleaseMonitor] order %s was PAID but Binance showed PENDING — re-marked paid: %s",
+                                               o.binance_order_number, "ok" if _ok else _mp)
+                                if not _ok:
+                                    from app.api.routes.telegram import notify_trader
+                                    await notify_trader(
+                                        trader,
+                                        f"⚠️ URGENT: you already PAID buy order {o.binance_order_number} but Binance still "
+                                        f"shows it UNPAID and we couldn't mark it. Open Binance and tap ‘Transferred / I have paid’ "
+                                        f"NOW so the seller releases before the order expires.",
+                                        side="buy")
+                            except Exception as _me:
+                                logger.warning("[BuyReleaseMonitor] re-mark-paid failed for %s: %s — retry next tick", o.binance_order_number, _me)
+                            continue   # re-marked; check the outcome next tick
+                        # st in ("2","3") -> paid, still awaiting release; fall through to the nag.
                     except Exception as _e:
                         # Can't verify right now (relay down / transient). Don't nag on a
                         # failed check — just retry next tick.
