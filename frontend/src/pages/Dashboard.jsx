@@ -901,6 +901,14 @@ export default function Dashboard() {
     cbDepositTimers.current = [];
   }, []);
   const [txFilter, setTxFilter] = useState('all');
+  // Part 1: I&M outbound tracker (Day/Week/Month, trading-day boundary)
+  const [imOutPeriod, setImOutPeriod] = useState('day');
+  const [imOutData, setImOutData] = useState(null);
+  // Parts 2 & 4: fees report (Day/Week/Month) — withdrawal fees + Choice payout fees
+  const [showFeesModal, setShowFeesModal] = useState(false);
+  const [feesPeriod, setFeesPeriod] = useState('day');
+  const [feesData, setFeesData] = useState(null);
+  const [feesLoading, setFeesLoading] = useState(false);
   const [showCbWithdrawModal, setShowCbWithdrawModal] = useState(false);
   const [cbWithdrawAmount, setCbWithdrawAmount] = useState('');
   const [cbWithdrawOtp, setCbWithdrawOtp] = useState('');
@@ -1463,6 +1471,21 @@ export default function Dashboard() {
       getMyTransactions(100).then(r => { if (r.data) setAllTxns(r.data); }).catch(() => {}).finally(() => setAllTxnsLoading(false));
     }
   }, [botLogs, activeTab]);
+
+  // Part 1: I&M outbound total for the selected period (Day/Week/Month).
+  useEffect(() => {
+    if (activeTab !== 'transactions') return;
+    api.get('/traders/tx-summary', { params: { period: imOutPeriod } })
+      .then(r => setImOutData(r.data)).catch(() => {});
+  }, [activeTab, imOutPeriod]);
+
+  // Parts 2 & 4: fees report — load when the modal opens or its period changes.
+  useEffect(() => {
+    if (!showFeesModal) return;
+    setFeesLoading(true);
+    api.get('/traders/tx-summary', { params: { period: feesPeriod } })
+      .then(r => setFeesData(r.data)).catch(() => {}).finally(() => setFeesLoading(false));
+  }, [showFeesModal, feesPeriod]);
 
   const handleWithdraw = async () => {
     if (!wallet || wallet.balance <= 0) return;
@@ -2889,6 +2912,20 @@ export default function Dashboard() {
                     <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Withdrawn</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: '#f59e0b' }}>{fmt(wdTotal)}</div>
                   </div>
+                  {/* Part 1 — I&M outbound, tracked over the trading day/week/month */}
+                  <div style={{ flex: 1, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', borderRadius: 12, padding: '14px 18px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>I&amp;M Sent</div>
+                      <div style={{ display: 'flex', gap: 2 }}>
+                        {[['day', 'D'], ['week', 'W'], ['month', 'M']].map(([pp, lbl]) => (
+                          <button key={pp} onClick={() => setImOutPeriod(pp)}
+                            style={{ padding: '1px 6px', borderRadius: 6, border: 'none', fontSize: 9.5, fontWeight: 700, cursor: 'pointer', background: imOutPeriod === pp ? 'rgba(139,92,246,0.35)' : 'transparent', color: imOutPeriod === pp ? '#c4b5fd' : '#6b7280' }}>{lbl}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: '#a78bfa' }}>{fmt(imOutData?.im_outbound?.total || 0)}</div>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>{imOutData?.im_outbound?.count || 0} payout(s) · {imOutPeriod === 'day' ? 'today' : imOutPeriod === 'week' ? 'this week' : 'this month'}</div>
+                  </div>
                 </div>
               );
             })()}
@@ -2914,6 +2951,14 @@ export default function Dashboard() {
                   style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
                 >
                   📄 Statement
+                </button>
+              )}
+              {profile?.choice_account_id && (
+                <button
+                  onClick={() => { setFeesData(null); setShowFeesModal(true); }}
+                  style={{ padding: '6px 14px', borderRadius: 20, border: '1px solid rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)', color: '#a78bfa', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}
+                >
+                  💸 Fees
                 </button>
               )}
               <button
@@ -4985,6 +5030,71 @@ export default function Dashboard() {
       )}
 
       {/* Choice Bank statement generation */}
+      {/* Parts 2 & 4 — fees report: withdrawal fees + Choice payout fees, Day/Week/Month */}
+      {showFeesModal && (() => {
+        const kes = v => 'KES ' + Math.round(v || 0).toLocaleString('en-KE');
+        const wf = feesData?.withdrawal_fees; const cp = feesData?.choice_payout_fees;
+        const perLbl = feesPeriod === 'day' ? 'today' : feesPeriod === 'week' ? 'this week' : 'this month';
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            onClick={() => setShowFeesModal(false)}>
+            <div style={{ background: 'var(--surface)', borderRadius: 16, padding: 26, width: 460, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--border)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <h3 style={{ margin: 0, color: '#fff', fontSize: 18 }}>💸 Fees report</h3>
+                <button onClick={() => setShowFeesModal(false)} style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 20 }}>✕</button>
+              </div>
+              <p style={{ color: '#9ca3af', fontSize: 12, margin: '0 0 14px', lineHeight: 1.5 }}>
+                Fees deducted {perLbl} — resets at 3am (EAT).
+              </p>
+              {/* period toggle */}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+                {[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([pp, lbl]) => (
+                  <button key={pp} onClick={() => setFeesPeriod(pp)}
+                    style={{ flex: 1, padding: '7px 0', borderRadius: 8, border: '1px solid', borderColor: feesPeriod === pp ? '#a78bfa' : 'var(--border)', background: feesPeriod === pp ? 'rgba(139,92,246,0.15)' : 'transparent', color: feesPeriod === pp ? '#c4b5fd' : '#9ca3af', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>{lbl}</button>
+                ))}
+              </div>
+              {feesLoading ? (
+                <div style={{ padding: 24, textAlign: 'center', color: '#6b7280' }}>Loading…</div>
+              ) : (
+                <>
+                  {/* Part 2 — withdrawal fees (Choice Bank → I&M PesaLink + M-Pesa) */}
+                  <div style={{ marginBottom: 18 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8 }}>Withdrawal fees (Choice Bank)</div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>PesaLink · {wf?.pesalink_count || 0}</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#ef4444' }}>{kes(wf?.pesalink_fees)}</div>
+                      </div>
+                      <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>M-Pesa · {wf?.mpesa_count || 0}</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#ef4444' }}>{kes(wf?.mpesa_fees)}</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', marginTop: 6, fontSize: 13, color: '#fff' }}>Total: <b style={{ color: '#ef4444' }}>{kes(wf?.total)}</b></div>
+                  </div>
+                  {/* Part 4 — Choice Bank order payout fees (M-Pesa + PesaLink, order-linked only) */}
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '.04em', marginBottom: 8 }}>Choice Bank payout fees (buy orders)</div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>PesaLink · {cp?.pesalink_count || 0} order(s)</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#ef4444' }}>{kes(cp?.pesalink_fees)}</div>
+                      </div>
+                      <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, color: '#6b7280' }}>M-Pesa · {cp?.mpesa_count || 0} order(s)</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: '#ef4444' }}>{kes(cp?.mpesa_fees)}</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', marginTop: 6, fontSize: 13, color: '#fff' }}>Total: <b style={{ color: '#ef4444' }}>{kes(cp?.total)}</b> · {cp?.orders || 0} order(s) · {kes(cp?.volume)} moved</div>
+                    <p style={{ fontSize: 11, color: '#6b7280', marginTop: 8 }}>Only counts buy orders paid from Choice Bank. Manual M-Pesa sends not tied to an order are excluded.</p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {showStmtModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => { if (stmtTimer.current) clearInterval(stmtTimer.current); setShowStmtModal(false); }}>

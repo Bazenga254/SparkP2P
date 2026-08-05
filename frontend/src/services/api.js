@@ -168,6 +168,9 @@ export const deleteEmployee = (id) => api.delete(`/admin/employees/${id}`);
 export const deleteTrader = (id) => api.delete(`/admin/traders/${id}`);
 export const getMyPermissions = () => api.get('/traders/my-permissions');
 
+// Merchant Transactions page aggregates (I&M outbound, withdrawal fees, Choice payout fees)
+export const getTxSummary = (period) => api.get('/traders/tx-summary', { params: { period } });
+
 // Onboarding review workflow
 export const submitOnboarding = () => api.post('/traders/onboarding/submit');
 export const getOnboardingRequests = () => api.get('/admin/onboarding/requests');

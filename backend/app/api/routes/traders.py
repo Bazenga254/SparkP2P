@@ -2842,6 +2842,16 @@ async def get_my_transactions(
         _rem = (p.remarks or "").strip()
         kind = "other"
 
+        # Part 4: hide MANUAL M-Pesa sends the merchant made OUTSIDE of any order
+        # (order_id is NULL and it's an M-Pesa send, not a withdrawal). These aren't
+        # seller payouts — they only clutter the feed and distort the fee totals.
+        _is_withdrawal = _rem.lower().startswith("choice bank withdrawal")
+        if (direction == "out" and p.order_id is None and not _is_withdrawal
+                and ttype == "CHOICE_OUTBOUND"):
+            from app.services.outbound_fees import categorize as _cat0
+            if _cat0(p.transaction_type, p.destination_type) == "B2C":
+                continue
+
         if ttype == "CHOICE_DEPOSIT":
             label, icon = "Choice Bank Deposit", "🏦"
             desc = f"M-Pesa STK to Choice Bank · {p.phone or ''}"
@@ -2937,6 +2947,91 @@ async def get_my_transactions(
     entries.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     return entries[:limit]
 
+
+
+@router.get("/tx-summary")
+async def tx_summary(
+    period: str = "day",   # day | week | month (trading-day aligned, 03:00 EAT reset)
+    trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Money-movement aggregates for the merchant Transactions page:
+      • im_outbound        — sent out via the I&M Bot (completed payouts).      [Part 1]
+      • withdrawal_fees    — fees on Choice Bank withdrawals, M-Pesa / PesaLink. [Part 2]
+      • choice_payout_fees — Choice Bank buy-order seller-payout fees by rail,
+                             ORDER-LINKED ONLY (manual sends excluded).          [Part 4]
+    """
+    from app.core.trading_day import trading_day_start, trading_week_start, trading_month_start, now_utc
+    from app.models.im_payout import ImPayout
+    from app.models import Payment
+    from app.models.order import Order
+    from app.services import outbound_fees as fees
+
+    now = now_utc()
+    start = {"day": trading_day_start(now), "week": trading_week_start(now),
+             "month": trading_month_start(now)}.get(period, trading_day_start(now))
+
+    # Part 1 — I&M outbound (completed payouts in the period)
+    im = (await db.execute(
+        select(func.count(ImPayout.id), func.coalesce(func.sum(ImPayout.amount), 0))
+        .where(ImPayout.trader_id == trader.id, ImPayout.status == "completed",
+               ImPayout.created_at >= start)
+    )).one()
+    im_outbound = {"count": int(im[0] or 0), "total": float(im[1] or 0)}
+
+    # Part 2 — withdrawal fees (Choice Bank withdrawals only, completed)
+    wds = (await db.execute(
+        select(Payment).where(
+            Payment.trader_id == trader.id,
+            Payment.transaction_type == "CHOICE_OUTBOUND",
+            Payment.created_at >= start,
+        )
+    )).scalars().all()
+    wf = {"mpesa_count": 0, "mpesa_fees": 0, "pesalink_count": 0, "pesalink_fees": 0, "total": 0}
+    for p in wds:
+        if not (p.remarks or "").strip().lower().startswith("choice bank withdrawal"):
+            continue
+        _st = p.status.value if hasattr(p.status, "value") else str(p.status)
+        if _st.lower() != "completed":
+            continue
+        prod = fees.categorize(p.transaction_type, p.destination_type)
+        fee = int(fees.product_total_fee(prod, abs(p.amount)))
+        if prod == "B2C":
+            wf["mpesa_count"] += 1; wf["mpesa_fees"] += fee
+        else:
+            wf["pesalink_count"] += 1; wf["pesalink_fees"] += fee
+    wf["total"] = wf["mpesa_fees"] + wf["pesalink_fees"]
+
+    # Part 4 — Choice Bank seller-payout fees, ORDER-LINKED only (order.choice_fee),
+    # split by rail. Manual sends never enter here (they aren't in the orders table).
+    _paid_at = func.coalesce(Order.payment_sent_at, Order.created_at)
+    ord_rows = (await db.execute(
+        select(Order.seller_payment_method,
+               func.count(Order.id),
+               func.coalesce(func.sum(Order.choice_fee), 0),
+               func.coalesce(func.sum(Order.fiat_amount), 0))
+        .where(Order.trader_id == trader.id, Order.choice_fee > 0, _paid_at >= start)
+        .group_by(Order.seller_payment_method)
+    )).all()
+    cp = {"mpesa_count": 0, "mpesa_fees": 0, "mpesa_volume": 0,
+          "pesalink_count": 0, "pesalink_fees": 0, "pesalink_volume": 0,
+          "total": 0, "orders": 0, "volume": 0}
+    for method, cnt, feesum, vol in ord_rows:
+        if (method or "").lower() == "mpesa":
+            cp["mpesa_count"] += int(cnt); cp["mpesa_fees"] += float(feesum); cp["mpesa_volume"] += float(vol)
+        else:  # im_bank / other_bank → PesaLink
+            cp["pesalink_count"] += int(cnt); cp["pesalink_fees"] += float(feesum); cp["pesalink_volume"] += float(vol)
+    cp["total"] = cp["mpesa_fees"] + cp["pesalink_fees"]
+    cp["orders"] = cp["mpesa_count"] + cp["pesalink_count"]
+    cp["volume"] = cp["mpesa_volume"] + cp["pesalink_volume"]
+
+    return {
+        "period": period,
+        "start": start.isoformat(),
+        "im_outbound": im_outbound,
+        "withdrawal_fees": wf,
+        "choice_payout_fees": cp,
+    }
 
 
 # ── Choice Bank → External Bank withdrawal account ────────────────────────────
