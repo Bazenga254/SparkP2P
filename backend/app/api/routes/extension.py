@@ -3385,21 +3385,44 @@ async def choice_pay(
                     f"account to complete this transaction."),
         )
 
+    # ── DOUBLE-PAY GUARD (the I&M-migration gap) ──
+    # A Choice buy payment used to succeed but leave the order PENDING (only the
+    # desktop's report_payment_sent advanced it), so the next scan paid the SAME
+    # seller again — 2 or 3×. Refuse to pay an order that is already advanced, and
+    # take an in-flight lock so a re-scan during the OTP/settle window can't start a
+    # second payment. _finalise_choice_payment now advances the order itself after a
+    # confirmed transfer, so once paid the next scan skips it.
+    _ord = (await db.execute(
+        select(Order).where(Order.binance_order_number == data.order_number, Order.trader_id == trader.id)
+    )).scalar_one_or_none()
+    if _ord is not None and _ord.status != OrderStatus.PENDING:
+        logger.warning("choice-pay REFUSED: order %s already %s — not paying again", data.order_number, _ord.status)
+        raise HTTPException(status_code=409, detail=f"Order already paid ({_ord.status.value}). Refusing to pay it again.")
+    from app.services import im_bot_lease as _lease
+    if not _lease.try_lease(data.order_number, trader.id):
+        logger.warning("choice-pay REFUSED: order %s already being paid (lease held)", data.order_number)
+        raise HTTPException(status_code=409, detail="This order is already being paid — please wait for it to finish.")
+
     remark = data.remark or f"Spark BUY {data.order_number[-12:]}"
     logger.info(f"[ChoiceBank] BUY payment: KES {data.amount} → {data.payee_account_id} "
                 f"(bankCode={effective_bank_code or 'internal'}, fee~{_fee}, bal={bal})")
 
-    result = await transfer(
-        payer_account_id=trader.choice_account_id,
-        payee_account_id=data.payee_account_id,
-        amount=data.amount,
-        payee_bank_code=effective_bank_code,
-        payee_name=data.payee_name,
-        remark=remark,
-    )
+    try:
+        result = await transfer(
+            payer_account_id=trader.choice_account_id,
+            payee_account_id=data.payee_account_id,
+            amount=data.amount,
+            payee_bank_code=effective_bank_code,
+            payee_name=data.payee_name,
+            remark=remark,
+        )
+    except Exception:
+        _lease.release(data.order_number)   # transfer never created — free the order for a retry
+        raise
 
     code = result.get("code", "")
     if code != "00000":
+        _lease.release(data.order_number)
         raise HTTPException(status_code=400, detail=result.get("msg", "Choice Bank transfer failed"))
 
     tx_data = result.get("data") or {}
@@ -3413,6 +3436,7 @@ async def choice_pay(
     # In both cases we return otp_required so the desktop waits for the SMS OTP via MacroDroid relay.
     business_id = tx_id or application_id
     if not business_id:
+        _lease.release(data.order_number)
         raise HTTPException(status_code=502, detail="Choice Bank returned no transaction ID — transfer may not have been created")
 
     try:
@@ -3575,6 +3599,11 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
 
     # ── Confirmed FAILURE → do NOT mark paid; raise so the desktop retries / asks the merchant ──
     if _settle == "failed":
+        try:
+            from app.services import im_bot_lease as _lease
+            _lease.release(order_number)   # money didn't move — free the order for a genuine retry
+        except Exception:
+            pass
         logger.warning(f"[ChoiceBank] BUY payment REJECTED by Choice — order {order_number}: "
                        f"tx {tx_id}, KES {amount} → {payee_account_id}. NOT marking paid.")
         try:
@@ -3586,6 +3615,49 @@ async def _finalise_choice_payment(*, trader, db, tx_id, amount, payee_account_i
         except Exception:
             pass
         raise HTTPException(status_code=402, detail=f"Choice Bank rejected the transfer (KES {int(amount):,} to {payee_account_id}). Not marked paid.")
+
+    # ── The seller was PAID. Advance the order + mark it paid on Binance HERE,
+    # server-side — so it is NEVER re-served and paid twice (the I&M-migration gap).
+    # Idempotent: only a PENDING order advances; releasing the lock is safe because
+    # the advanced status is the durable guard. Mirrors the I&M rail's /result. ──
+    _advanced = False
+    try:
+        _ord = (await db.execute(
+            select(Order).where(Order.binance_order_number == order_number, Order.trader_id == trader.id)
+        )).scalar_one_or_none()
+        if _ord is not None and _ord.status not in (OrderStatus.PAYMENT_SENT, OrderStatus.RELEASED, OrderStatus.COMPLETED):
+            _ord.status = OrderStatus.PAYMENT_SENT
+            if not _ord.payment_sent_at:
+                _ord.payment_sent_at = datetime.now(timezone.utc)
+            try:
+                from app.services.outbound_fees import outbound_fee as _outbound_fee
+                _ord.choice_fee = _outbound_fee("PESALINK" if bank_code else "MPESA", _ord.fiat_amount or amount)
+            except Exception as _fe:
+                logger.warning("choice-pay fee record failed for %s: %s", order_number, _fe)
+            await db.commit()
+            _advanced = True
+            logger.info("[ChoiceBank] order %s advanced PENDING->PAYMENT_SENT after paid transfer", order_number)
+    except Exception as _ae:
+        logger.error("[ChoiceBank] FAILED to advance order %s after payment: %s — DOUBLE-PAY RISK, reconcile manually", order_number, _ae)
+    finally:
+        try:
+            from app.services import im_bot_lease as _lease
+            _lease.release(order_number)
+        except Exception:
+            pass
+
+    # Mark the order PAID on Binance (EP-17) so the seller is asked to release. Best-effort
+    # and idempotent (re-marking an already-paid order is a no-op on Binance).
+    if _advanced or (_ord is not None and _ord.status == OrderStatus.PAYMENT_SENT):
+        try:
+            from app.services.binance.sapi_client import mark_order_as_paid, relay_trader
+            _ak, _as = _sapi_creds(trader)
+            relay_trader.set(trader.id)
+            _mp = await mark_order_as_paid(_ak, _as, order_number)
+            if not (_mp.get("code") == "000000" or _mp.get("success") is True):
+                logger.warning("[ChoiceBank] EP-17 mark-paid for %s not confirmed: %s", order_number, _mp)
+        except Exception as _me:
+            logger.warning("[ChoiceBank] EP-17 mark-paid errored for %s: %s (desktop will also mark it)", order_number, _me)
 
     receipt_b64 = ""
     try:
