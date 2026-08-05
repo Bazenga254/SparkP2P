@@ -1279,7 +1279,7 @@ export default function Admin() {
   // once on mount and freezes, so new orders never appear until a manual reload.
   useEffect(() => {
     if (activeTab !== 'dashboard') return;
-    const poll = setInterval(() => loadOrders(cryptoPeriod, ordersSearch), 10000);
+    const poll = setInterval(() => loadOrders(cryptoPeriod, ordersSearch), 3000);
     return () => clearInterval(poll);
   }, [activeTab, cryptoPeriod, ordersSearch]);
 
@@ -1287,7 +1287,7 @@ export default function Admin() {
   // (no spinner flicker) so payouts/credits reflect without a manual reload.
   useEffect(() => {
     if (activeTab !== 'imbot') return;
-    const poll = setInterval(() => loadImBot(imPeriod, '', true), 10000);
+    const poll = setInterval(() => loadImBot(imPeriod, '', true), 3000);
     return () => clearInterval(poll);
   }, [activeTab, imPeriod]);
 
