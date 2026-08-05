@@ -430,7 +430,7 @@ export default function Admin() {
   const [withdrawals, setWithdrawals] = useState({ withdrawals: [], total: 0, pages: 1, summary: {} });
   const [wdMethod, setWdMethod] = useState('all');   // all | mpesa
   const [wdStatus, setWdStatus] = useState('all');   // all | pending | completed
-  const [wdPeriod, setWdPeriod] = useState('all');
+  const [wdPeriod, setWdPeriod] = useState('today');
   const [wdPage, setWdPage] = useState(1);
   const [wdLoading, setWdLoading] = useState(false);
   const [wdActionLoading, setWdActionLoading] = useState(null); // tx id being actioned
@@ -1161,7 +1161,7 @@ export default function Admin() {
 
   useEffect(() => {
     if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
-    if (activeTab === 'withdrawals') { loadWithdrawals(); }
+    if (activeTab === 'withdrawals') { setWdPeriod('today'); loadWithdrawals(wdStatus, 'today', 1); }
     if (activeTab === 'paybill') { setSubPeriod('today'); loadSubData('plans', 'today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
     if (activeTab === 'kyc') {
