@@ -6,6 +6,7 @@ back via Reply-To support+<ticket>@sparkp2p.com → Brevo inbound parse → the
 /webhooks/support-reply endpoint, which appends them to the ticket thread.
 """
 import logging
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -43,6 +44,15 @@ def _fill(text: str, ctx: dict) -> str:
     for k, v in ctx.items():
         out = out.replace("{" + k + "}", str(v if v is not None else ""))
     return out
+
+
+def _to_html(text: str) -> str:
+    """Clean, editable template text -> professional HTML: **bold** -> <b>bold</b>,
+    line breaks -> <br>. Lets agents edit plain text instead of raw HTML."""
+    t = text or ""
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+    t = t.replace("\n", "<br>")
+    return t
 
 
 async def _next_ticket_number(db) -> str:
@@ -118,6 +128,7 @@ class CreateTicketBody(BaseModel):
     details: str = ""
     choice_email: str = ""           # override recipient; defaults to CHOICE_OPS_EMAIL
     notify_client: bool = True
+    body_override: str = ""          # admin-customised email body (clean text); wins over the template
 
 
 @router.post("/admin/ops/tickets")
@@ -138,8 +149,11 @@ async def create_ticket(body: CreateTicketBody, admin: Trader = Depends(get_admi
         "support_phone": "0758930896",
     }
     subject = body.subject or (_fill(tmpl.subject, ctx) if tmpl else f"Support case — Ticket {ticket_number}")
-    body_html = _fill(tmpl.body, ctx) if tmpl else (body.details or "")
-    body_html = body_html.replace("\n", "<br>")
+    # The admin can fully customise the email in a preview before sending; that wins.
+    if (body.body_override or "").strip():
+        body_html = _to_html(_fill(body.body_override, ctx))
+    else:
+        body_html = _to_html(_fill(tmpl.body, ctx) if tmpl else (body.details or ""))
     choice_to = (body.choice_email or "").strip() or CHOICE_OPS_EMAIL
 
     ticket = OpsTicket(
@@ -253,7 +267,7 @@ async def reply_ticket(ticket_id: int, body: ReplyBody, admin: Trader = Depends(
     text = (body.body or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Message is empty")
-    html = text.replace("\n", "<br>")
+    html = _to_html(text)
     to_addr = t.choice_email if body.to == "choice" else t.client_email
     if not to_addr:
         raise HTTPException(status_code=400, detail=f"No {body.to} email on file for this ticket")

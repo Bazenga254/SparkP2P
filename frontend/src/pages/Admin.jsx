@@ -866,6 +866,22 @@ export default function Admin() {
     setOpsForm(f => ({ ...f, amount: String(tx.amount || ''), reference: tx.reference || '', mpesa_code: tx.mpesa_code || '', txn_datetime: tx.txn_datetime || '' }));
     setOpsTxnResults([]);
   };
+  const [opsPreview, setOpsPreview] = useState('');
+  const opsFillPreview = () => {
+    const tmpl = opsTemplates.find(t => t.key === opsForm.category);
+    const client = traders.find(t => String(t.id) === String(opsForm.trader_id));
+    const ctx = {
+      ticket_number: '(assigned on send)', client_name: client?.full_name || 'the client',
+      choice_account: opsForm.choice_account || '—', amount: opsForm.amount || '—',
+      mpesa_code: opsForm.mpesa_code || '—', reference: opsForm.reference || '—',
+      txn_datetime: opsForm.txn_datetime || '—', details: opsForm.details || '—',
+      order_number: opsForm.reference || '—', support_phone: '0758930896',
+    };
+    let b = tmpl ? tmpl.body : (opsForm.details || '');
+    Object.entries(ctx).forEach(([k, v]) => { b = b.split('{' + k + '}').join(v); });
+    setOpsPreview(b);
+  };
+  const opsRenderHtml = (t) => (t || '').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
   const [opsReplyText, setOpsReplyText] = useState('');
   const [opsReplyTo, setOpsReplyTo] = useState('choice');
   const [tmplForm, setTmplForm] = useState({ key: '', name: '', subject: '', body: '' });
@@ -879,9 +895,9 @@ export default function Admin() {
     if (!opsForm.trader_id) { alert('Pick a client first'); return; }
     setOpsBusy(true);
     try {
-      const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id) });
+      const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id), body_override: opsPreview });
       alert('Ticket ' + r.data.ticket_number + ' created — emailed to Choice Bank, and the client was notified by email + SMS.');
-      setOpsShowCreate(false); setOpsTxnResults([]); setOpsTxnQuery('');
+      setOpsShowCreate(false); setOpsTxnResults([]); setOpsTxnQuery(''); setOpsPreview('');
       setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '', mpesa_code: '', choice_account: '', txn_datetime: '' });
       await loadOps();
     } catch (e) { alert(e.response?.data?.detail || 'Create failed'); }
@@ -3812,7 +3828,7 @@ export default function Admin() {
                           <input placeholder="Name" value={tmplForm.name} onChange={e => setTmplForm(f => ({ ...f, name: e.target.value }))} style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
                         </div>
                         <input placeholder="Subject — use {ticket_number} {client_name} {amount} {reference}" value={tmplForm.subject} onChange={e => setTmplForm(f => ({ ...f, subject: e.target.value }))} style={{ padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
-                        <textarea placeholder="Body — {client_name} {amount} {reference} {details} {ticket_number}" value={tmplForm.body} onChange={e => setTmplForm(f => ({ ...f, body: e.target.value }))} rows={4} style={{ padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
+                        <textarea placeholder="Body — plain text. Use **bold** and new lines. Placeholders: {client_name} {choice_account} {amount} {mpesa_code} {reference} {txn_datetime} {details} {ticket_number} {support_phone}" value={tmplForm.body} onChange={e => setTmplForm(f => ({ ...f, body: e.target.value }))} rows={6} style={{ padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical', fontSize: 12.5, lineHeight: 1.5 }} />
                         <button onClick={opsSaveTemplate} style={{ padding: '7px 14px', borderRadius: 7, border: 'none', background: '#16794A', color: '#D6FFE9', fontWeight: 700, fontSize: 12, cursor: 'pointer', justifySelf: 'start' }}>Save template</button>
                       </div>
                     </div>
@@ -3863,6 +3879,26 @@ export default function Admin() {
                       <input placeholder="Send to (leave blank = Operations@choice-bank.com) — put your email to test" value={opsForm.choice_email} onChange={e => setOpsForm(f => ({ ...f, choice_email: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px dashed #3b82f6', background: '#0d0f1e', color: '#fff' }} />
                       <textarea placeholder="Details for Choice Bank…" value={opsForm.details} onChange={e => setOpsForm(f => ({ ...f, details: e.target.value }))} rows={3} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9aa4b2', fontSize: 12 }}><input type="checkbox" checked={opsForm.notify_client} onChange={e => setOpsForm(f => ({ ...f, notify_client: e.target.checked }))} /> Notify client by email + SMS</label>
+
+                      <div style={{ borderTop: '1px solid #1A2130', paddingTop: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <div style={{ fontSize: 12, color: '#EAEEF5', fontWeight: 600 }}>Preview &amp; customise the email before sending</div>
+                          <button type="button" onClick={opsFillPreview} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #3b82f6', background: 'rgba(59,130,246,0.12)', color: '#60A5FA', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{opsPreview ? 'Rebuild from template' : 'Build preview'}</button>
+                        </div>
+                        {opsPreview ? (
+                          <>
+                            <textarea value={opsPreview} onChange={e => setOpsPreview(e.target.value)} rows={9} style={{ width: '100%', padding: 10, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#e5e7eb', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical', boxSizing: 'border-box' }} />
+                            <div style={{ fontSize: 10.5, color: '#5C6577', margin: '4px 0 8px' }}>Edit freely · <b>**text**</b> = bold · new lines = line breaks. This is exactly what gets sent.</div>
+                            <div style={{ padding: 12, borderRadius: 8, border: '1px solid #1A2130', background: '#0F1420' }}>
+                              <div style={{ fontSize: 10, color: '#5C6577', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Live preview (how Choice Bank sees it)</div>
+                              <div style={{ color: '#e5e7eb', fontSize: 12.5, lineHeight: 1.55 }} dangerouslySetInnerHTML={{ __html: opsRenderHtml(opsPreview) }} />
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{ fontSize: 11.5, color: '#8A94A6' }}>Fill the fields above, then click “Build preview” to see and edit the exact email. Leave it un‑built to send the template as‑is.</div>
+                        )}
+                      </div>
+
                       <button disabled={opsBusy} onClick={opsCreate} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 13, cursor: 'pointer', justifySelf: 'start' }}>{opsBusy ? 'Creating…' : 'Create & email Choice Bank'}</button>
                     </div>
                   )}
