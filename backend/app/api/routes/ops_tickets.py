@@ -111,7 +111,10 @@ class CreateTicketBody(BaseModel):
     category: str = "other"          # template key or free category
     subject: str = ""
     amount: str = ""
-    reference: str = ""
+    reference: str = ""              # UTRANS / order reference
+    mpesa_code: str = ""             # M-Pesa receipt code
+    choice_account: str = ""         # client's Choice account number (defaults to their saved one)
+    txn_datetime: str = ""           # date & time of the transaction
     details: str = ""
     choice_email: str = ""           # override recipient; defaults to CHOICE_OPS_EMAIL
     notify_client: bool = True
@@ -128,6 +131,11 @@ async def create_ticket(body: CreateTicketBody, admin: Trader = Depends(get_admi
         "client_name": (client.full_name if client else "the client"),
         "amount": body.amount, "reference": body.reference, "details": body.details,
         "order_number": body.reference,
+        "mpesa_code": body.mpesa_code or "—",
+        "choice_account": body.choice_account or (getattr(client, "choice_account_number", None) if client else None) or "—",
+        "txn_datetime": body.txn_datetime or "—",
+        "client_phone": (client.phone if client else "—"),
+        "support_phone": "0758930896",
     }
     subject = body.subject or (_fill(tmpl.subject, ctx) if tmpl else f"Support case — Ticket {ticket_number}")
     body_html = _fill(tmpl.body, ctx) if tmpl else (body.details or "")
@@ -193,6 +201,42 @@ async def list_tickets(status: str = "", admin: Trader = Depends(get_admin_trade
         })
     open_count = sum(1 for t in rows if t.status not in (OpsTicketStatus.RESOLVED, OpsTicketStatus.CLOSED))
     return {"tickets": out, "open": open_count}
+
+
+@router.get("/admin/ops/client-transactions")
+async def client_transactions(trader_id: int, q: str = "",
+                              admin: Trader = Depends(get_admin_trader), db: AsyncSession = Depends(get_db)):
+    """A client's Choice Bank transactions — for search-and-populate on a new ticket,
+    so support doesn't retype (and mistype) the M-Pesa code / ref / amount / time."""
+    from app.models.payment import Payment
+    from sqlalchemy import or_
+    client = await db.get(Trader, trader_id)
+    conds = [Payment.trader_id == trader_id,
+             Payment.transaction_type.in_(["CHOICE_DEPOSIT", "CHOICE_INBOUND", "CHOICE_OUTBOUND"])]
+    if (q or "").strip():
+        like = f"%{q.strip()}%"
+        conds.append(or_(Payment.mpesa_transaction_id.ilike(like),
+                         Payment.mpesa_receipt_number.ilike(like),
+                         Payment.destination.ilike(like),
+                         Payment.sender_name.ilike(like)))
+    rows = (await db.execute(
+        select(Payment).where(*conds).order_by(Payment.created_at.desc()).limit(40)
+    )).scalars().all()
+    out = []
+    for p in rows:
+        out.append({
+            "reference": p.mpesa_transaction_id or "",
+            "mpesa_code": p.mpesa_receipt_number or "",
+            "amount": abs(p.amount) if p.amount is not None else 0,
+            "direction": p.direction.value if p.direction else "",
+            "type": p.transaction_type,
+            "destination": p.destination or p.phone or "",
+            "counterparty": p.sender_name or "",
+            "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+            "txn_datetime": p.created_at.strftime("%d %b %Y, %I:%M %p") if p.created_at else "",
+        })
+    return {"transactions": out,
+            "choice_account": getattr(client, "choice_account_number", None) if client else None}
 
 
 class ReplyBody(BaseModel):

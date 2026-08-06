@@ -847,8 +847,25 @@ export default function Admin() {
   const [opsOpen, setOpsOpen] = useState(null);
   const [opsShowCreate, setOpsShowCreate] = useState(false);
   const [opsShowTemplates, setOpsShowTemplates] = useState(false);
-  const [opsForm, setOpsForm] = useState({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '' });
+  const [opsForm, setOpsForm] = useState({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '', mpesa_code: '', choice_account: '', txn_datetime: '' });
   const [opsBusy, setOpsBusy] = useState(false);
+  const [opsTxnQuery, setOpsTxnQuery] = useState('');
+  const [opsTxnResults, setOpsTxnResults] = useState([]);
+  const [opsTxnLoading, setOpsTxnLoading] = useState(false);
+  const opsSearchTxns = async () => {
+    if (!opsForm.trader_id) { alert('Select a client first'); return; }
+    setOpsTxnLoading(true);
+    try {
+      const r = await api.get('/admin/ops/client-transactions', { params: { trader_id: Number(opsForm.trader_id), q: opsTxnQuery } });
+      setOpsTxnResults(r.data.transactions || []);
+      if (r.data.choice_account) setOpsForm(f => ({ ...f, choice_account: f.choice_account || r.data.choice_account }));
+    } catch { setOpsTxnResults([]); }
+    setOpsTxnLoading(false);
+  };
+  const opsPickTxn = (tx) => {
+    setOpsForm(f => ({ ...f, amount: String(tx.amount || ''), reference: tx.reference || '', mpesa_code: tx.mpesa_code || '', txn_datetime: tx.txn_datetime || '' }));
+    setOpsTxnResults([]);
+  };
   const [opsReplyText, setOpsReplyText] = useState('');
   const [opsReplyTo, setOpsReplyTo] = useState('choice');
   const [tmplForm, setTmplForm] = useState({ key: '', name: '', subject: '', body: '' });
@@ -864,8 +881,8 @@ export default function Admin() {
     try {
       const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id) });
       alert('Ticket ' + r.data.ticket_number + ' created — emailed to Choice Bank, and the client was notified by email + SMS.');
-      setOpsShowCreate(false);
-      setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '' });
+      setOpsShowCreate(false); setOpsTxnResults([]); setOpsTxnQuery('');
+      setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '', mpesa_code: '', choice_account: '', txn_datetime: '' });
       await loadOps();
     } catch (e) { alert(e.response?.data?.detail || 'Create failed'); }
     setOpsBusy(false);
@@ -3807,14 +3824,41 @@ export default function Admin() {
                         <option value="">Select client…</option>
                         {traders.filter(t => !t.role || t.role === 'trader').map(t => <option key={t.id} value={t.id}>{t.full_name} · {t.email}</option>)}
                       </select>
+                      {opsForm.trader_id && (
+                        <div style={{ border: '1px solid #1A2130', borderRadius: 8, padding: 10, background: '#0b0e16' }}>
+                          <div style={{ fontSize: 11, color: '#8A94A6', marginBottom: 6 }}>Find the client's transaction and click it to auto-fill the amount, M-Pesa code, reference & time:</div>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <input value={opsTxnQuery} onChange={e => setOpsTxnQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') opsSearchTxns(); }} placeholder="Search M-Pesa code, reference or name…" style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                            <button onClick={opsSearchTxns} disabled={opsTxnLoading} style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid #3b82f6', background: 'rgba(59,130,246,0.12)', color: '#60A5FA', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>{opsTxnLoading ? '…' : 'Find'}</button>
+                          </div>
+                          {opsTxnResults.length > 0 && (
+                            <div style={{ maxHeight: 210, overflowY: 'auto', display: 'grid', gap: 4, marginTop: 8 }}>
+                              {opsTxnResults.map((tx, i) => (
+                                <div key={i} onClick={() => opsPickTxn(tx)} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '7px 10px', borderRadius: 6, background: '#0F1420', border: '1px solid #1A2130', cursor: 'pointer' }}>
+                                  <div>
+                                    <div style={{ color: '#EAEEF5', fontWeight: 600, fontSize: 12.5 }}>KES {Number(tx.amount).toLocaleString()} · {tx.direction === 'inbound' ? 'IN' : 'OUT'}</div>
+                                    <div style={{ color: '#8A94A6', fontSize: 11 }}>{tx.mpesa_code || tx.reference || '—'} · {tx.txn_datetime} · {tx.status}</div>
+                                  </div>
+                                  <span style={{ color: '#60A5FA', fontSize: 11, alignSelf: 'center' }}>Use →</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <select value={opsForm.category} onChange={e => setOpsForm(f => ({ ...f, category: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }}>
                         {opsTemplates.map(tp => <option key={tp.key} value={tp.key}>{tp.name}</option>)}
                         <option value="other">Other (free text)</option>
                       </select>
                       <div style={{ display: 'flex', gap: 8 }}>
                         <input placeholder="Amount (KES)" value={opsForm.amount} onChange={e => setOpsForm(f => ({ ...f, amount: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
-                        <input placeholder="Reference / order #" value={opsForm.reference} onChange={e => setOpsForm(f => ({ ...f, reference: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                        <input placeholder="Reference / UTRANS" value={opsForm.reference} onChange={e => setOpsForm(f => ({ ...f, reference: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
                       </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input placeholder="M-Pesa code" value={opsForm.mpesa_code} onChange={e => setOpsForm(f => ({ ...f, mpesa_code: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                        <input placeholder="Date & time of transaction" value={opsForm.txn_datetime} onChange={e => setOpsForm(f => ({ ...f, txn_datetime: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                      </div>
+                      <input placeholder="Client's Choice account number (auto-filled)" value={opsForm.choice_account} onChange={e => setOpsForm(f => ({ ...f, choice_account: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
                       <input placeholder="Subject (optional — template fills it)" value={opsForm.subject} onChange={e => setOpsForm(f => ({ ...f, subject: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
                       <input placeholder="Send to (leave blank = Operations@choice-bank.com) — put your email to test" value={opsForm.choice_email} onChange={e => setOpsForm(f => ({ ...f, choice_email: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px dashed #3b82f6', background: '#0d0f1e', color: '#fff' }} />
                       <textarea placeholder="Details for Choice Bank…" value={opsForm.details} onChange={e => setOpsForm(f => ({ ...f, details: e.target.value }))} rows={3} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
