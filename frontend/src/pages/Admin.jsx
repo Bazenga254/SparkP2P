@@ -841,6 +841,54 @@ export default function Admin() {
     }
   };
 
+  // ── Operations tickets (Choice Bank cases) ──
+  const [opsTickets, setOpsTickets] = useState([]);
+  const [opsTemplates, setOpsTemplates] = useState([]);
+  const [opsOpen, setOpsOpen] = useState(null);
+  const [opsShowCreate, setOpsShowCreate] = useState(false);
+  const [opsShowTemplates, setOpsShowTemplates] = useState(false);
+  const [opsForm, setOpsForm] = useState({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true });
+  const [opsBusy, setOpsBusy] = useState(false);
+  const [opsReplyText, setOpsReplyText] = useState('');
+  const [opsReplyTo, setOpsReplyTo] = useState('choice');
+  const [tmplForm, setTmplForm] = useState({ key: '', name: '', subject: '', body: '' });
+  const loadOps = async () => {
+    try {
+      const [t, tp] = await Promise.all([api.get('/admin/ops/tickets'), api.get('/admin/ops/templates')]);
+      setOpsTickets(t.data.tickets || []); setOpsTemplates(tp.data.templates || []);
+    } catch { /* ignore */ }
+  };
+  const opsCreate = async () => {
+    if (!opsForm.trader_id) { alert('Pick a client first'); return; }
+    setOpsBusy(true);
+    try {
+      const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id) });
+      alert('Ticket ' + r.data.ticket_number + ' created — emailed to Choice Bank, and the client was notified by email + SMS.');
+      setOpsShowCreate(false);
+      setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true });
+      await loadOps();
+    } catch (e) { alert(e.response?.data?.detail || 'Create failed'); }
+    setOpsBusy(false);
+  };
+  const opsSendReply = async (id) => {
+    if (!opsReplyText.trim()) return;
+    setOpsBusy(true);
+    try { await api.post(`/admin/ops/tickets/${id}/reply`, { body: opsReplyText.trim(), to: opsReplyTo }); setOpsReplyText(''); await loadOps(); }
+    catch (e) { alert(e.response?.data?.detail || 'Send failed'); }
+    setOpsBusy(false);
+  };
+  const opsSetStatus = async (id, status) => {
+    try { await api.post(`/admin/ops/tickets/${id}/status`, { status }); await loadOps(); } catch {}
+  };
+  const opsSaveTemplate = async () => {
+    if (!tmplForm.key || !tmplForm.name || !tmplForm.subject || !tmplForm.body) { alert('Fill all template fields'); return; }
+    try { await api.post('/admin/ops/templates', { ...tmplForm, is_active: true }); setTmplForm({ key: '', name: '', subject: '', body: '' }); await loadOps(); }
+    catch (e) { alert(e.response?.data?.detail || 'Save failed'); }
+  };
+  const opsDeleteTemplate = async (id) => {
+    try { await api.delete(`/admin/ops/templates/${id}`); await loadOps(); } catch {}
+  };
+
   const loadSupportTickets = async (category = ticketCategory, page = ticketPage) => {
     setSupportLoading(true);
     try {
@@ -1160,7 +1208,7 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); }
+    if (activeTab === 'disputes') { setUnreadTicketCount(0); loadSupportTickets(ticketCategory, ticketPage); loadOps(); }
     if (activeTab === 'withdrawals') { setWdPeriod('today'); loadWithdrawals(wdStatus, 'today', 1); }
     if (activeTab === 'paybill') { setSubPeriod('today'); loadSubData('plans', 'today', 1); }
     if (activeTab === 'survey') { loadSurveyResponses(); }
@@ -3717,6 +3765,112 @@ export default function Admin() {
           {/* ==================== DISPUTES ==================== */}
           {activeTab === 'disputes' && (
             <>
+              {/* ── Operations Cases (Choice Bank) ── */}
+              <div className="adm-card" style={{ marginBottom: 16 }}>
+                <div className="adm-card-header">
+                  <h3>Operations Cases · Choice Bank</h3>
+                  <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+                    <button onClick={() => { setOpsShowTemplates(v => !v); setOpsShowCreate(false); }} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #232B3A', background: 'transparent', color: '#9aa4b2', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Templates</button>
+                    <button onClick={() => { setOpsShowCreate(v => !v); setOpsShowTemplates(false); }} style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>+ New case</button>
+                  </div>
+                </div>
+                <div style={{ padding: '0 4px 4px' }}>
+                  <p style={{ color: '#8A94A6', fontSize: 12.5, margin: '0 0 12px' }}>Raise a case with Choice Bank (Operations@choice-bank.com) for a client — reversal, wrong payment, funds not credited. The client gets the ticket number by email + SMS, and replies thread back here.</p>
+
+                  {opsShowTemplates && (
+                    <div style={{ border: '1px solid #1A2130', borderRadius: 10, padding: 14, marginBottom: 14, background: '#0F1420' }}>
+                      <div style={{ fontWeight: 700, color: '#EAEEF5', marginBottom: 8 }}>Email templates</div>
+                      {opsTemplates.map(tp => (
+                        <div key={tp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1A2130' }}>
+                          <div><b style={{ color: '#EAEEF5', fontSize: 13 }}>{tp.name}</b> <span style={{ color: '#5C6577', fontSize: 11 }}>({tp.key})</span><div style={{ color: '#8A94A6', fontSize: 11 }}>{tp.subject}</div></div>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button onClick={() => setTmplForm({ key: tp.key, name: tp.name, subject: tp.subject, body: tp.body })} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #232B3A', background: 'transparent', color: '#9aa4b2', fontSize: 11, cursor: 'pointer' }}>Edit</button>
+                            <button onClick={() => opsDeleteTemplate(tp.id)} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid #3A2530', background: 'transparent', color: '#fca5a5', fontSize: 11, cursor: 'pointer' }}>Delete</button>
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <input placeholder="key (e.g. reversal)" value={tmplForm.key} onChange={e => setTmplForm(f => ({ ...f, key: e.target.value }))} style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                          <input placeholder="Name" value={tmplForm.name} onChange={e => setTmplForm(f => ({ ...f, name: e.target.value }))} style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                        </div>
+                        <input placeholder="Subject — use {ticket_number} {client_name} {amount} {reference}" value={tmplForm.subject} onChange={e => setTmplForm(f => ({ ...f, subject: e.target.value }))} style={{ padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                        <textarea placeholder="Body — {client_name} {amount} {reference} {details} {ticket_number}" value={tmplForm.body} onChange={e => setTmplForm(f => ({ ...f, body: e.target.value }))} rows={4} style={{ padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
+                        <button onClick={opsSaveTemplate} style={{ padding: '7px 14px', borderRadius: 7, border: 'none', background: '#16794A', color: '#D6FFE9', fontWeight: 700, fontSize: 12, cursor: 'pointer', justifySelf: 'start' }}>Save template</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {opsShowCreate && (
+                    <div style={{ border: '1px solid #1A2130', borderRadius: 10, padding: 14, marginBottom: 14, background: '#0F1420', display: 'grid', gap: 8 }}>
+                      <select value={opsForm.trader_id} onChange={e => setOpsForm(f => ({ ...f, trader_id: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }}>
+                        <option value="">Select client…</option>
+                        {traders.filter(t => !t.role || t.role === 'trader').map(t => <option key={t.id} value={t.id}>{t.full_name} · {t.email}</option>)}
+                      </select>
+                      <select value={opsForm.category} onChange={e => setOpsForm(f => ({ ...f, category: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }}>
+                        {opsTemplates.map(tp => <option key={tp.key} value={tp.key}>{tp.name}</option>)}
+                        <option value="other">Other (free text)</option>
+                      </select>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input placeholder="Amount (KES)" value={opsForm.amount} onChange={e => setOpsForm(f => ({ ...f, amount: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                        <input placeholder="Reference / order #" value={opsForm.reference} onChange={e => setOpsForm(f => ({ ...f, reference: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                      </div>
+                      <input placeholder="Subject (optional — template fills it)" value={opsForm.subject} onChange={e => setOpsForm(f => ({ ...f, subject: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                      <textarea placeholder="Details for Choice Bank…" value={opsForm.details} onChange={e => setOpsForm(f => ({ ...f, details: e.target.value }))} rows={3} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9aa4b2', fontSize: 12 }}><input type="checkbox" checked={opsForm.notify_client} onChange={e => setOpsForm(f => ({ ...f, notify_client: e.target.checked }))} /> Notify client by email + SMS</label>
+                      <button disabled={opsBusy} onClick={opsCreate} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 13, cursor: 'pointer', justifySelf: 'start' }}>{opsBusy ? 'Creating…' : 'Create & email Choice Bank'}</button>
+                    </div>
+                  )}
+
+                  {opsTickets.length === 0 ? (
+                    <div style={{ color: '#5C6577', fontSize: 13, padding: '8px 0' }}>No operations cases yet.</div>
+                  ) : opsTickets.map(t => {
+                    const open = opsOpen === t.id;
+                    const badge = { open: '#F5A524', awaiting_choice: '#3b82f6', awaiting_client: '#a78bfa', resolved: '#34D399', closed: '#8A94A6' }[t.status] || '#8A94A6';
+                    return (
+                      <div key={t.id} style={{ border: '1px solid #1A2130', borderRadius: 10, marginBottom: 8, background: '#0F1420' }}>
+                        <div onClick={() => setOpsOpen(open ? null : t.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', cursor: 'pointer' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ color: '#EAEEF5', fontWeight: 700, fontSize: 13 }}>{t.ticket_number} · {t.subject}</div>
+                            <div style={{ color: '#8A94A6', fontSize: 11.5 }}>{t.client_name || '—'} · {(t.messages || []).length} message(s)</div>
+                          </div>
+                          <span style={{ padding: '2px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: badge + '22', color: badge }}>{t.status.replace('_', ' ')}</span>
+                        </div>
+                        {open && (
+                          <div style={{ padding: '0 14px 14px' }}>
+                            <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
+                              {(t.messages || []).map((m, i) => {
+                                const c = m.from === 'choice' ? '#3b82f6' : m.from === 'client' ? '#a78bfa' : m.from === 'agent' ? '#34D399' : '#8A94A6';
+                                return (
+                                  <div key={i} style={{ borderLeft: `2px solid ${c}`, paddingLeft: 10 }}>
+                                    <div style={{ color: c, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase' }}>{m.from === 'agent' ? (m.name || 'Agent') + (m.to ? ' → ' + m.to : '') : m.from + (m.name ? ' · ' + m.name : '')}</div>
+                                    <div style={{ color: '#e5e7eb', fontSize: 12.5 }} dangerouslySetInnerHTML={{ __html: m.body }} />
+                                    <div style={{ color: '#5C6577', fontSize: 10 }}>{m.ts ? fmtDateEAT(m.ts) : ''}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                              {[['choice', 'To Choice Bank'], ['client', 'To Client']].map(([v, l]) => (
+                                <button key={v} onClick={() => setOpsReplyTo(v)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid', borderColor: opsReplyTo === v ? '#f59e0b' : '#232B3A', background: opsReplyTo === v ? 'rgba(245,165,36,0.12)' : 'transparent', color: opsReplyTo === v ? '#f59e0b' : '#9aa4b2', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{l}</button>
+                              ))}
+                              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                                <button onClick={() => opsSetStatus(t.id, 'resolved')} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #16794A', background: 'transparent', color: '#34D399', fontSize: 11, cursor: 'pointer' }}>Resolved</button>
+                                <button onClick={() => opsSetStatus(t.id, 'closed')} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #232B3A', background: 'transparent', color: '#8A94A6', fontSize: 11, cursor: 'pointer' }}>Close</button>
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <textarea value={opsReplyText} onChange={e => setOpsReplyText(e.target.value)} placeholder={`Reply to ${opsReplyTo === 'choice' ? 'Choice Bank' : 'the client'}…`} rows={2} style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
+                              <button disabled={opsBusy} onClick={() => opsSendReply(t.id)} style={{ padding: '8px 14px', borderRadius: 7, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Send</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* Order Disputes */}
               <div className="adm-card" style={{ marginBottom: 16 }}>
                 <div className="adm-card-header">

@@ -44,6 +44,40 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         return False
 
 
+def send_email_ex(to_email: str, subject: str, html_content: str, *,
+                  sender_name: str = None, sender_email: str = None,
+                  reply_to_email: str = None, reply_to_name: str = None) -> bool:
+    """Send via Brevo with a custom sender + Reply-To — used by ops tickets so mail
+    goes FROM support@sparkp2p.com and replies route back to our inbound webhook."""
+    api_key = settings.BREVO_API_KEY
+    if not api_key:
+        logger.warning("BREVO_API_KEY not set — email not sent")
+        return False
+    payload = {
+        "sender": {"name": sender_name or settings.BREVO_FROM_NAME,
+                   "email": sender_email or settings.BREVO_FROM_EMAIL},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html_content,
+    }
+    if reply_to_email:
+        payload["replyTo"] = {"email": reply_to_email}
+        if reply_to_name:
+            payload["replyTo"]["name"] = reply_to_name
+    data = json.dumps(payload).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            "https://api.brevo.com/v3/smtp/email", data=data, method="POST",
+            headers={"api-key": api_key, "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            logger.info(f"[ops-email] sent to {to_email}: {resp.status}")
+            return resp.status in (200, 201)
+    except Exception as e:
+        logger.error(f"[ops-email] failed to send to {to_email}: {e}")
+        return False
+
+
 def send_payment_method_added(to_email: str, trader_name: str, method: str, destination: str) -> bool:
     """Notify trader that a new payment/settlement method was added."""
     html = f"""

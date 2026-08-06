@@ -96,6 +96,45 @@ async def inbound_sms_webhook(request: Request):
     return {"ok": True}
 
 
+# ── Inbound Support Reply (Brevo Inbound Parsing on sparkp2p.com) ─────────────
+
+@router.post("/support-reply")
+async def inbound_support_reply(request: Request):
+    """Brevo inbound-parse webhook for @sparkp2p.com ticket replies (Choice Bank +
+    clients). Threads the message into its OpsTicket by the +tag / [SPK-...] number."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = dict(await request.form())
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if items and isinstance(items, list):
+        item = items[0]
+        sender    = (item.get("From") or {}).get("Address", "")
+        to_list   = item.get("To") or []
+        recipient = to_list[0].get("Address", "") if to_list else ""
+        subject   = item.get("Subject", "")
+        body      = item.get("RawTextBody") or item.get("ExtractedMarkdownMessage") or ""
+        if not body:
+            body = re.sub(r"<[^>]+>", " ", item.get("RawHtmlBody") or "")
+    else:
+        sender    = str(payload.get("sender") or payload.get("From") or "")
+        recipient = str(payload.get("recipient") or payload.get("To") or "")
+        subject   = str(payload.get("subject") or payload.get("Subject") or "")
+        body      = re.sub(r"<[^>]+>", " ", str(payload.get("stripped-text") or payload.get("body-plain") or payload.get("body-html") or ""))
+    body = body.strip()
+    logger.info(f"[Support-Reply] from={sender} to={recipient} subject={subject!r}")
+    try:
+        from app.core.database import async_session
+        from app.api.routes.ops_tickets import handle_inbound_reply
+        async with async_session() as db:
+            matched = await handle_inbound_reply(to_addr=recipient, from_addr=sender, subject=subject, body_text=body, db=db)
+        if not matched:
+            logger.info("[Support-Reply] no matching ticket for to=%s subject=%r", recipient, subject)
+    except Exception as e:
+        logger.warning("[Support-Reply] handling failed: %s", e)
+    return {"ok": True}
+
+
 # ── Inbound Email OTP (Mailgun inbound parse) ─────────────────────────────────
 
 @router.post("/email-otp")

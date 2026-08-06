@@ -6,6 +6,7 @@ from app.models.subscription import Subscription, SubscriptionPlan, Subscription
 from app.models.chat import ChatMessage
 from app.models.message_template import MessageTemplate
 from app.models.support_ticket import SupportTicket, TicketStatus
+from app.models.ops_ticket import OpsTicket, OpsTicketStatus, OpsEmailTemplate
 from app.models.audit_log import AuditLog
 from app.models.batch import WithdrawalBatch, BatchItem
 from app.models.survey import SurveyResponse
