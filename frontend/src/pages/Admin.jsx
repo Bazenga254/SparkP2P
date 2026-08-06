@@ -847,7 +847,7 @@ export default function Admin() {
   const [opsOpen, setOpsOpen] = useState(null);
   const [opsShowCreate, setOpsShowCreate] = useState(false);
   const [opsShowTemplates, setOpsShowTemplates] = useState(false);
-  const [opsForm, setOpsForm] = useState({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true });
+  const [opsForm, setOpsForm] = useState({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '' });
   const [opsBusy, setOpsBusy] = useState(false);
   const [opsReplyText, setOpsReplyText] = useState('');
   const [opsReplyTo, setOpsReplyTo] = useState('choice');
@@ -865,7 +865,7 @@ export default function Admin() {
       const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id) });
       alert('Ticket ' + r.data.ticket_number + ' created — emailed to Choice Bank, and the client was notified by email + SMS.');
       setOpsShowCreate(false);
-      setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true });
+      setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '' });
       await loadOps();
     } catch (e) { alert(e.response?.data?.detail || 'Create failed'); }
     setOpsBusy(false);
@@ -3816,6 +3816,7 @@ export default function Admin() {
                         <input placeholder="Reference / order #" value={opsForm.reference} onChange={e => setOpsForm(f => ({ ...f, reference: e.target.value }))} style={{ flex: 1, padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
                       </div>
                       <input placeholder="Subject (optional — template fills it)" value={opsForm.subject} onChange={e => setOpsForm(f => ({ ...f, subject: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                      <input placeholder="Send to (leave blank = Operations@choice-bank.com) — put your email to test" value={opsForm.choice_email} onChange={e => setOpsForm(f => ({ ...f, choice_email: e.target.value }))} style={{ padding: 9, borderRadius: 7, border: '1px dashed #3b82f6', background: '#0d0f1e', color: '#fff' }} />
                       <textarea placeholder="Details for Choice Bank…" value={opsForm.details} onChange={e => setOpsForm(f => ({ ...f, details: e.target.value }))} rows={3} style={{ padding: 9, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9aa4b2', fontSize: 12 }}><input type="checkbox" checked={opsForm.notify_client} onChange={e => setOpsForm(f => ({ ...f, notify_client: e.target.checked }))} /> Notify client by email + SMS</label>
                       <button disabled={opsBusy} onClick={opsCreate} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 13, cursor: 'pointer', justifySelf: 'start' }}>{opsBusy ? 'Creating…' : 'Create & email Choice Bank'}</button>
