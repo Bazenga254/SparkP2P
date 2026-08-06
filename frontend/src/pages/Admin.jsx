@@ -23,7 +23,7 @@ const sidebarSections = [
     items: [
       { key: 'traders', icon: Users, label: 'All Traders' },
       { key: 'imbot', icon: Bot, label: 'I&M Automation' },
-      { key: 'disputes', icon: AlertTriangle, label: 'Disputes' },
+      { key: 'disputes', icon: AlertTriangle, label: 'Support' },
       { key: 'unmatched', icon: Banknote, label: 'Unmatched Payments' },
       { key: 'affiliates', icon: Share2, label: 'Affiliates' },
       { key: 'kyc', icon: UserCheck, label: 'KYC / Onboarding' },
@@ -1426,7 +1426,7 @@ export default function Admin() {
     dashboard: 'Dashboard',
     traders: 'All Traders',
     imbot: 'I&M Automation',
-    disputes: 'Disputes',
+    disputes: 'Support',
     unmatched: 'Unmatched Payments',
     transactions: 'Transactions',
     revenue: 'Revenue',
@@ -1787,7 +1787,7 @@ export default function Admin() {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, textAlign: 'center' }}>
                     {[
-                      { label: 'Disputes',  value: unreadTicketCount,                                                        color: '#ef4444', onClick: () => setActiveTab('disputes')  },
+                      { label: 'Support',  value: unreadTicketCount,                                                        color: '#ef4444', onClick: () => setActiveTab('disputes')  },
                       { label: 'Unmatched', value: (unmatched.deposits?.length || 0) + (unmatched.withdrawals?.length || 0), color: '#f59e0b', onClick: () => setActiveTab('unmatched') },
                       { label: 'KYC pending', value: dashboard.traders?.total_unverified ?? 0,                               color: '#3b82f6', onClick: () => setActiveTab('kyc')       },
                     ].map(({ label, value, color, onClick }) => (
@@ -4925,7 +4925,7 @@ export default function Admin() {
                           <div style={{ fontSize: 11, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Page Access</div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                             {[
-                              { key: 'disputes', label: 'Disputes' },
+                              { key: 'disputes', label: 'Support' },
                               { key: 'orders', label: 'Orders' },
                               { key: 'chat', label: 'Chat' },
                               { key: 'transactions', label: 'Transactions' },
