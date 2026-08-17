@@ -270,7 +270,8 @@ async def check_subscription(trader: Trader, db: AsyncSession) -> bool:
             Subscription.status == SubscriptionStatus.ACTIVE,
         ).order_by(Subscription.expires_at.desc())
     )
-    sub = result.scalar_one_or_none()
+    # >1 ACTIVE row possible (stacked payments) — newest by expiry; scalar_one_or_none() would 500.
+    sub = result.scalars().first()
     if sub and sub.is_active:
         return True
     return False

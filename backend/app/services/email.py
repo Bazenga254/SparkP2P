@@ -46,9 +46,14 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
 
 def send_email_ex(to_email: str, subject: str, html_content: str, *,
                   sender_name: str = None, sender_email: str = None,
-                  reply_to_email: str = None, reply_to_name: str = None) -> bool:
+                  reply_to_email: str = None, reply_to_name: str = None,
+                  attachments: list = None, cc: list = None) -> bool:
     """Send via Brevo with a custom sender + Reply-To — used by ops tickets so mail
-    goes FROM support@sparkp2p.com and replies route back to our inbound webhook."""
+    goes FROM support@sparkp2p.com and replies route back to our inbound webhook.
+
+    attachments: optional list of {"name": str, "content": base64-str} — images,
+    audio, PDFs or any file the agent attaches to a case/reply.
+    cc: optional list of email addresses to copy (deduped; the primary To is excluded)."""
     api_key = settings.BREVO_API_KEY
     if not api_key:
         logger.warning("BREVO_API_KEY not set — email not sent")
@@ -60,10 +65,25 @@ def send_email_ex(to_email: str, subject: str, html_content: str, *,
         "subject": subject,
         "htmlContent": html_content,
     }
+    if cc:
+        seen = {(to_email or "").strip().lower()}
+        cc_list = []
+        for e in cc:
+            e = (e or "").strip()
+            if e and e.lower() not in seen:
+                seen.add(e.lower())
+                cc_list.append({"email": e})
+        if cc_list:
+            payload["cc"] = cc_list
     if reply_to_email:
         payload["replyTo"] = {"email": reply_to_email}
         if reply_to_name:
             payload["replyTo"]["name"] = reply_to_name
+    if attachments:
+        _att = [{"name": a["name"], "content": a["content"]}
+                for a in attachments if a.get("name") and a.get("content")]
+        if _att:
+            payload["attachment"] = _att
     data = json.dumps(payload).encode("utf-8")
     try:
         req = urllib.request.Request(

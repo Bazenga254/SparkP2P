@@ -128,6 +128,15 @@ async def c2b_confirmation(request: Request, db: AsyncSession = Depends(get_db))
     data = await request.json()
     logger.info(f"C2B Confirmation: {data}")
 
+    # Mirror into the B2C bot's C2B store so a shared Paybill (e.g. 4041355) feeds the B2C
+    # sell-side too, without changing its registered C2B URL. Never let this affect the
+    # platform's own subscription/credit/deposit routing below.
+    try:
+        from app.api.routes.b2c_callbacks import record_c2b
+        record_c2b(data)
+    except Exception:
+        pass
+
     amount = float(data.get("TransAmount", 0))
     bill_ref = data.get("BillRefNumber", "")
     phone = data.get("MSISDN", "")

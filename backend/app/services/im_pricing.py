@@ -136,6 +136,19 @@ async def rate_for_trader(db, trader_id: int) -> dict:
     the top of this file.
     """
     from app.services.plans import active_plan
+    # The B2C / Own-Paybill rail IS the B2C plan — always billed at the B2C rate (KES 5), regardless
+    # of the subscription tier a trader also holds (e.g. a Gold subscriber on Own Paybill pays 5, not 7).
+    from app.models.trader import Trader as _Trader
+    _tr = await db.get(_Trader, trader_id)
+    if _tr and getattr(_tr, "b2c_own_paybill_enabled", False):
+        return {
+            "rate": RATE_BY_PLAN[SubscriptionPlan.ADVANCED],   # 5
+            "plan": SubscriptionPlan.ADVANCED.value,
+            "label": "B2C (Own Paybill)",
+            "account_type": ACCOUNT_SPARKP2P,
+            "intro_used": 0,
+            "intro_remaining": 0,
+        }
     plan = await active_plan(db, trader_id)
     used = 0 if plan is not None else await intro_used_for_trader(db, trader_id)
     return {

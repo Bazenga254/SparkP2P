@@ -331,7 +331,8 @@ async def get_subscription_status(
             Subscription.status == SubscriptionStatus.ACTIVE,
         ).order_by(Subscription.expires_at.desc())
     )
-    sub = result.scalar_one_or_none()
+    # >1 ACTIVE row possible (stacked payments) — newest by expiry; scalar_one_or_none() would 500.
+    sub = result.scalars().first()
 
     if sub and sub.is_active:
         days_remaining = (sub.expires_at - datetime.now(timezone.utc)).days if sub.expires_at else 0

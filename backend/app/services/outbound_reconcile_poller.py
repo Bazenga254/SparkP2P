@@ -32,6 +32,17 @@ def _status_of(res: dict) -> str:
     return str(src.get("txStatus") or "")
 
 
+def _external_ref_of(res: dict) -> str:
+    """The real M-Pesa reference code (externalTxId) the client and Choice see —
+    e.g. UH5SX2HQBO. Not carried in list rows, only the full result/webhook."""
+    if not isinstance(res, dict):
+        return ""
+    data = res.get("data")
+    src = data if isinstance(data, dict) else res
+    ext = src.get("extInfo") if isinstance(src.get("extInfo"), dict) else {}
+    return str(src.get("externalTxId") or ext.get("externalTxId") or "")
+
+
 async def outbound_reconcile_poller():
     logger.info("[OutboundReconcile] poller started")
     while True:
@@ -58,6 +69,16 @@ async def outbound_reconcile_poller():
                         logger.warning(f"[OutboundReconcile] getTransResult failed for payment {p.id}: {e}")
                         continue
                     st = _status_of(res)
+
+                    # Capture the real M-Pesa reference code if we don't have it yet
+                    # (older rows stored the Choice txId in both fields). This makes
+                    # the payment searchable by the code the client actually sees.
+                    _ref = _external_ref_of(res)
+                    if _ref and _ref != p.mpesa_receipt_number and (
+                        not p.mpesa_receipt_number or p.mpesa_receipt_number == p.mpesa_transaction_id
+                    ):
+                        p.mpesa_receipt_number = _ref
+                        await db.commit()
 
                     if st in _FAILED and p.status != PaymentStatus.FAILED:
                         _was_completed = (p.status == PaymentStatus.COMPLETED)

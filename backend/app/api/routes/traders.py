@@ -348,7 +348,9 @@ async def _active_sub_plan(trader, db=None) -> str | None:
                 Subscription.status == SubscriptionStatus.ACTIVE,
             ).order_by(Subscription.expires_at.desc())
         )
-        s = r.scalar_one_or_none()
+        # A trader can have >1 ACTIVE row (stacked payments) — take the newest by expiry.
+        # scalar_one_or_none() would raise MultipleResultsFound and 500 the caller.
+        s = r.scalars().first()
         return s.plan.value if (s and s.is_active) else None
 
     if db is not None:
@@ -1182,7 +1184,10 @@ async def get_profile(
             Subscription.status == SubscriptionStatus.ACTIVE,
         ).order_by(Subscription.expires_at.desc())
     )
-    sub = result.scalar_one_or_none()
+    # >1 ACTIVE row possible (stacked payments) — newest by expiry. scalar_one_or_none()
+    # raised MultipleResultsFound and 500'd the whole profile (/traders/me), locking the
+    # trader out of the dashboard.
+    sub = result.scalars().first()
     if sub and sub.is_active:
         sub_plan = sub.plan.value
         sub_status = sub.status.value
@@ -1767,11 +1772,9 @@ async def update_trading_config(
                 logger.warning("CF verify-after-push failed: %s", ve)
             if pushed > 0:
                 trader.cf_last_pushed_at = datetime.now(timezone.utc)
-                # A successful EP-7 push only works for Gold Merchants, so tag the tier here too.
-                # This self-heals the badge when the connect-time probe missed it (e.g. the relay
-                # was offline at key-save), without any extra/destructive Binance call.
-                if (trader.binance_merchant_tier or "").lower() != "gold":
-                    trader.binance_merchant_tier = "gold"
+                # Do NOT infer 'gold' from a successful EP-7 push — it succeeds for Silver/Bronze
+                # merchants too and was mislabeling them Gold. The tier comes only from the public
+                # P2P medal (tier_poller / connect-time medal detection).
                 await db.commit()
             if synced and not push_warnings:
                 return {"status": "updated", "filters_pushed": pushed, "synced": True}
@@ -1862,9 +1865,14 @@ async def save_binance_api_key(
                 completed_trades_min=0,
             )
             merchant_capable = True
-            trader.binance_merchant_tier = "gold"
+            # NOTE: a successful EP-7 push is NOT proof of Gold — the all-zero no-op push
+            # also succeeds for Silver/Bronze merchants, which was mislabeling them Gold
+            # (e.g. trader 41 Christine, a Silver merchant, shown as Gold). The ONLY reliable
+            # tier signal is the public P2P medal (vipLevel/BLOCK_MERCHANT) read below, so we
+            # do NOT set the tier from EP-7 here. `merchant_capable` stays as a "can push
+            # counterparty filters" hint for the Test-connection response only.
         except Exception:
-            # -1002 or any error means not Gold Merchant — leave existing tier unchanged
+            # -1002 or any error — leave tier to the reliable medal detection below.
             pass
 
     # "Test connection" — credentials verified above; report success without saving them.
@@ -2580,6 +2588,31 @@ class CbWithdrawInitiateBody(BaseModel):
     # PesaLink legs — each leg is a deliberate second withdrawal, so it must skip
     # the "one withdrawal already processing" guard that protects manual users.
     skip_pending_guard: bool = False
+    # Which saved bank account to withdraw to THIS time. None = the trader's default/auto
+    # account (the mirrored cb_withdrawal_* fields). Manual withdraw can target any of the
+    # up to 3 saved accounts without changing the auto-withdraw target.
+    account_id: Optional[str] = None
+
+
+def _resolve_withdrawal_dest(trader, account_id=None):
+    """Return {bank_name, bank_code, account, account_name} for a withdrawal. If account_id is
+    given and matches a saved cb_bank_accounts entry, use that; otherwise fall back to the
+    trader's default/auto account (the mirrored cb_withdrawal_* fields). Returns None if the
+    resolved destination has no bank_code/account."""
+    accts = trader.cb_bank_accounts or []
+    if account_id:
+        for a in accts:
+            if str(a.get("id")) == str(account_id):
+                if a.get("bank_code") and a.get("account"):
+                    return {"bank_name": a.get("bank_name"), "bank_code": a.get("bank_code"),
+                            "account": a.get("account"), "account_name": a.get("account_name")}
+                return None
+        return None   # an id was given but doesn't match a saved account — reject, don't silently reroute
+    if trader.cb_withdrawal_bank_code and trader.cb_withdrawal_account:
+        return {"bank_name": trader.cb_withdrawal_bank_name, "bank_code": trader.cb_withdrawal_bank_code,
+                "account": trader.cb_withdrawal_account, "account_name": trader.cb_withdrawal_account_name}
+    return None
+
 
 @router.post("/cb-withdraw-to-bank/initiate")
 async def cb_withdraw_initiate(
@@ -2596,8 +2629,9 @@ async def cb_withdraw_initiate(
 
     if not trader.choice_account_id:
         raise HTTPException(status_code=400, detail="No Choice Bank account linked")
-    if not trader.cb_withdrawal_bank_code or not trader.cb_withdrawal_account:
-        raise HTTPException(status_code=400, detail="No withdrawal bank account configured")
+    dest = _resolve_withdrawal_dest(trader, body.account_id)
+    if not dest:
+        raise HTTPException(status_code=400, detail="No withdrawal bank account configured (or the selected account was not found)")
     if body.amount < 100:
         raise HTTPException(status_code=400, detail="Minimum withdrawal is KES 100")
 
@@ -2627,17 +2661,17 @@ async def cb_withdraw_initiate(
             )
 
     remark = "".join(
-        c for c in f"Spark Freelance withdrawal to {trader.cb_withdrawal_bank_name or 'Bank'}"
+        c for c in f"Spark Freelance withdrawal to {dest.get('bank_name') or 'Bank'}"
         if c.isalnum() or c == " "
     )[:100]
 
     try:
         result = await choice.transfer(
             payer_account_id=trader.choice_account_id,
-            payee_account_id=trader.cb_withdrawal_account,
+            payee_account_id=dest["account"],
             amount=body.amount,
-            payee_bank_code=str(trader.cb_withdrawal_bank_code),
-            payee_name=trader.cb_withdrawal_account_name or "",
+            payee_bank_code=str(dest["bank_code"]),
+            payee_name=dest.get("account_name") or "",
             remark=remark,
         )
     except Exception as exc:
@@ -3331,6 +3365,21 @@ async def save_cb_withdrawal_bank(
     trader.cb_withdrawal_account      = body.account.strip()
     trader.cb_withdrawal_account_name = body.account_name.strip()
     trader.cb_withdrawal_changed_at   = datetime.now(timezone.utc)
+    # Keep the multi-account list in sync: upsert this as the auto-withdraw account, so the
+    # legacy single-account save and the new multi-account endpoints never drift apart.
+    import uuid as _uuid
+    _accts = list(trader.cb_bank_accounts or [])
+    _existing = next((a for a in _accts if str(a.get("id")) == str(trader.cb_auto_withdraw_account_id)),
+                     None) if trader.cb_auto_withdraw_account_id else None
+    _vals = {"bank_name": body.bank_name.strip(), "bank_code": body.bank_code.strip(),
+             "account": body.account.strip(), "account_name": body.account_name.strip()}
+    if _existing:
+        _existing.update(_vals)
+    else:
+        _new = {"id": _uuid.uuid4().hex[:12], **_vals}
+        _accts.append(_new)
+        trader.cb_auto_withdraw_account_id = _new["id"]
+    trader.cb_bank_accounts = _accts   # reassign so SQLAlchemy tracks the JSON change
     await db.commit()
 
     # ── Notifications ─────────────────────────────────────────────────────────
@@ -3386,6 +3435,148 @@ async def save_cb_withdrawal_bank(
         "cooldown_until": cooldown_until,
         "first_change":  is_first_change,
     }
+
+
+# ── Multiple withdrawal bank accounts (up to 3) ──────────────────────────────
+# The cb_withdrawal_* fields mirror whichever saved account is the auto-withdraw target
+# (cb_auto_withdraw_account_id), so all existing withdraw/auto-sweep code keeps working.
+# Security (per product decision): ADD/REMOVE need Google Authenticator + security answer
+# (a new destination is the top fraud vector); SWITCHING the auto target among already-saved
+# accounts needs only Google Authenticator; picking an account for a MANUAL withdrawal needs
+# no extra gate (the Choice Bank SMS OTP on the withdrawal itself covers it).
+
+class CbBankAccountAdd(BaseModel):
+    bank_name: str
+    bank_code: str
+    account: str
+    account_name: str
+    totp_code: str
+    security_answer: str
+
+class CbBankAccountAuth(BaseModel):
+    totp_code: str
+    security_answer: str
+
+class CbBankAccountSwitch(BaseModel):
+    totp_code: str
+
+
+def _cb_check_totp(trader, code):
+    from app.core.security import decrypt_data
+    if not trader.totp_secret:
+        raise HTTPException(status_code=400, detail="Google Authenticator not set up. Configure it in Profile & Security.")
+    if not _verify_totp(decrypt_data(trader.totp_secret), (code or "").strip()):
+        raise HTTPException(status_code=400, detail="Invalid Google Authenticator code. Please try again.")
+
+def _cb_check_security(trader, ans):
+    from app.core.security import verify_password
+    if not trader.security_answer_hash or not verify_password((ans or "").strip().lower(), trader.security_answer_hash):
+        raise HTTPException(status_code=400, detail="Incorrect security answer.")
+
+def _cb_mirror_auto(trader):
+    """Mirror the auto-withdraw account into cb_withdrawal_* so existing code reads it unchanged."""
+    aid = trader.cb_auto_withdraw_account_id
+    acct = next((a for a in (trader.cb_bank_accounts or []) if str(a.get("id")) == str(aid)), None) if aid else None
+    if acct:
+        trader.cb_withdrawal_bank_name    = acct.get("bank_name")
+        trader.cb_withdrawal_bank_code    = acct.get("bank_code")
+        trader.cb_withdrawal_account      = acct.get("account")
+        trader.cb_withdrawal_account_name = acct.get("account_name")
+
+async def _cb_notify_account_change(trader, verb, acct):
+    msg = (f"SparkP2P: withdrawal bank account {verb} — {acct.get('bank_name')} A/C {acct.get('account')}. "
+           f"Not you? Contact support immediately.")
+    try:
+        from app.services.sms import send_sms
+        if trader.phone:
+            send_sms(trader.phone, msg)
+    except Exception:
+        pass
+    try:
+        from app.api.routes.telegram import notify_trader
+        await notify_trader(trader, msg)
+    except Exception:
+        pass
+
+
+@router.get("/cb-bank-accounts")
+async def list_cb_bank_accounts(trader: Trader = Depends(get_current_trader)):
+    """List the trader's saved withdrawal bank accounts (up to 3) + which one auto-withdraw uses."""
+    accts = trader.cb_bank_accounts or []
+    return {
+        "accounts": [
+            {"id": a.get("id"), "bank_name": a.get("bank_name"), "bank_code": a.get("bank_code"),
+             "account": a.get("account"), "account_name": a.get("account_name"),
+             "is_auto": str(a.get("id")) == str(trader.cb_auto_withdraw_account_id)}
+            for a in accts
+        ],
+        "auto_withdraw_id": trader.cb_auto_withdraw_account_id,
+        "max": 3,
+    }
+
+
+@router.post("/cb-bank-accounts")
+async def add_cb_bank_account(body: CbBankAccountAdd, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Add a withdrawal bank account (max 3). Full gate: TOTP + security answer."""
+    import uuid
+    accts = list(trader.cb_bank_accounts or [])
+    if len(accts) >= 3:
+        raise HTTPException(status_code=400, detail="You can save at most 3 withdrawal accounts. Remove one first.")
+    if not (body.bank_name.strip() and body.bank_code.strip() and body.account.strip() and body.account_name.strip()):
+        raise HTTPException(status_code=400, detail="Bank, account number, and account holder name are required.")
+    _cb_check_totp(trader, body.totp_code)
+    _cb_check_security(trader, body.security_answer)
+    if any(a.get("bank_code") == body.bank_code.strip() and a.get("account") == body.account.strip() for a in accts):
+        raise HTTPException(status_code=400, detail="That account is already saved.")
+    acct = {"id": uuid.uuid4().hex[:12], "bank_name": body.bank_name.strip(), "bank_code": body.bank_code.strip(),
+            "account": body.account.strip(), "account_name": body.account_name.strip()}
+    accts.append(acct)
+    trader.cb_bank_accounts = accts   # reassign so SQLAlchemy tracks the JSON change
+    if not trader.cb_auto_withdraw_account_id:
+        trader.cb_auto_withdraw_account_id = acct["id"]   # first account becomes the auto target
+    _cb_mirror_auto(trader)
+    await db.commit()
+    await _cb_notify_account_change(trader, "added", acct)
+    return {"message": "Bank account added.", "id": acct["id"], "auto_withdraw_id": trader.cb_auto_withdraw_account_id}
+
+
+@router.post("/cb-bank-accounts/{account_id}/delete")
+async def delete_cb_bank_account(account_id: str, body: CbBankAccountAuth, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Remove a saved account. Full gate: TOTP + security answer."""
+    accts = list(trader.cb_bank_accounts or [])
+    acct = next((a for a in accts if str(a.get("id")) == str(account_id)), None)
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    _cb_check_totp(trader, body.totp_code)
+    _cb_check_security(trader, body.security_answer)
+    accts = [a for a in accts if str(a.get("id")) != str(account_id)]
+    trader.cb_bank_accounts = accts
+    if str(trader.cb_auto_withdraw_account_id) == str(account_id):
+        trader.cb_auto_withdraw_account_id = accts[0]["id"] if accts else None
+        if not accts:
+            trader.cb_withdrawal_bank_name = None
+            trader.cb_withdrawal_bank_code = None
+            trader.cb_withdrawal_account = None
+            trader.cb_withdrawal_account_name = None
+            trader.cb_auto_withdraw_enabled = False   # nothing left to sweep to
+    _cb_mirror_auto(trader)
+    await db.commit()
+    await _cb_notify_account_change(trader, "removed", acct)
+    return {"message": "Bank account removed.", "auto_withdraw_id": trader.cb_auto_withdraw_account_id}
+
+
+@router.post("/cb-bank-accounts/{account_id}/auto")
+async def set_cb_auto_account(account_id: str, body: CbBankAccountSwitch, trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """Choose which saved account auto-withdraw sweeps to. Lighter gate: TOTP only."""
+    acct = next((a for a in (trader.cb_bank_accounts or []) if str(a.get("id")) == str(account_id)), None)
+    if not acct:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    _cb_check_totp(trader, body.totp_code)
+    trader.cb_auto_withdraw_account_id = acct["id"]
+    _cb_mirror_auto(trader)
+    await db.commit()
+    return {"message": f"Auto-withdraw now sends to {acct.get('bank_name')} A/C {acct.get('account')}.",
+            "auto_withdraw_id": acct["id"]}
 
 
 @router.post("/cb-withdraw-to-bank")
@@ -4083,6 +4274,11 @@ async def get_today_stats(
     """
     Return 24-hour trading statistics that reset at 00:00 UTC (= 03:00 EAT), matching Binance.
     """
+    # Subscription gate: the dashboard's volume/profit cockpit is hidden when the plan is
+    # expired (locked), same as the profit tracker. Paying unlocks it.
+    from app.services.enforcement import subscription_locked
+    if await subscription_locked(db, trader):
+        return {"locked": True, "reason": "subscription_expired"}
     # Trading day boundary from the central source of truth (00:00 UTC = 03:00 EAT).
     midnight_utc = trading_day_start()
 

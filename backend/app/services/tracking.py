@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 ONLINE_WINDOW_SECS = 120   # trader considered online if heartbeat within this
 GAP_SECS = 120             # a poll gap larger than this = bot was offline -> reset floor
 POLL_INTERVAL_SECS = 15
+_TRACK_CONCURRENCY = 10    # traders processed in parallel per cycle (DB pool is 20+30=50, so safe);
+                           # keeps cycle time ~= slowest single trader instead of the SUM of all,
+                           # so Telegram alert latency no longer grows with the online roster
 BOOT_GRACE_SECS = 120   # after backend (re)start, dont reset floors (a restart != trader offline)
 TERMINAL = {"COMPLETED", "CANCELLED", "CANCELLED_BY_SYSTEM"}
 _poller_boot = None
@@ -1064,6 +1067,20 @@ async def track_trader(db, trader) -> int:
     return inserted
 
 
+async def _track_one(trader_id: int, sem: asyncio.Semaphore):
+    """Run track_trader for ONE trader inside its own db session and its own task context, bounded
+    by the shared semaphore. Isolated per task so the poller can process traders concurrently
+    without a slow/heavy trader delaying everyone else's Telegram alert."""
+    async with sem:
+        try:
+            async with async_session() as db:
+                tr = await db.get(Trader, trader_id)
+                if tr is not None:
+                    await track_trader(db, tr)
+        except Exception as e:
+            logger.warning("[Tracking] trader %s failed: %s", trader_id, e)
+
+
 async def tracking_poller():
     """Every 30s: track EVERY trader with a Binance API key — 24/7, regardless of whether their
     app is open. Records completed orders into the central Orders table (so the dashboard reflects
@@ -1073,25 +1090,54 @@ async def tracking_poller():
     global _poller_boot
     _poller_boot = datetime.now(timezone.utc)
     await asyncio.sleep(10)
-    logger.info("[Tracking] poller started (every %ds, 24/7 for all API-key traders)", POLL_INTERVAL_SECS)
+    logger.info("[Tracking] poller started (every %ds, up to %d traders in parallel, 24/7)",
+                POLL_INTERVAL_SECS, _TRACK_CONCURRENCY)
+    sem = asyncio.Semaphore(_TRACK_CONCURRENCY)
     while True:
         try:
             async with async_session() as db:
                 # 24/7: poll every trader that has a Binance API key, online or not. The per-trader
-                # floor/gap logic in track_trader handles the transition gracefully — a long offline
-                # gap just resets the floor to 'now' (so there is no flood of stale-order alerts),
-                # and _backfill_orders catches up any completed trades made while the app was closed.
-                traders = (await db.execute(
-                    select(Trader).where(Trader.binance_api_key.isnot(None))
+                # floor/gap logic in track_trader handles the transition gracefully.
+                trader_ids = (await db.execute(
+                    select(Trader.id).where(Trader.binance_api_key.isnot(None))
                 )).scalars().all()
-                for tr in traders:
-                    try:
-                        await track_trader(db, tr)
-                    except Exception as e:
-                        logger.warning("[Tracking] trader %s failed: %s", tr.id, e)
+            # Process traders CONCURRENTLY (bounded by the semaphore) instead of one-after-another.
+            # The old sequential loop made the cycle time — and therefore the Telegram sell/buy
+            # alert latency — the SUM of every trader's per-cycle relay work (order history +
+            # up to 12 identity lookups + buyer-stats retries). So every extra online trader
+            # slowed everyone's notification. Running them in parallel makes the cycle time ~the
+            # slowest single trader, not the sum, so alerts stay fast as the roster grows. Each
+            # task uses its OWN db session and its OWN relay context var (per-trader routing is a
+            # ContextVar, copied per task), so concurrency is safe.
+            await asyncio.gather(*[_track_one(tid, sem) for tid in trader_ids])
         except Exception as e:
             logger.error("[Tracking] poller error: %s", e)
         await asyncio.sleep(POLL_INTERVAL_SECS)
+
+
+def _drop_impossible_rate_orders(orders):
+    """Strip USDT orders whose recorded price is IMPOSSIBLE (data corruption), so one bad row
+    can't poison the cost basis and fabricate huge fake profit. Real case: a buy recorded at
+    80 KES/USDT while the market was ~129 (the crypto_amount was inflated on recording) inflated
+    a merchant's 'profit' by ~300k. USDT/KES is a stablecoin pair — legit prices cluster tightly,
+    so we judge each order against the MEDIAN per-order rate (robust to outliers) and drop
+    anything more than ~30% below or ~50% above it. Needs >=4 orders for a trustworthy median;
+    never drops more than half (a guard against a wholly-corrupt input mangling a legit history).
+    Callers have already restricted to USDT with crypto_amount>0."""
+    rated = [(o, float(o.fiat_amount or 0) / float(o.crypto_amount or 0))
+             for o in orders if float(o.crypto_amount or 0) > 0]
+    if len(rated) < 4:
+        return orders
+    rs = sorted(r for _, r in rated)
+    n = len(rs)
+    median = rs[n // 2] if n % 2 else (rs[n // 2 - 1] + rs[n // 2]) / 2.0
+    if median <= 0:
+        return orders
+    lo, hi = median * 0.7, median * 1.5
+    kept = [o for o, r in rated if lo <= r <= hi]
+    if len(kept) < len(rated) * 0.5:
+        return orders   # too many would be dropped — don't trust the median; leave data untouched
+    return kept
 
 
 def compute_pnl(orders, fee_per_usdt=0.25):
@@ -1106,6 +1152,7 @@ def compute_pnl(orders, fee_per_usdt=0.25):
     # poisons the weighted-average cost basis (an offline-completed stub, hardcoded to USDT with
     # crypto_amount=0 but later given a KES value, once fabricated a large fake loss this way).
     orders = [o for o in orders if float(o.crypto_amount or 0) > 0]
+    orders = _drop_impossible_rate_orders(orders)   # strip data-corrupt rates (e.g. 80 vs ~129) that fabricate fake profit
     buys = [o for o in orders if o.side == OrderSide.BUY]
     sells = [o for o in orders if o.side == OrderSide.SELL]
 
@@ -1183,6 +1230,7 @@ def compute_pnl_daily(orders, fee_per_usdt=0.25):
     # Drop invalid 0-unit orders (see compute_pnl) — 0 crypto for non-zero KES has no rate and
     # corrupts the daily average buy rate, fabricating fake losses.
     orders = [o for o in orders if float(o.crypto_amount or 0) > 0]
+    orders = _drop_impossible_rate_orders(orders)   # strip data-corrupt rates (e.g. 80 vs ~129) that fabricate fake profit
     by_asset = defaultdict(list)
     for o in orders:
         by_asset[(o.crypto_currency or "USDT").upper()].append(o)

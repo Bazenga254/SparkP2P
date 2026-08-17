@@ -10,7 +10,7 @@ whole conversation lives in the admin dashboard.
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, DateTime, Enum, ForeignKey, JSON, Boolean
 
 from app.core.database import Base
 
@@ -37,6 +37,10 @@ class OpsTicket(Base):
     # Full conversation thread. Each entry:
     #   {from: 'agent'|'choice'|'client'|'system', name, body, ts, channel: 'email'|'sms'|'note'}
     messages = Column(JSON, default=list)
+
+    # True when an inbound reply (Choice/client) arrived and the admin hasn't opened
+    # it yet — drives the "New reply" badge, tab count, and the Dashboard attention tile.
+    needs_attention = Column(Boolean, nullable=False, default=False, index=True)
 
     choice_email = Column(String(255), nullable=True)   # who at Choice Bank this went to
     client_email = Column(String(255), nullable=True)   # snapshot of the client's email/phone at creation

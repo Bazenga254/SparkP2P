@@ -99,7 +99,10 @@ async def apply_for_affiliate(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="You have already applied")
 
-    aff = Affiliate(trader_id=trader.id, status=AffiliateStatus.PENDING)
+    # visible=True so the applicant keeps seeing their affiliate section (pending status,
+    # then their code once approved). The admin can still flip visible off as a per-merchant
+    # kill switch. (Default is False on the column; applying is an explicit opt-in.)
+    aff = Affiliate(trader_id=trader.id, status=AffiliateStatus.PENDING, visible=True)
     db.add(aff)
     await db.commit()
     return {"message": "Application submitted. We will review and respond shortly."}

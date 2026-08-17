@@ -166,6 +166,10 @@ const INCOME_OPTIONS = [
 
 export default function KycMobilePage() {
   const { token } = useParams();
+  // Bulletproofing: a phone that scanned the QR may carry a stale login token (e.g. from a prior
+  // Google sign-in on this browser). This page is public + token-based and needs no session, so
+  // drop any leftover token up-front — nothing downstream can then trip a redirect to /login.
+  try { if (localStorage.getItem('token')) localStorage.removeItem('token'); } catch (_) { /* ignore */ }
   const [device] = useState(() => getDeviceType());
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');

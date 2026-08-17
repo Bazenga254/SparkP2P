@@ -28,6 +28,11 @@ WEEKLY_PLAN_PRICE = {
 # Merchants with NO detected Binance tier (unranked / normal) still get a plan.
 DEFAULT_WEEKLY_PRICE = 8000
 
+# All selectable plan tiers and their weekly price. 'default' is the untiered
+# KES 8000 plan. An admin can pin a merchant to any of these regardless of the
+# tier Binance reports (e.g. put a Block merchant on the Gold plan).
+OVERRIDE_PRICES = {**WEEKLY_PLAN_PRICE, "default": DEFAULT_WEEKLY_PRICE}
+
 WEEK = timedelta(days=7)
 SAVING_NOTE = "You are saving 15% credit costs on this plan"
 
@@ -36,9 +41,28 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def tier_override(trader):
+    """The admin-pinned plan tier for this merchant, or None if it follows their
+    real Binance tier. One of: block | gold | silver | bronze | default."""
+    ov = (getattr(trader, "im_weekly_tier_override", None) or "").lower()
+    return ov if ov in OVERRIDE_PRICES else None
+
+
+def effective_tier(trader):
+    """The plan tier that actually prices this merchant's week: the admin override
+    if pinned, else their real display tier (None = untiered → default price)."""
+    ov = tier_override(trader)
+    if ov:
+        return None if ov == "default" else ov
+    return display_tier(trader)
+
+
 def weekly_price(trader):
-    """The weekly price for this trader — their tier price, or KES 8000 for an
-    unranked/untiered (normal) merchant. Always returns a usable price."""
+    """The weekly price for this trader — the admin-pinned plan tier if set, else
+    their own tier price, else KES 8000 for an unranked merchant. Always usable."""
+    ov = tier_override(trader)
+    if ov:
+        return OVERRIDE_PRICES[ov]
     return WEEKLY_PLAN_PRICE.get(display_tier(trader), DEFAULT_WEEKLY_PRICE)
 
 
@@ -135,4 +159,7 @@ def status(trader) -> dict:
         "active_until": until.isoformat() if until else None,
         "plan_balance": round(float(getattr(trader, "im_plan_balance", 0) or 0), 2),
         "saving_note": SAVING_NOTE,
+        "tier_override": tier_override(trader),      # admin-pinned plan tier, or None
+        "effective_tier": effective_tier(trader),    # tier that actually prices the week
+        "auto_tier": display_tier(trader),           # their real Binance tier
     }

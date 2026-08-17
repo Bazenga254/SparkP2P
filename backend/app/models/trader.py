@@ -78,6 +78,12 @@ class Trader(Base):
     cb_withdrawal_account      = Column(String(50),  nullable=True)   # account number
     cb_withdrawal_account_name = Column(String(100), nullable=True)   # account holder name
     cb_withdrawal_changed_at   = Column(DateTime(timezone=True),  nullable=True)   # last save timestamp (48h cooldown anchor)
+    # Up to 3 saved withdrawal bank accounts. List of {id, bank_name, bank_code, account,
+    # account_name}. The cb_withdrawal_* fields above MIRROR whichever account is the
+    # auto-withdraw target (cb_auto_withdraw_account_id) so all existing withdraw/auto-sweep
+    # code keeps reading them unchanged. Manual withdraw can target ANY saved account per-txn.
+    cb_bank_accounts             = Column(JSON, nullable=True)     # [{id,bank_name,bank_code,account,account_name}]
+    cb_auto_withdraw_account_id  = Column(String(32), nullable=True)  # id of the account auto-withdraw sweeps to
 
     # Auto-sweep: when the Choice Bank balance reaches the threshold, sweep the
     # whole balance out to the configured withdrawal bank account (PesaLink only,
@@ -110,6 +116,10 @@ class Trader(Base):
     im_billing_mode = Column(String(12), default="on_demand", server_default="on_demand")
     im_weekly_active_until = Column(DateTime(timezone=True), nullable=True)
     im_plan_balance = Column(Float, default=0, server_default="0")
+    # Admin override for the weekly-plan tier price: block|gold|silver|bronze|default.
+    # NULL = follow the merchant's real Binance tier. Lets an admin pin e.g. a Block
+    # merchant onto the Gold plan.
+    im_weekly_tier_override = Column(String(12), nullable=True)
 
     # Trading config
     auto_release_enabled = Column(Boolean, default=True)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, reverseChoiceTransaction, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
+import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, reverseChoiceTransaction, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, getCbBankAccounts, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
 import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
@@ -659,8 +659,8 @@ function SpreadCalculator({ orderStats, profile, cbWithdrawBank }) {
               <div style={{ fontSize: 18, fontWeight: 700, color: '#6b7280' }}>—</div>
             ) : todayStats ? (
               <>
-                <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>{todayStats.usdt_traded.toFixed(2)}</div>
-                <div style={{ fontSize: 11, color: '#6b7280' }}>KES {todayStats.kes_volume.toLocaleString(undefined, { maximumFractionDigits: 0 })} vol</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>{Number(todayStats.usdt_traded || 0).toFixed(2)}</div>
+                <div style={{ fontSize: 11, color: '#6b7280' }}>KES {Number(todayStats.kes_volume || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })} vol</div>
               </>
             ) : (
               <div style={{ fontSize: 14, color: '#6b7280' }}>N/A</div>
@@ -919,6 +919,8 @@ export default function Dashboard() {
   const [cbWithdrawLoading, setCbWithdrawLoading] = useState(false);
   const [cbWithdrawMsg, setCbWithdrawMsg] = useState('');
   const [cbWithdrawBank, setCbWithdrawBank] = useState(null);
+  const [cbAccounts, setCbAccounts] = useState([]);        // saved withdrawal bank accounts (up to 3)
+  const [cbWdAcctId, setCbWdAcctId] = useState(null);      // which account THIS bank withdrawal goes to
   const [allTxns, setAllTxns] = useState([]);
   const [allTxnsLoading, setAllTxnsLoading] = useState(false);
   const [reverseTarget, setReverseTarget] = useState(null);   // the txn being reversed
@@ -1064,6 +1066,14 @@ export default function Dashboard() {
   const [affiliateApplyMsg, setAffiliateApplyMsg] = useState('');
   const [affiliateCopied, setAffiliateCopied] = useState(false);
   const [expandedReferral, setExpandedReferral] = useState(null);
+  // Whether to show the merchant-facing Affiliates entry (nav + Apply card). Gated by the
+  // master program flag; a merchant with NO record yet is treated as visible so the "Apply
+  // as Affiliate" button is reachable (the per-merchant `visible` switch only applies once
+  // they HAVE a record — it defaults on at apply time and is the admin's hide/kill switch).
+  const affiliateVisible = affiliatesEnabled && (affiliateData?.affiliate ? !!affiliateData.affiliate.visible : true);
+  // Commission % comes from the backend (COMMISSION_RATE, currently 15) — never hardcode it here
+  // or it drifts out of sync with what's actually paid (this card wrongly said 10%). Fallback 15.
+  const affCommissionPct = affiliateData?.commission_rate_pct ?? 15;
 
   // Listen for update events from Electron main process
   useEffect(() => {
@@ -1264,7 +1274,24 @@ export default function Dashboard() {
   // Load the configured Choice Bank withdrawal account (for the Spread Calculator cash-out)
   useEffect(() => {
     getCbWithdrawalBank().then(r => setCbWithdrawBank(r.data)).catch(() => {});
+    getCbBankAccounts().then(r => {
+      const accts = r.data?.accounts || [];
+      setCbAccounts(accts);
+      // Default the withdrawal target to the auto-withdraw account (or the first saved one).
+      setCbWdAcctId(r.data?.auto_withdraw_id || (accts[0] && accts[0].id) || null);
+    }).catch(() => {});
   }, []);
+
+  // Refresh the saved bank accounts every time the Withdraw modal opens, so an account added
+  // in Settings AFTER the page loaded still shows up in the picker (the list was going stale).
+  useEffect(() => {
+    if (!showCbWithdrawModal) return;
+    getCbBankAccounts().then(r => {
+      const accts = r.data?.accounts || [];
+      setCbAccounts(accts);
+      setCbWdAcctId(prev => (accts.some(a => a.id === prev) ? prev : (r.data?.auto_withdraw_id || (accts[0] && accts[0].id) || null)));
+    }).catch(() => {});
+  }, [showCbWithdrawModal]);
 
   // Live daily profit from real Binance order history — refresh every 60s on Overview
   useEffect(() => {
@@ -1941,7 +1968,7 @@ export default function Dashboard() {
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
           </button>
         ))}
-        {affiliatesEnabled && affiliateData?.affiliate?.visible && (
+        {affiliateVisible &&(
           <button
             className={`tab-btn ${activeTab === 'affiliates' ? 'active' : ''}`}
             onClick={() => setActiveTab('affiliates')}
@@ -2105,7 +2132,7 @@ export default function Dashboard() {
           >
             <Megaphone size={16} /><span>Ads</span>
           </button>
-          {affiliatesEnabled && affiliateData?.affiliate?.visible && (
+          {affiliateVisible &&(
             <button
               className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
               onClick={() => setActiveTab('affiliates')}
@@ -2375,7 +2402,7 @@ export default function Dashboard() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                       <div style={{ width: 46, height: 46, borderRadius: 12, background: `${accent}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>🎟️</div>
                       <div>
-                        <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: 600 }}>I&amp;M Automation credits</div>
+                        <div style={{ fontSize: 12, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.5px', fontWeight: 600 }}>{profile?.b2c_own_paybill_enabled ? 'B2C Automation credits' : 'I&M Automation credits'}</div>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 2 }}>
                           <span style={{ fontSize: 30, fontWeight: 800, color: accent }}>{onWeekly ? (wkActive ? 'Unlimited' : 'Expired') : bal.toLocaleString()}</span>
                           <span style={{ fontSize: 13, color: '#9ca3af' }}>
@@ -2538,7 +2565,7 @@ export default function Dashboard() {
             )}
 
             {/* Affiliate Quick-Action Card */}
-            {affiliatesEnabled && affiliateData?.affiliate?.visible && (
+            {affiliateVisible &&(
               <div className="card" style={{ marginBottom: 16 }}>
                 <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setActiveTab('affiliates')}>
                   <Share2 size={20} style={{ color: '#f59e0b' }} />
@@ -2561,7 +2588,7 @@ export default function Dashboard() {
                 </div>
                 {!affiliateData?.affiliate && (
                   <div style={{ padding: '8px 0 4px', color: '#9ca3af', fontSize: 13 }}>
-                    Earn 10% commission on fees from every trader you refer. <button onClick={() => setActiveTab('affiliates')} style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontWeight: 600, padding: 0 }}>Apply now →</button>
+                    Earn {affCommissionPct}% commission on fees from every trader you refer. <button onClick={() => setActiveTab('affiliates')} style={{ background: 'none', border: 'none', color: '#3b82f6', cursor: 'pointer', fontWeight: 600, padding: 0 }}>Apply now →</button>
                   </div>
                 )}
               </div>
@@ -3549,7 +3576,7 @@ export default function Dashboard() {
           );
         })()}
 
-        {affiliatesEnabled && affiliateData?.affiliate?.visible && activeTab === 'affiliates' && (
+        {affiliateVisible &&activeTab === 'affiliates' && (
           <div>
             {/* No affiliate record yet — Apply form */}
             {!affiliateData?.affiliate && (
@@ -3559,7 +3586,7 @@ export default function Dashboard() {
                   <h3>Become an Affiliate</h3>
                 </div>
                 <p style={{ color: '#9ca3af', fontSize: 14, margin: '8px 0 20px' }}>
-                  Earn <strong style={{ color: '#f59e0b' }}>10% commission</strong> on all fees we collect from every trader you refer — every single order they make. Payouts every Friday for balances ≥ KES 5,000.
+                  Earn <strong style={{ color: '#f59e0b' }}>{affCommissionPct}% commission</strong> on all fees we collect from every trader you refer — every single order they make. Payouts every Friday for balances ≥ KES 5,000.
                 </p>
                 {affiliateApplyMsg ? (
                   <div style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', borderRadius: 8, padding: '12px 16px', color: '#10b981', fontSize: 14 }}>
@@ -3719,7 +3746,7 @@ export default function Dashboard() {
                           {[
                             { n: '1', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', title: 'Share your link',       desc: 'WhatsApp, Telegram, social — anywhere fellow traders are.' },
                             { n: '2', color: '#10b981', bg: 'rgba(16,185,129,0.15)', title: 'They sign up & trade',  desc: 'Your code is locked to their account forever.' },
-                            { n: '3', color: '#10b981', bg: 'rgba(16,185,129,0.15)', title: 'You earn 10%',          desc: 'Paid to your M-Pesa every Monday. No cap.' },
+                            { n: '3', color: '#10b981', bg: 'rgba(16,185,129,0.15)', title: `You earn ${affCommissionPct}%`,          desc: 'Paid to your M-Pesa every Monday. No cap.' },
                           ].map(({ n, color, bg, title, desc }) => (
                             <div key={n} style={{ display: 'flex', gap: 12 }}>
                               <div style={{ width: 24, height: 24, borderRadius: '50%', background: bg, color, fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{n}</div>
@@ -3757,9 +3784,9 @@ export default function Dashboard() {
           };
           // Mirrors plans.py; only used for the first paint before payInfo arrives.
           const PLAN_FALLBACK = [
-            { key: 'starter', label: 'Bronze', price: 10000 },
-            { key: 'pro',     label: 'Silver', price: 11000 },
-            { key: 'pro_max', label: 'Gold',   price: 13000 },
+            { key: 'starter', label: 'Bronze', price: 5000 },
+            { key: 'pro',     label: 'Silver', price: 7500 },
+            { key: 'pro_max', label: 'Gold',   price: 10000 },
           ];
           const SUB_PLANS = (payInfo?.plans?.length ? payInfo.plans : PLAN_FALLBACK)
             .filter(p => PLAN_UI[p.key])
@@ -5255,6 +5282,34 @@ export default function Dashboard() {
                       <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 2 }}>M-Pesa</div>
                       <div style={{ fontSize: 13, color: '#9ca3af' }}>{profile?.settlement_mpesa_phone}</div>
                     </>
+                  ) : cbAccounts.length >= 1 ? (
+                    <>
+                      {/* One selectable box per saved bank — click to choose where THIS withdrawal goes. */}
+                      {cbAccounts.map(a => {
+                        const sel = cbWdAcctId === a.id;
+                        return (
+                          <div key={a.id} onClick={() => setCbWdAcctId(a.id)} style={{
+                            display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+                            border: `1.5px solid ${sel ? '#10b981' : '#374151'}`, borderRadius: 8,
+                            padding: '10px 12px', marginBottom: 8,
+                            background: sel ? 'rgba(16,185,129,0.08)' : '#0d0f1e', transition: 'border-color .12s',
+                          }}>
+                            {/* activation knob */}
+                            <div style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${sel ? '#10b981' : '#6b7280'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              {sel && <div style={{ width: 9, height: 9, borderRadius: '50%', background: '#10b981' }} />}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13.5, fontWeight: 700, color: '#fff' }}>
+                                {a.bank_name}
+                                {a.is_auto && <span style={{ marginLeft: 6, fontSize: 9, background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '1px 6px', borderRadius: 4, fontWeight: 700, verticalAlign: 'middle' }}>AUTO</span>}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.account} · {a.account_name}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {cbAccounts.length > 1 && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>Tap a bank to send this withdrawal there.</div>}
+                    </>
                   ) : (
                     <>
                       <div style={{ fontSize: 14, fontWeight: 700, color: '#fff', marginBottom: 2 }}>{cbWithdrawBank.bank_name}</div>
@@ -5335,8 +5390,9 @@ export default function Dashboard() {
                         if (cbWithdrawChannel === 'mpesa' && parseFloat(cbWithdrawAmount) > 250000) { setCbWithdrawMsg('M-Pesa withdrawals are limited to KES 250,000 per transaction. Withdraw to your bank for larger amounts.'); return; }
                         setCbWithdrawOtpLoading(true); setCbWithdrawMsg('');
                         try {
-                          const initFn = cbWithdrawChannel === 'mpesa' ? cbWithdrawToMpesaInitiate : cbWithdrawInitiate;
-                          const r = await initFn(parseFloat(cbWithdrawAmount));
+                          const r = cbWithdrawChannel === 'mpesa'
+                            ? await cbWithdrawToMpesaInitiate(parseFloat(cbWithdrawAmount))
+                            : await cbWithdrawInitiate(parseFloat(cbWithdrawAmount), cbAccounts.length > 1 ? cbWdAcctId : null);
                           setCbWithdrawOtpSent(true);
                           setCbWithdrawMsg(r.data?.message || 'OTP sent to your phone. Enter it to confirm.');
                         } catch(e) { setCbWithdrawMsg(e.response?.data?.detail || 'Failed to send OTP'); }
@@ -5349,10 +5405,10 @@ export default function Dashboard() {
                   </>
                 ) : (
                   <>
-                    <input type="text" maxLength={8} placeholder="Enter OTP from Choice Bank"
+                    <input type="text" maxLength={8} placeholder="Enter OTP"
                       value={cbWithdrawOtp}
                       onChange={e => setCbWithdrawOtp(e.target.value.replace(/\D/g, ''))}
-                      style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 20, fontWeight: 700, letterSpacing: 3, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
+                      style={{ width: '100%', padding: '11px 14px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 20, fontWeight: 700, letterSpacing: cbWithdrawOtp ? 3 : 1, textAlign: 'center', marginBottom: 12, boxSizing: 'border-box' }}
                     />
                     <button
                       disabled={cbWithdrawLoading || cbWithdrawOtp.length < 4}
@@ -5541,7 +5597,7 @@ export default function Dashboard() {
               { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
               { key: 'configure',    label: 'Configure',   icon: SlidersHorizontal },
               { key: 'paybill',      label: 'My Paybill',  icon: CreditCard  },
-              ...(affiliateData?.affiliate ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
+              ...(affiliateVisible ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
               { key: 'credits',      label: 'Subscriptions', icon: DollarSign  },
             ].map(({ key, label, icon: Icon }) => (
               <button key={key}

@@ -10,7 +10,7 @@ This poller now RE-ASSERTS each filter-enabled trader's configured filter whenev
 drifted from their setting — not just on first-time sync. For each such trader, while their relay is
 connected and at most once per 30 min: read their SELL ads, and if any ad's `userAllTradeCountMin`
 != their configured value, re-push it, then verify the re-push actually landed. A verified push both
-records `cf_last_pushed_at` and tags `binance_merchant_tier='gold'` (EP-7 only sticks for Gold
+records `cf_last_pushed_at` (does NOT infer tier — EP-7 push also succeeds for non-Gold
 Merchants; if it doesn't stick, that's logged instead of silently looping). Never holds a DB session
 across the slow relay/Binance calls.
 """
@@ -122,14 +122,14 @@ async def filter_sync_poller():
                 _attempt_at[tid] = now
 
                 pushed, verified = await _sync_for_trader(tid)
-                # Only claim success (record sync + tag Gold) when the re-push actually landed.
+                # Only claim success (record sync) when the re-push actually landed. Do NOT
+                # tag Gold from an EP-7 push — it succeeds for Silver/Bronze merchants too and
+                # was mislabeling them Gold. Tier comes only from the public P2P medal.
                 if pushed and verified:
                     async with async_session() as db:
                         t = await db.get(Trader, tid)
                         if t:
                             t.cf_last_pushed_at = datetime.now(timezone.utc)
-                            if (t.binance_merchant_tier or "").lower() != "gold":
-                                t.binance_merchant_tier = "gold"
                             await db.commit()
                     logger.info("[FilterSync] trader %s: re-asserted counterparty filter on %d ad(s)", tid, pushed)
         except Exception as e:

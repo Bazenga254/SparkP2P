@@ -76,6 +76,49 @@ async def admin_login(data: AdminLoginRequest, request: Request = None, db: Asyn
     }
 
 
+async def platform_revenue_for_period(db, start, end=None):
+    """Total platform revenue for a period = the SAME three sources as the Revenue page:
+    (1) paid subscriptions (excludes admin grants), (2) Choice Bank outbound-fee markup (our cut,
+    remitted monthly — from withdrawals + buy-order seller payments), (3) I&M credit sales (money in
+    from completed credit top-ups). Kept here as one helper so the Dashboard headline can never drift
+    from the Revenue page again. Returns {subscriptions, choice_markup, im_credit_sales, total}."""
+    from app.models.subscription import Subscription as _Sub, SubscriptionStatus as _SubSt, CreditPurchase as _CP
+    from app.models.payment import Payment as _Pay, PaymentStatus as _PayStatus
+    from app.models.order import Order as _Ord, OrderSide as _Side
+    from app.services.outbound_fees import outbound_markup as _markup
+
+    # 1) Paid subscriptions
+    _sw = [_Sub.status == _SubSt.ACTIVE, _Sub.mpesa_transaction_id != 'ADMIN_GRANT', _Sub.mpesa_transaction_id.isnot(None)]
+    if start: _sw.append(_Sub.started_at >= start)
+    if end: _sw.append(_Sub.started_at < end)
+    subs = float((await db.execute(select(func.coalesce(func.sum(_Sub.amount), 0)).where(*_sw))).scalar() or 0)
+
+    # 2) Choice Bank outbound-fee markup (withdrawals + buy orders)
+    _ob = 0.0
+    _pw = [_Pay.transaction_type == "CHOICE_OUTBOUND", _Pay.status != _PayStatus.FAILED, _Pay.fee > 0]
+    if start: _pw.append(_Pay.created_at >= start)
+    if end: _pw.append(_Pay.created_at < end)
+    for _p in (await db.execute(select(_Pay.amount, _Pay.destination_type).where(*_pw))).all():
+        _dt = (_p.destination_type or "").upper()
+        _ch = "MPESA" if ("MPESA" in _dt or "M-PESA" in _dt) else "BANK"
+        _ob += _markup(_ch, _p.amount or 0)
+    _ow = [_Ord.side == _Side.BUY, _Ord.choice_fee > 0]
+    if start: _ow.append(_Ord.created_at >= start)
+    if end: _ow.append(_Ord.created_at < end)
+    for _o in (await db.execute(select(_Ord.fiat_amount, _Ord.seller_payment_method).where(*_ow))).all():
+        _ch = "MPESA" if (_o.seller_payment_method or "").lower() in ("mpesa", "m-pesa") else "BANK"
+        _ob += _markup(_ch, _o.fiat_amount or 0)
+
+    # 3) I&M credit sales (completed credit top-ups)
+    _cw = [_CP.status == "completed"]
+    if start: _cw.append(_CP.created_at >= start)
+    if end: _cw.append(_CP.created_at < end)
+    im = float((await db.execute(select(func.coalesce(func.sum(_CP.amount), 0)).where(*_cw))).scalar() or 0)
+
+    return {"subscriptions": round(subs, 2), "choice_markup": round(_ob, 2),
+            "im_credit_sales": round(im, 2), "total": round(subs + _ob + im, 2)}
+
+
 @router.get("/dashboard")
 async def admin_dashboard(
     admin: Trader = Depends(get_admin_trader),
@@ -121,15 +164,10 @@ async def admin_dashboard(
     )
     today_volume = float(result.scalar() or 0)
 
-    # Today's subscription revenue
-    from app.models.subscription import Subscription as _Sub, SubscriptionStatus as _SubStatus
-    result = await db.execute(
-        select(func.coalesce(func.sum(_Sub.amount), 0)).where(
-            _Sub.started_at >= today_start,
-            _Sub.status == _SubStatus.ACTIVE,
-        )
-    )
-    today_revenue = float(result.scalar() or 0)
+    # Today's platform earnings — ALL THREE revenue sources (subscriptions + Choice Bank markup +
+    # I&M credit sales), matching the Revenue page. Was subscriptions-only, which undercounted.
+    _today_rev = await platform_revenue_for_period(db, today_start)
+    today_revenue = _today_rev["total"]
 
     # Disputed orders
     result = await db.execute(
@@ -178,6 +216,7 @@ async def admin_dashboard(
             "completed": completed_today,
             "volume": float(today_volume),
             "revenue": float(today_revenue),
+            "revenue_breakdown": _today_rev,   # {subscriptions, choice_markup, im_credit_sales, total}
         },
         "alerts": {
             "disputed_orders": disputed_count,
@@ -579,6 +618,10 @@ async def get_trader_detail(
         "settlement_account": trader.settlement_account or "" if is_full_admin else "— restricted —",
         "settlement_paybill": getattr(trader, 'settlement_paybill', '') or "" if is_full_admin else "— restricted —",
         "settlement_destination": (trader.settlement_phone or trader.settlement_account or trader.phone or "") if is_full_admin else "— restricted —",
+        # The trader's saved Choice Bank withdrawal accounts (up to 3) + which one auto-withdraw
+        # uses — so the admin sees adds/removes the merchant makes in the app.
+        "cb_bank_accounts": (trader.cb_bank_accounts or []) if is_full_admin else [],
+        "cb_auto_withdraw_account_id": getattr(trader, "cb_auto_withdraw_account_id", None) if is_full_admin else None,
         "google_id": getattr(trader, 'google_id', '') or "",
         "binance_username": getattr(trader, 'binance_username', '') or "",
         "phone": trader.phone or "" if is_full_admin else mask_phone(trader.phone),
@@ -1151,6 +1194,44 @@ async def admin_grant_weekly_week(
     return {"status": "granted", "trader_id": trader_id, "weekly": st}
 
 
+@router.put("/traders/{trader_id}/im-weekly/tier")
+async def update_trader_im_weekly_tier(
+    trader_id: int,
+    tier: str = "auto",   # auto | block | gold | silver | bronze | default
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Pin which weekly-plan TIER prices this merchant, overriding their real
+    Binance tier — e.g. put a Block merchant on the Gold plan. 'auto' clears the
+    override so pricing follows their detected tier again. Takes effect on the next
+    activation/renewal; it does not change the price of a week already running."""
+    from app.services import im_weekly_plan as weekly
+    t = (tier or "auto").strip().lower()
+    if t not in ("auto", "default", "block", "gold", "silver", "bronze"):
+        raise HTTPException(status_code=400, detail="tier must be auto|default|block|gold|silver|bronze")
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    trader.im_weekly_tier_override = None if t == "auto" else t
+    await db.commit()
+    await write_audit_log(db, admin, "change_im_weekly_tier", target_trader_id=trader_id,
+                          detail=f"{trader.full_name}: I&M weekly plan tier -> {t} (KES {weekly.weekly_price(trader)}/wk)")
+    return {"status": "updated", "trader_id": trader_id, "weekly": weekly.status(trader)}
+
+
+@router.get("/sms-balance")
+async def admin_sms_balance(admin: Trader = Depends(get_admin_trader)):
+    """Live Advanta SMS credit balance for the Settings page. The balance fetch is a
+    blocking HTTP call, so run it off the event loop. Returns credits + a low flag."""
+    from fastapi.concurrency import run_in_threadpool
+    from app.services.sms import get_sms_balance
+    from app.core.config import settings
+    if not settings.ADVANTA_API_KEY or not settings.ADVANTA_PARTNER_ID:
+        raise HTTPException(status_code=503, detail="SMS provider not configured")
+    credits = await run_in_threadpool(get_sms_balance)
+    return {"credits": round(float(credits), 2), "low": float(credits) < 100}
+
+
 @router.put("/traders/{trader_id}/b2c-paybill")
 async def update_trader_b2c_paybill(
     trader_id: int,
@@ -1274,14 +1355,20 @@ async def update_trader_tier(
     trader.tier = tier
 
     if tier in ("starter", "pro", "pro_max", "advanced"):
-        # Check for existing active subscription
+        # Check for existing active subscription(s). A trader can accumulate MORE THAN ONE
+        # ACTIVE row from stacked payments/renewals — scalar_one_or_none() then raised
+        # MultipleResultsFound and the whole grant 500'd ("Could not grant subscription").
+        # Collapse to a single active row: keep the newest, expire the extras.
         sub_result = await db.execute(
             select(Subscription).where(
                 Subscription.trader_id == trader_id,
                 Subscription.status == SubscriptionStatus.ACTIVE,
-            )
+            ).order_by(Subscription.created_at.desc())
         )
-        existing_sub = sub_result.scalar_one_or_none()
+        active_subs = sub_result.scalars().all()
+        existing_sub = active_subs[0] if active_subs else None
+        for _extra in active_subs[1:]:
+            _extra.status = SubscriptionStatus.EXPIRED
 
         now = datetime.now(timezone.utc)
         plan_amount = plan_price(SubscriptionPlan(tier))   # central config (3k/5k/10k)
@@ -1309,6 +1396,10 @@ async def update_trader_tier(
             )
             db.add(sub)
 
+        # Price tracker follows the subscription — re-enable it on an admin grant / reactivation too
+        # (the expiry enforcer turns it off, and it's admin-gated so the merchant can't self-enable).
+        trader.price_tracker_enabled = True
+
         # B2C plan: enable own-paybill. NO free credits by default — everyone
         # starts at 0 and buys their own (the admin may still gift some by passing
         # an explicit `credits` amount, but the default is none).
@@ -1318,23 +1409,25 @@ async def update_trader_tier(
             if _granted_credits > 0:
                 trader.b2c_credits = int(trader.b2c_credits or 0) + _granted_credits
 
-        # Send notification email
-        from app.services.email import send_subscription_activated
-        send_subscription_activated(
-            trader.email, trader.full_name, tier,
-            exp.strftime("%B %d, %Y"),
-        )
+        # Send notification email (non-fatal — a mail hiccup must not fail the grant).
+        try:
+            from app.services.email import send_subscription_activated
+            send_subscription_activated(
+                trader.email, trader.full_name, tier,
+                exp.strftime("%B %d, %Y"),
+            )
+        except Exception as _e:
+            logger.warning(f"[Admin] subscription-activated email failed for trader {trader_id}: {_e}")
     else:
-        # Downgrade to free — expire any active subscription
+        # Downgrade to free — expire ALL active subscriptions (there may be more than one).
         sub_result = await db.execute(
             select(Subscription).where(
                 Subscription.trader_id == trader_id,
                 Subscription.status == SubscriptionStatus.ACTIVE,
             )
         )
-        existing_sub = sub_result.scalar_one_or_none()
-        if existing_sub:
-            existing_sub.status = SubscriptionStatus.EXPIRED
+        for _s in sub_result.scalars().all():
+            _s.status = SubscriptionStatus.EXPIRED
 
     await db.commit()
     _detail = f"{trader.full_name}: subscription set to {tier}" + (f" + {_granted_credits} B2C credits granted" if _granted_credits else "")
@@ -1781,13 +1874,10 @@ async def admin_analytics(
     year_start = now - timedelta(days=365)
 
     async def _revenue_for_period(start):
-        """Sum subscription payments received in the period (primary income source)."""
-        from app.models.subscription import Subscription as _Sub2, SubscriptionStatus as _SubSt
-        where = [_Sub2.status == _SubSt.ACTIVE]
-        if start is not None:
-            where.append(_Sub2.started_at >= start)
-        q = select(func.coalesce(func.sum(_Sub2.amount), 0)).where(*where)
-        return float((await db.execute(q)).scalar() or 0)
+        """TOTAL platform revenue for the period — the same three sources as the Revenue page
+        (subscriptions + Choice Bank outbound markup + I&M credit sales), via the shared helper.
+        Was subscriptions-only, which made the dashboard headline undercount."""
+        return (await platform_revenue_for_period(db, start))["total"]
 
     today_revenue = await _revenue_for_period(today_start)
     week_revenue = await _revenue_for_period(week_start)
@@ -3100,24 +3190,10 @@ async def im_revenue(
     sparkp2p = by_pop.get("sparkp2p", {"payouts": 0, "revenue": 0, "volume": 0})
     bot_only = by_pop.get("bot_only", {"payouts": 0, "revenue": 0, "volume": 0})
 
-    # CREDIT VALUE used — the "Credits used" card. Weekly-plan payouts bill at rate
-    # 0 (revenue 0, since the merchant paid the flat weekly fee), so they never
-    # show in 'revenue' and the card would sit frozen. But each one DID consume
-    # value at the merchant's per-credit rate (Gold 7 / Silver 5 / Bronze 4). Count
-    # the rate-0 rows per trader, price them, and add that on top of real revenue so
-    # the card reflects actual usage and keeps climbing.
-    from app.services import im_pricing as _pricing
-    wk_rows = (await db.execute(
-        select(ImCharge.trader_id, func.count(ImCharge.id))
-        .where(*where, ImCharge.account_type == "sparkp2p",
-               ImCharge.rate == 0, ImCharge.trader_id.isnot(None))
-        .group_by(ImCharge.trader_id)
-    )).all()
-    weekly_value = 0
-    for _tid, _cnt in wk_rows:
-        _info = await _pricing.rate_for_trader(db, _tid)
-        weekly_value += int(_cnt or 0) * int(_info.get("rate") or 0)
-    sparkp2p["credit_value"] = sparkp2p["revenue"] + weekly_value
+    # CREDITS USED card — counts ONLY real on-demand credit charges (revenue). Weekly/unlimited-plan
+    # payouts bill at rate 0 and consume NO credits, so they are deliberately EXCLUDED (previously we
+    # added their notional per-credit value, which double-spoke as "Unlimited credits" + "KES used").
+    sparkp2p["credit_value"] = sparkp2p["revenue"]
     bot_only["credit_value"] = bot_only["revenue"]
 
     # DEPOSITS: the KES merchants actually PAID to buy credits (completed
@@ -3428,12 +3504,11 @@ async def im_configured_traders(
         info = await pricing.rate_for_trader(db, tid)
         _n, _rev, _vol, _wk = charge_by_id.get(tid, (0, 0, 0, 0))
         stats = (_n, _rev, _vol)
-        # Credit VALUE consumed = real per-payout charges (rev) PLUS the notional
-        # value of weekly-plan payouts (billed at 0, but each one is worth the
-        # merchant's per-credit rate: Gold 7 / Silver 5 / Bronze 4). So a Silver
-        # merchant who did 5 unlimited payouts reads KES 25 of value used, even
-        # though the platform charged them 0 per payout (they paid the weekly fee).
-        _credit_value = int(_rev) + int(_wk) * int(info.get("rate") or 0)
+        # Credits used = ONLY real per-payout charges (rev). Unlimited/weekly-plan payouts bill at
+        # 0 and consume NO credits, so we no longer add their notional value — that produced the
+        # "Unlimited credits but KES 720 used" oxymoron. Weekly/unlimited traders now read 0 used;
+        # only on-demand-credit traders show a credits-used figure.
+        _credit_value = int(_rev)
         deposited = dep_by_id.get(tid, 0)
         last_seen = seen_by_id.get(tid)
         # Online = the bot polled within the last 3 minutes (its heartbeat).
@@ -3830,23 +3905,15 @@ async def get_trader_revenue_detail(
     cb_total = {k: (round(v, 2) if k == "volume" else round(v)) for k, v in cb_total.items()}
 
     # ── 2. I&M credits consumed (period) ─────────────────────────────────────
-    # Weekly-plan payouts bill at rate 0 (covered by the flat weekly fee), so a
-    # plain sum(rate) would read 0 for an unlimited-plan trader. Count those
-    # rate-0 payouts and price them at the trader's per-credit rate (Gold 7 /
-    # Silver 5 / Bronze 4) so "Credits used" reflects the value they consumed.
+    # Credits used = real per-payout charges only (sum of rate). Weekly/unlimited-plan payouts bill
+    # at rate 0 and consume NO credits, so they are excluded — an unlimited trader reads 0 used
+    # (payouts + volume are still tracked below).
     cr = (await db.execute(
         select(func.count(ImCharge.id), func.coalesce(func.sum(ImCharge.rate), 0),
-               func.coalesce(func.sum(ImCharge.payout_amount), 0),
-               func.count(ImCharge.id).filter(ImCharge.rate == 0))
+               func.coalesce(func.sum(ImCharge.payout_amount), 0))
         .where(ImCharge.trader_id == trader_id, ImCharge.charged_at >= start, ImCharge.charged_at < end)
     )).one()
-    _wk = int(cr[3] or 0)
-    _per_credit = 0
-    if _wk:
-        from app.services import im_pricing as _pricing
-        _info = await _pricing.rate_for_trader(db, trader_id)
-        _per_credit = int(_info.get("rate") or 0)
-    credits = {"used_kes": int(cr[1] or 0) + _wk * _per_credit, "payouts": int(cr[0] or 0), "volume": int(cr[2] or 0)}
+    credits = {"used_kes": int(cr[1] or 0), "payouts": int(cr[0] or 0), "volume": int(cr[2] or 0)}
 
     # ── 3. Subscription payments — REAL, successful, deduped ──────────────────
     # A single M-Pesa payment can spawn several subscription rows (a plan switch
@@ -4337,10 +4404,11 @@ async def admin_onboarding_requests(
     """Merchants who submitted onboarding (awaiting approval) plus recently reviewed
     ones, each with the per-step breakdown so the admin can review at a glance."""
     from app.services import onboarding as _onb
+    # Include IN_PROGRESS merchants too — so the admin can see who is still onboarding and
+    # exactly where they got stuck (per-step chips), not only those who already submitted.
     rows = (await db.execute(
         select(Trader)
-        .where(Trader.onboarding_status.in_(["submitted", "approved", "rejected"]))
-        .order_by(Trader.onboarding_submitted_at.desc().nullslast())
+        .where(Trader.onboarding_status.in_(["submitted", "in_progress", "approved", "rejected"]))
     )).scalars().all()
     out = []
     for t in rows:
@@ -4350,15 +4418,26 @@ async def admin_onboarding_requests(
             "full_name": t.full_name,
             "email": t.email,
             "phone": t.phone,
-            "status": t.onboarding_status,
+            "status": t.onboarding_status or "in_progress",
+            "all_steps_done": st["all_steps_done"],
             "submitted_at": t.onboarding_submitted_at.isoformat() if t.onboarding_submitted_at else None,
+            "created_at": t.created_at.isoformat() if getattr(t, "created_at", None) else None,
             "reviewed_at": t.onboarding_reviewed_at.isoformat() if t.onboarding_reviewed_at else None,
             "reject_reason": t.onboarding_reject_reason,
             "steps": st["steps"],
             "choice_kyc_status": t.choice_kyc_status or None,
             "payout_rail": payout_rail_of(t),
         })
-    return {"requests": out, "pending": sum(1 for r in out if r["status"] == "submitted")}
+    # Actionable first: submitted (awaiting review) → in_progress (still setting up) → rejected
+    # → approved. Within each group, most recent first (ISO strings sort chronologically).
+    out.sort(key=lambda r: (r["submitted_at"] or r["created_at"] or ""), reverse=True)
+    _prio = {"submitted": 0, "in_progress": 1, "rejected": 2, "approved": 3}
+    out.sort(key=lambda r: _prio.get(r["status"], 9))
+    return {
+        "requests": out,
+        "pending": sum(1 for r in out if r["status"] == "submitted"),
+        "in_progress": sum(1 for r in out if r["status"] == "in_progress"),
+    }
 
 
 @router.post("/traders/{trader_id}/onboarding/approve")
@@ -4374,6 +4453,13 @@ async def admin_approve_onboarding(
     trader.onboarding_status = "approved"
     trader.onboarding_reviewed_at = datetime.now(timezone.utc)
     trader.onboarding_reject_reason = None
+    # Also activate a PENDING account so approving a stuck merchant fully unblocks them.
+    try:
+        from app.models.trader import TraderStatus as _TS
+        if trader.status == _TS.PENDING:
+            trader.status = _TS.ACTIVE
+    except Exception:
+        pass
     await db.commit()
     logger.info("[Admin] onboarding APPROVED for trader %s by admin %s", trader_id, admin.id)
     return {"status": "approved", "trader_id": trader_id}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -170,6 +170,30 @@ export default function Onboarding() {
   const [totpSetupMsg, setTotpSetupMsg] = useState('');
   const [totpSetupSaving, setTotpSetupSaving] = useState(false);
   const [totpSetupDone, setTotpSetupDone] = useState(false);
+
+  // Move to the Google Authenticator sub-step and lazy-load its QR/secret. Safe to call
+  // repeatedly (won't refetch if already loaded / loading). Used by both the auto-advance
+  // effect and the clickable sub-step pill.
+  const goToTotp = () => {
+    setSecSubStep('totp');
+    if (!totpSetupData && !totpSetupLoading) {
+      setTotpSetupLoading(true);
+      getTotpSetup().then(r => setTotpSetupData(r.data)).catch(() => {}).finally(() => setTotpSetupLoading(false));
+    }
+  };
+
+  // Reliably auto-advance to Google Authenticator ONCE the security question is done —
+  // the click-time setTimeout alone was unreliable and left merchants stranded on
+  // sub-step 1 (question shows "saved" but Continue stays disabled, and the pills weren't
+  // clickable). The ref guard makes it fire once so the Back button can still return to
+  // the question sub-step without being bounced forward again.
+  const autoAdvancedTotp = useRef(false);
+  useEffect(() => {
+    if (currentStep === 4 && sqDone && !totpSetupDone && secSubStep === 'question' && !autoAdvancedTotp.current) {
+      autoAdvancedTotp.current = true;
+      goToTotp();
+    }
+  }, [currentStep, sqDone, totpSetupDone, secSubStep]);
 
   // Name correction (settlement mismatch)
   const [correctedName, setCorrectedName] = useState('');
@@ -1211,9 +1235,19 @@ export default function Onboarding() {
               {[['question', '1. Security Question'], ['totp', '2. Google Authenticator']].map(([key, label]) => {
                 const done = key === 'question' ? sqDone : totpSetupDone;
                 const active = secSubStep === key;
+                // The Authenticator pill is clickable once the security question is done (a
+                // manual way forward if auto-advance ever misses); the Question pill is always
+                // clickable to go back. Clicking never lets you skip the question.
+                const clickable = key === 'question' ? true : sqDone;
+                const onPill = () => {
+                  if (!clickable || active) return;
+                  if (key === 'totp') goToTotp();
+                  else setSecSubStep('question');
+                };
                 return (
-                  <div key={key} style={{
+                  <div key={key} onClick={onPill} style={{
                     padding: '6px 16px', borderRadius: 20, fontSize: 12, fontWeight: 600,
+                    cursor: clickable && !active ? 'pointer' : 'default',
                     background: done ? 'rgba(16,185,129,0.15)' : active ? 'rgba(245,158,11,0.15)' : 'rgba(255,255,255,0.05)',
                     color: done ? '#10b981' : active ? '#f59e0b' : '#6b7280',
                     border: `1px solid ${done ? 'rgba(16,185,129,0.3)' : active ? 'rgba(245,158,11,0.3)' : 'rgba(255,255,255,0.08)'}`,

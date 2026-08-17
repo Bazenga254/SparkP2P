@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('sparkp2p', {
   saveGmailCredentials: (email, appPassword) => ipcRenderer.invoke('save-gmail-credentials', email, appPassword),
   loadGmailCredentials: () => ipcRenderer.invoke('load-gmail-credentials'),
   clearGmailCredentials: () => ipcRenderer.invoke('clear-gmail-credentials'),
+  testEmailOtp: () => ipcRenderer.invoke('test-email-otp'),
   setTotpSecret: (secret) => ipcRenderer.invoke('set-totp-secret', secret),
   setAIKey: (key) => ipcRenderer.invoke('set-ai-key', key),
   getBotStatus: () => ipcRenderer.invoke('get-bot-status'),

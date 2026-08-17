@@ -12,8 +12,18 @@ stores in this app). A call to a trader whose desktop isn't polling times out ->
 that trader as offline (isolated; no impact on other traders).
 """
 import asyncio
+import logging
 import time
 import uuid
+
+logger = logging.getLogger("sparkp2p.relay")
+
+# TEMP diagnostic: trace the lifecycle of a job (enqueue -> pulled -> result/timeout) for a
+# specific trader and for any API-key verify call, so we can see exactly where a stuck verify dies.
+_DIAG_TRADER = 13
+
+def _diag(trader_id: int, path: str = "") -> bool:
+    return trader_id == _DIAG_TRADER or "listWithPagination" in (path or "") or "ads/list" in (path or "")
 
 _RESULT_TIMEOUT = 25.0     # seconds the VPS waits for the desktop to execute a job
 _PRESENCE_WINDOW = 70.0    # a desktop counts as "connected" if it polled within this window
@@ -53,13 +63,22 @@ async def execute(trader_id: int, path: str, params: dict, body: dict, headers: 
     job_id = uuid.uuid4().hex
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     _job_futures[job_id] = fut
-    await _queue(trader_id).put({
+    q = _queue(trader_id)
+    if _diag(trader_id, path):
+        logger.warning("[RELAY-DIAG] ENQUEUE job=%s trader=%s method=%s path=%s qsize=%d connected=%s",
+                       job_id[:8], trader_id, method, path, q.qsize(), is_connected(trader_id))
+    await q.put({
         "job_id": job_id, "method": method, "path": path,
         "params": params, "body": body, "headers": headers, "host": host,
     })
     try:
         result = await asyncio.wait_for(fut, timeout=_RESULT_TIMEOUT)
+        if _diag(trader_id, path):
+            logger.warning("[RELAY-DIAG] RESULT job=%s trader=%s OK", job_id[:8], trader_id)
     except asyncio.TimeoutError:
+        if _diag(trader_id, path):
+            logger.warning("[RELAY-DIAG] TIMEOUT job=%s trader=%s (no result in %.0fs) qsize_now=%d",
+                           job_id[:8], trader_id, _RESULT_TIMEOUT, q.qsize())
         raise RelayOffline(f"trader {trader_id} relay offline (no response in {_RESULT_TIMEOUT:.0f}s)")
     finally:
         _job_futures.pop(job_id, None)
@@ -72,9 +91,13 @@ async def next_job(trader_id: int, wait: float = 25.0, client_ip: str = ""):
     if client_ip:
         _last_ip[trader_id] = client_ip
     try:
-        return await asyncio.wait_for(_queue(trader_id).get(), timeout=wait)
+        job = await asyncio.wait_for(_queue(trader_id).get(), timeout=wait)
     except asyncio.TimeoutError:
         return None
+    if job and _diag(trader_id, job.get("path", "")):
+        logger.warning("[RELAY-DIAG] PULLED job=%s trader=%s by IP=%s path=%s",
+                       (job.get("job_id") or "")[:8], trader_id, client_ip, job.get("path"))
+    return job
 
 
 def deliver_result(job_id: str, body) -> bool:
@@ -83,4 +106,5 @@ def deliver_result(job_id: str, body) -> bool:
     if fut and not fut.done():
         fut.set_result({"body": body})
         return True
+    logger.warning("[RELAY-DIAG] deliver_result job=%s: no waiting future (already timed out, or unknown job_id)", (job_id or "")[:8])
     return False

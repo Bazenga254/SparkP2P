@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import logging
+import re
 from datetime import datetime
 
 import httpx
@@ -171,30 +173,62 @@ class MpesaClient:
         description: str = "Payment",
         callback_url: str = None,
     ) -> dict:
-        """Initiate STK push to customer's phone."""
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        password = base64.b64encode(
-            f"{self.shortcode}{self.passkey}{timestamp}".encode()
-        ).decode()
+        """Initiate STK push to customer's phone.
 
-        payload = {
-            "BusinessShortCode": self.shortcode,
-            "Password": password,
-            "Timestamp": timestamp,
-            "TransactionType": "CustomerPayBillOnline",
-            "Amount": str(int(amount)),
-            "PartyA": self._format_phone(phone),
-            "PartyB": self.shortcode,
-            "PhoneNumber": self._format_phone(phone),
-            "CallBackURL": callback_url or f"{self.callback_base}/api/payment/stkpush/callback",
-            "AccountReference": account_reference,
-            "TransactionDesc": description[:20],
-        }
-        result = await self._make_request(
-            "/mpesa/stkpush/v1/processrequest", payload
-        )
-        logger.info(f"STK Push sent to {phone}: {result}")
-        return result
+        Safaricom's STK on this paybill intermittently rejects with error 500.001.1001
+        ("Unable to lock subscriber, a transaction is already under processing") — it
+        flaps in and out over a few minutes even for well-spaced, single requests. That
+        code is a REJECTION at initiation (no prompt was delivered), so it is SAFE to
+        resend without risking a duplicate STK. We retry only on that specific transient
+        error, rebuilding the timestamp/password each time; every other Daraja error
+        (invalid phone, insufficient funds, etc.) fails immediately. A genuine subscriber
+        lock that outlives the retries still surfaces the friendly message to the caller.
+        """
+        # Safaricom's Daraja REJECTS an STK whose TransactionDesc contains characters like '&'
+        # (it returns the vague error 500.001.1001, as if the subscriber were locked). This bit
+        # us because a caller passed "I&M Credits" — every such push failed while "B2C Credits"
+        # succeeded. Strip TransactionDesc to alphanumerics + spaces so no stray character can
+        # ever silently break the push again. Safaricom allows at most ~20 chars here.
+        safe_desc = re.sub(r"[^A-Za-z0-9 ]+", " ", description or "Payment").strip()[:20] or "Payment"
+
+        attempts = 3          # up to 3 tries over ~11s — stays under the bot relay's 20s timeout
+        backoff_s = 4
+        last_exc = None
+        for i in range(attempts):
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            password = base64.b64encode(
+                f"{self.shortcode}{self.passkey}{timestamp}".encode()
+            ).decode()
+            payload = {
+                "BusinessShortCode": self.shortcode,
+                "Password": password,
+                "Timestamp": timestamp,
+                "TransactionType": "CustomerPayBillOnline",
+                "Amount": str(int(amount)),
+                "PartyA": self._format_phone(phone),
+                "PartyB": self.shortcode,
+                "PhoneNumber": self._format_phone(phone),
+                "CallBackURL": callback_url or f"{self.callback_base}/api/payment/stkpush/callback",
+                "AccountReference": account_reference,
+                "TransactionDesc": safe_desc,
+            }
+            try:
+                result = await self._make_request(
+                    "/mpesa/stkpush/v1/processrequest", payload
+                )
+                if i:
+                    logger.info(f"STK Push to {phone} succeeded on retry #{i} (transient 500.001.1001 cleared)")
+                logger.info(f"STK Push sent to {phone}: {result}")
+                return result
+            except Exception as e:
+                last_exc = e
+                # Retry ONLY the transient subscriber-lock flap; fail fast on anything else.
+                if "500.001.1001" in str(e) and i < attempts - 1:
+                    logger.warning(f"STK Push to {phone} got transient 500.001.1001 — retry {i + 1}/{attempts - 1} in {backoff_s}s")
+                    await asyncio.sleep(backoff_s)
+                    continue
+                raise
+        raise last_exc
 
     # ── Account Balance Query ─────────────────────────────────────
 

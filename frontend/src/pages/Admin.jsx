@@ -88,6 +88,21 @@ function CbBalancePoller({ traderId, onData }) {
   return null;
 }
 
+// Refreshes a viewed trader's P&L every 15s so NET P&L / profit updates while the admin watches,
+// instead of being a one-time snapshot taken when the trader was opened.
+function TraderPnlPoller({ traderId, period, onData }) {
+  useEffect(() => {
+    if (!traderId) return;
+    let active = true;
+    const fetchPnl = () => {
+      getTraderPnl(traderId, period || 'today').then(r => { if (active) onData(r.data); }).catch(() => {});
+    };
+    const iv = setInterval(fetchPnl, 15000);
+    return () => { active = false; clearInterval(iv); };
+  }, [traderId, period]);
+  return null;
+}
+
 
 // Admin SMS composer — send a custom message to one customer or broadcast to everyone.
 function AdminSmsModal({ target, onClose }) {
@@ -884,34 +899,125 @@ export default function Admin() {
   const opsRenderHtml = (t) => (t || '').replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
   const [opsReplyText, setOpsReplyText] = useState('');
   const [opsReplyTo, setOpsReplyTo] = useState('choice');
+  const [opsAttention, setOpsAttention] = useState(0);   // ops cases with an unread reply (dashboard tile + badges)
+  const [opsAttachments, setOpsAttachments] = useState([]);        // for a new case
+  const [opsReplyAttachments, setOpsReplyAttachments] = useState([]); // for a reply
   const [tmplForm, setTmplForm] = useState({ key: '', name: '', subject: '', body: '' });
+  // Read picked files to base64 (strip the data: prefix) for JSON upload.
+  const readFilesB64 = (files) => Promise.all(Array.from(files || []).map(f => new Promise((res) => {
+    const rd = new FileReader();
+    rd.onload = () => res({ name: f.name, type: f.type, content: String(rd.result).split(',')[1] || '' });
+    rd.onerror = () => res(null);
+    rd.readAsDataURL(f);
+  }))).then(a => a.filter(Boolean));
+  const fmtSize = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   const loadOps = async () => {
     try {
       const [t, tp] = await Promise.all([api.get('/admin/ops/tickets'), api.get('/admin/ops/templates')]);
-      setOpsTickets(t.data.tickets || []); setOpsTemplates(tp.data.templates || []);
+      setOpsTickets(t.data.tickets || []); setOpsTemplates(tp.data.templates || []); setOpsAttention(t.data.attention || 0);
     } catch { /* ignore */ }
   };
   const opsCreate = async () => {
     if (!opsForm.trader_id) { alert('Pick a client first'); return; }
     setOpsBusy(true);
     try {
-      const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id), body_override: opsPreview });
+      const r = await api.post('/admin/ops/tickets', { ...opsForm, trader_id: Number(opsForm.trader_id), body_override: opsPreview, attachments: opsAttachments });
       alert('Ticket ' + r.data.ticket_number + ' created — emailed to Choice Bank, and the client was notified by email + SMS.');
-      setOpsShowCreate(false); setOpsTxnResults([]); setOpsTxnQuery(''); setOpsPreview('');
+      setOpsShowCreate(false); setOpsTxnResults([]); setOpsTxnQuery(''); setOpsPreview(''); setOpsAttachments([]);
       setOpsForm({ trader_id: '', category: 'reversal', subject: '', amount: '', reference: '', details: '', notify_client: true, choice_email: '', mpesa_code: '', choice_account: '', txn_datetime: '' });
       await loadOps();
     } catch (e) { alert(e.response?.data?.detail || 'Create failed'); }
     setOpsBusy(false);
   };
   const opsSendReply = async (id) => {
-    if (!opsReplyText.trim()) return;
+    if (!opsReplyText.trim() && opsReplyAttachments.length === 0) return;
     setOpsBusy(true);
-    try { await api.post(`/admin/ops/tickets/${id}/reply`, { body: opsReplyText.trim(), to: opsReplyTo }); setOpsReplyText(''); await loadOps(); }
+    try { await api.post(`/admin/ops/tickets/${id}/reply`, { body: opsReplyText.trim(), to: opsReplyTo, attachments: opsReplyAttachments }); setOpsReplyText(''); setOpsReplyAttachments([]); await loadOps(); }
     catch (e) { alert(e.response?.data?.detail || 'Send failed'); }
     setOpsBusy(false);
   };
   const opsSetStatus = async (id, status) => {
     try { await api.post(`/admin/ops/tickets/${id}/status`, { status }); await loadOps(); } catch {}
+  };
+  const OPS_OPEN_STATUSES = ['open', 'awaiting_choice', 'awaiting_client'];
+  // One Choice-Bank operations case (thread + reply + attachments). Rendered inside
+  // the shared Support Tickets list so there's a single tickets area.
+  const opsUnread = (t) => !!t.needs_attention;
+  const opsMarkRead = async (id) => {
+    setOpsTickets(list => list.map(t => t.id === id ? { ...t, needs_attention: false } : t));
+    setOpsAttention(n => Math.max(0, n - 1));
+    try { await api.post(`/admin/ops/tickets/${id}/read`); } catch { /* ignore */ }
+  };
+  const renderOpsCase = (t) => {
+    const open = opsOpen === t.id;
+    const unread = opsUnread(t);
+    const badge = { open: '#F5A524', awaiting_choice: '#3b82f6', awaiting_client: '#a78bfa', resolved: '#34D399', closed: '#8A94A6' }[t.status] || '#8A94A6';
+    return (
+      <div key={`ops-${t.id}`} className={`sup-ticket${unread ? ' sup-ticket--unread' : ''}`}>
+        <div onClick={() => { const willOpen = !open; setOpsOpen(willOpen ? t.id : null); if (willOpen && t.needs_attention) opsMarkRead(t.id); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: 'pointer' }}>
+          <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: unread ? '#F5A524' : badge }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: 'var(--text)', fontWeight: 650, fontSize: 13.5, letterSpacing: '-0.1px' }}>{t.ticket_number} · {t.subject}</div>
+            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 3 }}>Choice Bank case · {t.client_name || '—'} · {(t.messages || []).length} message{(t.messages || []).length === 1 ? '' : 's'}</div>
+          </div>
+          {unread && <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 800, background: '#F5A524', color: '#1A1206', textTransform: 'uppercase', letterSpacing: 0.4 }}>New reply</span>}
+          <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: badge + '1f', color: badge }}>{t.status.replace('_', ' ')}</span>
+        </div>
+        {open && (
+          <div style={{ padding: '0 14px 14px' }}>
+            <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
+              {(t.messages || []).map((m, i) => {
+                const c = m.from === 'choice' ? '#3b82f6' : m.from === 'client' ? '#a78bfa' : m.from === 'agent' ? '#34D399' : '#8A94A6';
+                return (
+                  <div key={i} style={{ borderLeft: `2px solid ${c}`, paddingLeft: 10 }}>
+                    <div style={{ color: c, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase' }}>{m.from === 'agent' ? (m.name || 'Agent') + (m.to ? ' → ' + m.to : '') : m.from + (m.name ? ' · ' + m.name : '')}</div>
+                    <div style={{ color: '#e5e7eb', fontSize: 12.5 }} dangerouslySetInnerHTML={{ __html: m.body }} />
+                    {(m.attachments || []).length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                        {m.attachments.map((a, ai) => (
+                          <a key={ai} href={a.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 6, background: '#0d0f1e', border: '1px solid #232B3A', color: '#60A5FA', fontSize: 11, textDecoration: 'none' }}>
+                            📎 {a.name}{a.size ? ` · ${fmtSize(a.size)}` : ''}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ color: '#5C6577', fontSize: 10 }}>{m.ts ? fmtDateEAT(m.ts) : ''}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+              {[['choice', 'To Choice Bank'], ['client', 'To Client']].map(([v, l]) => (
+                <button key={v} onClick={() => setOpsReplyTo(v)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid', borderColor: opsReplyTo === v ? '#f59e0b' : '#232B3A', background: opsReplyTo === v ? 'rgba(245,165,36,0.12)' : 'transparent', color: opsReplyTo === v ? '#f59e0b' : '#9aa4b2', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{l}</button>
+              ))}
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+                <button onClick={() => opsSetStatus(t.id, 'resolved')} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #16794A', background: 'transparent', color: '#34D399', fontSize: 11, cursor: 'pointer' }}>Resolved</button>
+                <button onClick={() => opsSetStatus(t.id, 'closed')} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #232B3A', background: 'transparent', color: '#8A94A6', fontSize: 11, cursor: 'pointer' }}>Close</button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <textarea value={opsReplyText} onChange={e => setOpsReplyText(e.target.value)} placeholder={`Reply to ${opsReplyTo === 'choice' ? 'Choice Bank' : 'the client'}…`} rows={2} style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label title="Attach files" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: '8px 10px', borderRadius: 7, border: '1px dashed #3b82f6', background: 'rgba(59,130,246,0.08)', color: '#60A5FA', fontSize: 14, cursor: 'pointer' }}>
+                  📎<input type="file" multiple style={{ display: 'none' }} onChange={async e => { const f = await readFilesB64(e.target.files); setOpsReplyAttachments(a => [...a, ...f]); e.target.value = ''; }} />
+                </label>
+                <button disabled={opsBusy} onClick={() => opsSendReply(t.id)} style={{ padding: '8px 14px', borderRadius: 7, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Send</button>
+              </div>
+            </div>
+            {opsReplyAttachments.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {opsReplyAttachments.map((a, i) => (
+                  <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 6, background: '#0d0f1e', border: '1px solid #232B3A', color: '#c7cfdb', fontSize: 11 }}>
+                    {a.name}
+                    <button onClick={() => setOpsReplyAttachments(arr => arr.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', color: '#ef6a6a', cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
   const opsSaveTemplate = async () => {
     if (!tmplForm.key || !tmplForm.name || !tmplForm.subject || !tmplForm.body) { alert('Fill all template fields'); return; }
@@ -1281,6 +1387,28 @@ export default function Admin() {
     return () => clearInterval(iv);
   }, [activeTab, ticketCategory]);
 
+  // Poll ops-case unread count every 15s so the Dashboard "Support" tile stays live
+  // on any tab. When viewing Support, loadOps already keeps opsAttention fresh.
+  useEffect(() => {
+    const pollOps = async () => {
+      if (activeTab === 'disputes') return;   // loadOps handles it there
+      try { const r = await api.get('/admin/ops/attention-count'); setOpsAttention(r.data.count || 0); } catch { /* ignore */ }
+    };
+    pollOps();
+    const iv = setInterval(pollOps, 15000);
+    return () => clearInterval(iv);
+  }, [activeTab]);
+
+  // Keep the SMS credit balance live while the Settings page is open — re-pull from
+  // Advanta on entry and every 30s, so it reflects sends without a manual refresh.
+  useEffect(() => {
+    if (activeTab !== 'settings') return;
+    const fetchBal = () => api.get('/admin/sms-balance').then(res => setSmsBalance(res.data)).catch(() => {});
+    fetchBal();
+    const iv = setInterval(fetchBal, 30000);
+    return () => clearInterval(iv);
+  }, [activeTab]);
+
   // Super-admin: poll for unseen sensitive staff actions (the audit-alert bell badge).
   useEffect(() => {
     const pollAudit = () => api.get('/admin/audit-notifications')
@@ -1461,6 +1589,7 @@ export default function Admin() {
   const openTraderPage = async (trader) => {
     setViewingTrader({ ...trader });
     setViewingTraderWallet(null);
+    setCbBalance(null);   // clear the previous trader's Choice Bank balance so it doesn't linger on the new one
     setViewingTraderTx([]);
     setViewingTraderOrders([]);
     setTraderPnl(null);
@@ -1868,7 +1997,7 @@ export default function Admin() {
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, textAlign: 'center' }}>
                     {[
-                      { label: 'Support',  value: unreadTicketCount,                                                        color: '#ef4444', onClick: () => setActiveTab('disputes')  },
+                      { label: 'Support',  value: unreadTicketCount + opsAttention,                                         color: '#ef4444', onClick: () => setActiveTab('disputes')  },
                       { label: 'Unmatched', value: (unmatched.deposits?.length || 0) + (unmatched.withdrawals?.length || 0), color: '#f59e0b', onClick: () => setActiveTab('unmatched') },
                       { label: 'KYC pending', value: dashboard.traders?.total_unverified ?? 0,                               color: '#3b82f6', onClick: () => setActiveTab('kyc')       },
                     ].map(({ label, value, color, onClick }) => (
@@ -2848,10 +2977,11 @@ export default function Admin() {
                             <option value="own_paybill">Own Paybill / B2C</option>
                           </select>
                         </div>
-                        {/* I&M billing: on-demand credits vs the weekly unlimited package (tier-priced). */}
-                        {(t.payout_rail === 'im_bot' || t.buy_payout_via_im) && (
+                        {/* I&M / B2C billing: on-demand credits vs the weekly unlimited package (tier-priced).
+                            The weekly-plan system is rail-agnostic, so it serves the Own-Paybill (B2C) rail too. */}
+                        {(t.payout_rail === 'im_bot' || t.buy_payout_via_im || t.payout_rail === 'own_paybill') && (
                           <div className="field">
-                            <label title="On-demand: pay per payout from credits (today's behaviour). Weekly: a flat fee for UNLIMITED payouts for 7 days — Block 5000 / Gold 4500 / Silver 3000 / Bronze 2000 / no tier 8000. The merchant pays the fee to start a week; on-demand buying is disabled while on weekly.">I&amp;M Plan</label>
+                            <label title="On-demand: pay per payout from credits (B2C = KES 5 each). Weekly: a flat fee for UNLIMITED payouts for 7 days — Block 5000 / Gold 4500 / Silver 3000 / Bronze 2000 / no tier 8000. The merchant pays the fee to start a week; on-demand buying is disabled while on weekly.">{t.payout_rail === 'own_paybill' ? 'B2C Plan' : 'I&M Plan'}</label>
                             <select
                               value={t.im_billing_mode || 'on_demand'}
                               onChange={async (e) => {
@@ -2871,7 +3001,26 @@ export default function Admin() {
                                   {t.im_weekly?.active
                                     ? `Active · KES ${t.im_weekly.weekly_price}/wk · until ${new Date(t.im_weekly.active_until).toLocaleString('en-KE')}`
                                     : `KES ${t.im_weekly?.weekly_price || '—'}/wk · not active${t.im_weekly?.plan_balance ? ` · KES ${t.im_weekly.plan_balance} held` : ''}`}
+                                  {t.im_weekly?.tier_override && <span style={{ color: '#c4b5fd' }}> · pinned: {t.im_weekly.tier_override}</span>}
                                 </div>
+                                {/* Plan-tier override: pin any tier's price to this merchant, regardless of their Binance tier. */}
+                                <select
+                                  value={t.im_weekly?.tier_override || 'auto'}
+                                  title="Pin which weekly-plan tier prices this merchant, overriding their Binance tier (e.g. put a Block merchant on the Gold plan). Applies from the next activation/renewal."
+                                  onChange={async (e) => {
+                                    const tier = e.target.value;
+                                    try { await api.put(`/admin/traders/${t.id}/im-weekly/tier?tier=${tier}`); }
+                                    catch (err) { alert(err.response?.data?.detail || 'Could not set plan tier'); }
+                                    await refreshTraderDetail(t.id);
+                                  }}
+                                  style={{ marginTop: 5, width: '100%', padding: '4px 6px', borderRadius: 6, border: '1px solid #232B3A', background: '#0d0f1e', color: '#e5e7eb', fontSize: 11 }}>
+                                  <option value="auto">Auto — their tier ({t.im_weekly?.auto_tier || 'no tier'})</option>
+                                  <option value="block">Block plan · KES 5000/wk</option>
+                                  <option value="gold">Gold plan · KES 4500/wk</option>
+                                  <option value="silver">Silver plan · KES 3000/wk</option>
+                                  <option value="bronze">Bronze plan · KES 2000/wk</option>
+                                  <option value="default">No-tier plan · KES 8000/wk</option>
+                                </select>
                                 {/* Grant a week for a merchant who already paid the fee (e.g. it became
                                     on-demand credits). Two-click confirm — desktop app blocks confirm(). */}
                                 <button
@@ -2909,7 +3058,9 @@ export default function Admin() {
                     {/* ===== KPI ROW ===== */}
                     {(() => {
                       const net = (traderPnl?.summary?.net != null) ? traderPnl.summary.net : (t.live_today_net_profit || 0);
-                      const sellTrades = traderPnl?.summary?.trades ?? 0;
+                      // Profit is realized on SELLS only, so show the completed SELL count — not
+                      // total trades (which is dominated by buys and made this read misleadingly high).
+                      const sellTrades = traderPnl?.summary?.sell_orders ?? 0;
                       return (
                         <div className="kpi-row">
                           <div className="kpi">
@@ -3132,6 +3283,7 @@ export default function Admin() {
                           </button>
                         </div>
                         <CbBalancePoller traderId={t.id} onData={setCbBalance} />
+                        <TraderPnlPoller traderId={t.id} period={pnlPeriod} onData={setTraderPnl} />
                         <div className="card">
                         <div className="card-b">
                           {t.choice_account_id ? (
@@ -3201,6 +3353,25 @@ export default function Admin() {
                               </>
                             );
                           })()}
+
+                          {/* Choice Bank withdrawal accounts (up to 3) — reflects what the merchant
+                              adds/removes in the app. */}
+                          {Array.isArray(t.cb_bank_accounts) && t.cb_bank_accounts.length > 0 && (
+                            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                              <div className="tdx-sec-label" style={{ margin: '0 0 8px' }}>Choice Bank withdrawal accounts ({t.cb_bank_accounts.length}/3)</div>
+                              {t.cb_bank_accounts.map(a => (
+                                <div key={a.id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                    <span style={{ fontWeight: 700, fontSize: 13 }}>{a.bank_name}</span>
+                                    {String(a.id) === String(t.cb_auto_withdraw_account_id) && (
+                                      <span style={{ fontSize: 9, background: 'rgba(16,185,129,0.15)', color: 'var(--pos)', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>AUTO</span>
+                                    )}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>{a.account} · {a.account_name}</div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         </div>
                         </div>
@@ -3368,19 +3539,19 @@ export default function Admin() {
                         <>
                           <div className="kpi-row">
                             <div className="kpi">
-                              <div className="kpi-label">Gross Revenue</div>
+                              <div className="kpi-label">Gross Profit</div>
                               <div className="kpi-val num" style={{ color: 'var(--pos)' }}>+KES {Math.abs(s.revenue).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</div>
-                              <div className="kpi-delta">gross fees earned</div>
+                              <div className="kpi-delta">trading spread (before fees)</div>
                             </div>
                             <div className="kpi">
-                              <div className="kpi-label">Fees Paid</div>
+                              <div className="kpi-label">Binance Fees</div>
                               <div className="kpi-val num" style={{ color: 'var(--neg)' }}>-KES {Math.abs(s.fees).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</div>
-                              <div className="kpi-delta">rail fees</div>
+                              <div className="kpi-delta">commission on USDT sold</div>
                             </div>
                             <div className="kpi">
                               <div className="kpi-label">Net P&amp;L</div>
                               <div className="kpi-val num" style={{ color: s.net > 0 ? 'var(--pos)' : s.net < 0 ? 'var(--neg)' : 'var(--text)' }}>{s.net > 0 ? '+' : s.net < 0 ? '-' : ''}KES {Math.abs(s.net).toLocaleString('en-KE', { maximumFractionDigits: 0 })}</div>
-                              <div className="kpi-delta">after fees</div>
+                              <div className="kpi-delta">after Binance fees</div>
                             </div>
                             <div className="kpi">
                               <div className="kpi-label">Completed Orders</div>
@@ -3797,9 +3968,9 @@ export default function Admin() {
 
           {/* ==================== DISPUTES ==================== */}
           {activeTab === 'disputes' && (
-            <>
+            <div className="sup-page">
               {/* ── Operations Cases (Choice Bank) ── */}
-              <div className="adm-card" style={{ marginBottom: 16 }}>
+              <div className="adm-card">
                 <div className="adm-card-header">
                   <h3>Operations Cases · Choice Bank</h3>
                   <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
@@ -3807,8 +3978,8 @@ export default function Admin() {
                     <button onClick={() => { setOpsShowCreate(v => !v); setOpsShowTemplates(false); }} style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>+ New case</button>
                   </div>
                 </div>
-                <div style={{ padding: '0 4px 4px' }}>
-                  <p style={{ color: '#8A94A6', fontSize: 12.5, margin: '0 0 12px' }}>Raise a case with Choice Bank (Operations@choice-bank.com) for a client — reversal, wrong payment, funds not credited. The client gets the ticket number by email + SMS, and replies thread back here.</p>
+                <div className="sup-body">
+                  <p className="sup-intro" style={{ marginBottom: (opsShowCreate || opsShowTemplates) ? 16 : 0 }}>Raise a case with Choice Bank (Operations@choice-bank.com) for a client — reversal, wrong payment, or funds not credited. The client gets the ticket number by email &amp; SMS, and the case appears under <b>Support Tickets → Open Tickets</b> below, where every reply threads.</p>
 
                   {opsShowTemplates && (
                     <div style={{ border: '1px solid #1A2130', borderRadius: 10, padding: 14, marginBottom: 14, background: '#0F1420' }}>
@@ -3842,9 +4013,9 @@ export default function Admin() {
                       </select>
                       {opsForm.trader_id && (
                         <div style={{ border: '1px solid #1A2130', borderRadius: 8, padding: 10, background: '#0b0e16' }}>
-                          <div style={{ fontSize: 11, color: '#8A94A6', marginBottom: 6 }}>Find the client's transaction and click it to auto-fill the amount, M-Pesa code, reference & time:</div>
+                          <div style={{ fontSize: 11, color: '#8A94A6', marginBottom: 6 }}>Find the client's transaction and click it to auto-fill the amount, M-Pesa code, reference & time. You can search by M-Pesa code, reference (UTRANS), amount, paybill/account or name — leave blank and press Find to list recent ones:</div>
                           <div style={{ display: 'flex', gap: 6 }}>
-                            <input value={opsTxnQuery} onChange={e => setOpsTxnQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') opsSearchTxns(); }} placeholder="Search M-Pesa code, reference or name…" style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
+                            <input value={opsTxnQuery} onChange={e => setOpsTxnQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') opsSearchTxns(); }} placeholder="Search M-Pesa code, reference, amount, account or name…" style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff' }} />
                             <button onClick={opsSearchTxns} disabled={opsTxnLoading} style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid #3b82f6', background: 'rgba(59,130,246,0.12)', color: '#60A5FA', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>{opsTxnLoading ? '…' : 'Find'}</button>
                           </div>
                           {opsTxnResults.length > 0 && (
@@ -3899,56 +4070,27 @@ export default function Admin() {
                         )}
                       </div>
 
-                      <button disabled={opsBusy} onClick={opsCreate} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 13, cursor: 'pointer', justifySelf: 'start' }}>{opsBusy ? 'Creating…' : 'Create & email Choice Bank'}</button>
-                    </div>
-                  )}
-
-                  {opsTickets.length === 0 ? (
-                    <div style={{ color: '#5C6577', fontSize: 13, padding: '8px 0' }}>No operations cases yet.</div>
-                  ) : opsTickets.map(t => {
-                    const open = opsOpen === t.id;
-                    const badge = { open: '#F5A524', awaiting_choice: '#3b82f6', awaiting_client: '#a78bfa', resolved: '#34D399', closed: '#8A94A6' }[t.status] || '#8A94A6';
-                    return (
-                      <div key={t.id} style={{ border: '1px solid #1A2130', borderRadius: 10, marginBottom: 8, background: '#0F1420' }}>
-                        <div onClick={() => setOpsOpen(open ? null : t.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', cursor: 'pointer' }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ color: '#EAEEF5', fontWeight: 700, fontSize: 13 }}>{t.ticket_number} · {t.subject}</div>
-                            <div style={{ color: '#8A94A6', fontSize: 11.5 }}>{t.client_name || '—'} · {(t.messages || []).length} message(s)</div>
-                          </div>
-                          <span style={{ padding: '2px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700, background: badge + '22', color: badge }}>{t.status.replace('_', ' ')}</span>
-                        </div>
-                        {open && (
-                          <div style={{ padding: '0 14px 14px' }}>
-                            <div style={{ display: 'grid', gap: 8, marginBottom: 10 }}>
-                              {(t.messages || []).map((m, i) => {
-                                const c = m.from === 'choice' ? '#3b82f6' : m.from === 'client' ? '#a78bfa' : m.from === 'agent' ? '#34D399' : '#8A94A6';
-                                return (
-                                  <div key={i} style={{ borderLeft: `2px solid ${c}`, paddingLeft: 10 }}>
-                                    <div style={{ color: c, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase' }}>{m.from === 'agent' ? (m.name || 'Agent') + (m.to ? ' → ' + m.to : '') : m.from + (m.name ? ' · ' + m.name : '')}</div>
-                                    <div style={{ color: '#e5e7eb', fontSize: 12.5 }} dangerouslySetInnerHTML={{ __html: m.body }} />
-                                    <div style={{ color: '#5C6577', fontSize: 10 }}>{m.ts ? fmtDateEAT(m.ts) : ''}</div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
-                              {[['choice', 'To Choice Bank'], ['client', 'To Client']].map(([v, l]) => (
-                                <button key={v} onClick={() => setOpsReplyTo(v)} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid', borderColor: opsReplyTo === v ? '#f59e0b' : '#232B3A', background: opsReplyTo === v ? 'rgba(245,165,36,0.12)' : 'transparent', color: opsReplyTo === v ? '#f59e0b' : '#9aa4b2', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{l}</button>
-                              ))}
-                              <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                                <button onClick={() => opsSetStatus(t.id, 'resolved')} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #16794A', background: 'transparent', color: '#34D399', fontSize: 11, cursor: 'pointer' }}>Resolved</button>
-                                <button onClick={() => opsSetStatus(t.id, 'closed')} style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #232B3A', background: 'transparent', color: '#8A94A6', fontSize: 11, cursor: 'pointer' }}>Close</button>
-                              </div>
-                            </div>
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <textarea value={opsReplyText} onChange={e => setOpsReplyText(e.target.value)} placeholder={`Reply to ${opsReplyTo === 'choice' ? 'Choice Bank' : 'the client'}…`} rows={2} style={{ flex: 1, padding: 8, borderRadius: 7, border: '1px solid #232B3A', background: '#0d0f1e', color: '#fff', resize: 'vertical' }} />
-                              <button disabled={opsBusy} onClick={() => opsSendReply(t.id)} style={{ padding: '8px 14px', borderRadius: 7, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Send</button>
-                            </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: '#8A94A6', marginBottom: 4 }}>Attachments (images, audio, PDFs, screenshots…) — sent with the email to Choice Bank:</div>
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 7, border: '1px dashed #3b82f6', background: 'rgba(59,130,246,0.08)', color: '#60A5FA', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                          📎 Add files
+                          <input type="file" multiple style={{ display: 'none' }} onChange={async e => { const f = await readFilesB64(e.target.files); setOpsAttachments(a => [...a, ...f]); e.target.value = ''; }} />
+                        </label>
+                        {opsAttachments.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                            {opsAttachments.map((a, i) => (
+                              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderRadius: 6, background: '#0d0f1e', border: '1px solid #232B3A', color: '#c7cfdb', fontSize: 11 }}>
+                                {a.name}
+                                <button onClick={() => setOpsAttachments(arr => arr.filter((_, j) => j !== i))} style={{ background: 'none', border: 'none', color: '#ef6a6a', cursor: 'pointer', fontSize: 13, padding: 0, lineHeight: 1 }}>×</button>
+                              </span>
+                            ))}
                           </div>
                         )}
                       </div>
-                    );
-                  })}
+
+                      <button disabled={opsBusy} onClick={opsCreate} style={{ padding: '9px 16px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontWeight: 700, fontSize: 13, cursor: 'pointer', justifySelf: 'start' }}>{opsBusy ? 'Creating…' : 'Create & email Choice Bank'}</button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -4092,7 +4234,7 @@ export default function Admin() {
                 <div className="adm-card-header">
                   <h3>Support Tickets</h3>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span className="adm-card-count">{ticketTotal} {ticketCategory}</span>
+                    <span className="adm-card-count">{ticketTotal + opsTickets.filter(t => ticketCategory === 'open' ? OPS_OPEN_STATUSES.includes(t.status) : !OPS_OPEN_STATUSES.includes(t.status)).length} {ticketCategory}</span>
                     <button className="adm-btn-sm" onClick={() => loadSupportTickets(ticketCategory, ticketPage)} disabled={supportLoading} style={{ fontSize: 12, padding: '4px 10px' }}>
                       {supportLoading ? 'Loading…' : 'Refresh'}
                     </button>
@@ -4100,41 +4242,37 @@ export default function Admin() {
                 </div>
 
                 {/* Category tabs */}
-                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
+                <div className="sup-tabs">
                   {['open', 'closed'].map((cat) => (
                     <button key={cat} onClick={() => setTicketCategory(cat)}
-                      style={{
-                        padding: '8px 20px', background: 'none', border: 'none',
-                        borderBottom: ticketCategory === cat ? '2px solid #6366f1' : '2px solid transparent',
-                        color: ticketCategory === cat ? '#a5b4fc' : 'var(--text-secondary)',
-                        fontWeight: ticketCategory === cat ? 600 : 400,
-                        fontSize: 13, cursor: 'pointer', textTransform: 'capitalize',
-                      }}
+                      className={`sup-tab${ticketCategory === cat ? ' active' : ''}`}
                     >
-                      {cat === 'open' ? `Open Tickets${unreadTicketCount > 0 && ticketCategory !== 'open' ? ` (${unreadTicketCount})` : ''}` : 'Closed Tickets'}
+                      {cat === 'open'
+                        ? `Open Tickets (${opsTickets.filter(t => OPS_OPEN_STATUSES.includes(t.status)).length})${opsTickets.filter(opsUnread).length > 0 ? ` · ${opsTickets.filter(opsUnread).length} new` : ''}`
+                        : `Closed Tickets (${opsTickets.filter(t => !OPS_OPEN_STATUSES.includes(t.status)).length})`}
                     </button>
                   ))}
                 </div>
 
-                {supportTickets.length === 0 && !supportLoading ? (
-                  <p className="adm-empty">No {ticketCategory} tickets.</p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 0' }}>
+                {(() => {
+                  const opsForCat = opsTickets.filter(t => ticketCategory === 'open' ? OPS_OPEN_STATUSES.includes(t.status) : !OPS_OPEN_STATUSES.includes(t.status));
+                  if (opsForCat.length === 0 && supportTickets.length === 0 && !supportLoading)
+                    return <p className="sup-empty">No {ticketCategory} tickets.</p>;
+                  return (
+                  <div className="sup-list">
+                    {opsForCat.map(renderOpsCase)}
                     {supportTickets.map((ticket) => (
                       <div
                         key={ticket.id}
-                        style={{
-                          border: '1px solid var(--border)',
-                          borderRadius: 10,
-                          overflow: 'hidden',
-                        }}
+                        className="sup-ticket"
+                        style={{ overflow: 'hidden' }}
                       >
                         <div
                           style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: 10,
-                            padding: '10px 14px',
+                            padding: '13px 16px',
                             cursor: 'pointer',
                             background: expandedTicket === ticket.id ? 'var(--bg)' : 'transparent',
                           }}
@@ -4263,7 +4401,8 @@ export default function Admin() {
                       </div>
                     ))}
                   </div>
-                )}
+                  );
+                })()}
 
                 {/* Pagination */}
                 {ticketPages > 1 && (
@@ -4274,7 +4413,7 @@ export default function Admin() {
                   </div>
                 )}
               </div>
-            </>
+            </div>
           )}
 
           {/* ==================== UNMATCHED ==================== */}
@@ -4582,7 +4721,7 @@ export default function Admin() {
             return (
               <div>
                 {/* Security Features Status */}
-                <div className="adm-card" style={{ marginBottom: 20 }}>
+                <div className="adm-card">
                   <div className="adm-card-header"><h3>Security Controls Status</h3></div>
                   <div style={{ padding: '12px 20px 16px' }}>
                     {securityFeatures.map(f => (
@@ -4606,7 +4745,7 @@ export default function Admin() {
                 </div>
 
                 {/* IP Whitelist Manager */}
-                <div className="adm-card" style={{ marginBottom: 20 }}>
+                <div className="adm-card">
                   <div className="adm-card-header">
                     <h3>IP Whitelist — Admin Access Control</h3>
                     <span className="adm-card-count">{ipWhitelistEnabled ? `${ipWhitelist.length} IP(s) allowed` : 'Disabled — allow all'}</span>
@@ -5003,10 +5142,10 @@ export default function Admin() {
 
           {/* ==================== SETTINGS ==================== */}
           {activeTab === 'settings' && (
-            <div>
+            <div className="settings-page">
               {smsBalance === null && !smsBalanceLoading && (() => { setSmsBalanceLoading(true); api.get('/admin/sms-balance').then(res => setSmsBalance(res.data)).catch(() => {}).finally(() => setSmsBalanceLoading(false)); return null; })()}
               {/* SMS Credits */}
-              <div className="adm-card" style={{ marginBottom: 20 }}>
+              <div className="adm-card">
                 <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <MessageSquare size={18} /> SMS Credits — Advanta
@@ -5024,7 +5163,7 @@ export default function Admin() {
                     {smsBalanceLoading ? 'Checking…' : 'Refresh'}
                   </button>
                 </div>
-                <div style={{ padding: '0 16px 16px' }}>
+                <div className="set-body">
                   {/* Balance display */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
                     <div style={{
@@ -5085,11 +5224,11 @@ export default function Admin() {
               </div>
 
               {/* Create Employee */}
-              <div className="adm-card" style={{ marginBottom: 20 }}>
+              <div className="adm-card">
                 <div className="adm-card-header">
                   <h3>Create Employee Account</h3>
                 </div>
-                <form onSubmit={async (e) => {
+                <form className="set-body" onSubmit={async (e) => {
                   e.preventDefault();
                   const fd = new FormData(e.target);
                   try {
@@ -5126,7 +5265,7 @@ export default function Admin() {
               </div>
 
               {/* Employee List */}
-              <div className="adm-card" style={{ marginBottom: 20 }}>
+              <div className="adm-card">
                 <div className="adm-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Users size={18} /> Employee Accounts</h3>
                   <button className="adm-btn-secondary" style={{ fontSize: 12, padding: '4px 10px', display: 'flex', alignItems: 'center', gap: 4 }} onClick={loadEmployees} disabled={employeesLoading}>
@@ -5134,12 +5273,12 @@ export default function Admin() {
                     {employeesLoading ? 'Loading…' : 'Refresh'}
                   </button>
                 </div>
-                {empMsg && <div style={{ padding: '6px 16px', fontSize: 13, color: empMsg.includes('Failed') ? '#ef4444' : '#10b981' }}>{empMsg}</div>}
+                {empMsg && <div style={{ padding: '6px 20px', fontSize: 13, color: empMsg.includes('Failed') ? '#ef4444' : '#10b981' }}>{empMsg}</div>}
                 {!employeesLoading && employees.length === 0 && (
                   <p className="adm-empty">No employee accounts yet. Create one above.</p>
                 )}
                 {employees.length > 0 && (
-                  <div style={{ padding: '0 16px 16px' }}>
+                  <div className="set-body">
                     {employees.map(emp => (
                       <div key={emp.id} style={{ background: '#0a0e1a', border: '1px solid #1f2937', borderRadius: 12, padding: '16px 18px', marginBottom: 12 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
@@ -5221,7 +5360,7 @@ export default function Admin() {
 
                 {templateMsg && (
                   <div style={{
-                    padding: '8px 14px', margin: '0 16px 12px', borderRadius: 6,
+                    padding: '8px 14px', margin: '0 20px 12px', borderRadius: 6,
                     background: templateMsg.includes('fail') || templateMsg.includes('Failed') ? '#3b1218' : '#12261e',
                     color: templateMsg.includes('fail') || templateMsg.includes('Failed') ? '#f87171' : '#4ade80',
                     fontSize: 13,
@@ -5235,7 +5374,7 @@ export default function Admin() {
                   const channelTemplates = templates.filter((t) => t.channel === channel);
                   if (channelTemplates.length === 0) return null;
                   return (
-                    <div key={channel} style={{ marginBottom: 16, padding: '0 16px 16px' }}>
+                    <div key={channel} style={{ marginBottom: 16, padding: '0 20px 16px' }}>
                       <h4 style={{
                         textTransform: 'uppercase', fontSize: 11, letterSpacing: 1.5,
                         color: '#9ca3af', marginBottom: 10, paddingBottom: 6,
@@ -5528,9 +5667,9 @@ export default function Admin() {
                               <td style={{ textAlign: 'right', color: t.weekly_active ? '#34d399' : ((t.credits ?? 0) <= 0 ? 'var(--neg)' : '#e5e7eb'), fontWeight: 700 }} title={t.weekly_active ? 'On the weekly unlimited plan' : undefined}>{t.weekly_active ? 'Unlimited' : (t.credits ?? 0).toLocaleString()}</td>
                               <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtKES(t.deposited)}</td>
                               <td style={{ textAlign: 'right' }}>{t.payouts}</td>
-                              <td style={{ textAlign: 'right', color: 'var(--pos)' }}
-                                  title={t.weekly_active ? `Credit value used on the unlimited plan — ${t.weekly_payouts} payout(s) × KES ${t.rate}. Charged KES 0 (covered by the weekly fee).` : undefined}>
-                                {fmtKES(t.credit_value ?? t.revenue)}
+                              <td style={{ textAlign: 'right', color: t.weekly_active ? 'var(--text-3)' : 'var(--pos)' }}
+                                  title={t.weekly_active ? 'On the unlimited plan — payouts are covered by the flat fee and consume no credits, so no credits-used is tracked.' : undefined}>
+                                {t.weekly_active ? '—' : fmtKES(t.credit_value ?? t.revenue)}
                               </td>
                               <td style={{ textAlign: 'right' }}>{fmtKES(t.volume)}</td>
                               <td style={{ textAlign: 'left', color: 'var(--text-3)' }}>{t.last_seen ? fmtDateEAT(t.last_seen) : '—'}</td>
@@ -6531,14 +6670,16 @@ export default function Admin() {
               {/* ── Onboarding Requests — merchants who submitted setup for approval ── */}
               {kycSubTab === 'onboarding' && (() => {
                 const pendingReqs = onbReqs.filter(r => r.status === 'submitted');
+                const inProgress = onbReqs.filter(r => r.status === 'in_progress');
                 const STEP_LABELS = { binance: 'Binance', settlement: 'Settlement', security_question: 'Security Q', totp: '2FA', choice_bank: 'Choice Bank', im_bot: 'I&M Bot' };
                 return (
                   <div style={{ ...S.surface, padding: '18px 20px', marginBottom: 30 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
                       <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#EAEEF5' }}>Onboarding Requests</h2>
                       <span style={{ padding: '2px 9px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: pendingReqs.length ? 'rgba(245,165,36,0.15)' : 'rgba(96,110,135,0.14)', color: pendingReqs.length ? '#F5A524' : '#8A94A6' }}>{pendingReqs.length} pending</span>
+                      {inProgress.length > 0 && <span style={{ padding: '2px 9px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: 'rgba(96,165,250,0.15)', color: '#60A5FA' }}>{inProgress.length} in progress</span>}
                     </div>
-                    <p style={{ color: '#8A94A6', margin: '0 0 14px', fontSize: 13 }}>Approving grants the merchant access to their dashboard.</p>
+                    <p style={{ color: '#8A94A6', margin: '0 0 14px', fontSize: 13 }}>Approving grants the merchant access to their dashboard. You can approve a merchant who is still setting up (or was rejected) to unblock them — the step chips show where they are.</p>
                     {onbReqs.length === 0 ? (
                       <div style={{ color: '#5C6577', fontSize: 13, padding: '10px 0' }}>No onboarding submissions yet.</div>
                     ) : (
@@ -6548,13 +6689,15 @@ export default function Admin() {
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
                               <div>
                                 <div style={{ color: '#EAEEF5', fontWeight: 700, fontSize: 14 }}>{r.full_name || r.email}</div>
-                                <div style={{ color: '#8A94A6', fontSize: 12 }}>{r.email} · {r.phone || '—'}{r.submitted_at ? ` · submitted ${fmtDateEAT(r.submitted_at)}` : ''}</div>
+                                <div style={{ color: '#8A94A6', fontSize: 12 }}>{r.email} · {r.phone || '—'}{r.submitted_at ? ` · submitted ${fmtDateEAT(r.submitted_at)}` : (r.status === 'in_progress' ? ' · still onboarding' : '')}</div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                {r.status === 'approved' && <span style={{ color: '#34D399', fontWeight: 700, fontSize: 13 }}>✓ Approved</span>}
-                                {r.status === 'rejected' && <span style={{ color: '#ef4444', fontWeight: 700, fontSize: 13 }}>Sent back</span>}
-                                {r.status === 'submitted' && (
+                                {r.status === 'approved' ? (
+                                  <span style={{ color: '#34D399', fontWeight: 700, fontSize: 13 }}>✓ Approved</span>
+                                ) : (
                                   <>
+                                    {r.status === 'in_progress' && <span style={{ color: r.all_steps_done ? '#34D399' : '#60A5FA', fontWeight: 700, fontSize: 12 }}>{r.all_steps_done ? 'Ready · not submitted' : 'In progress'}</span>}
+                                    {r.status === 'rejected' && <span style={{ color: '#ef4444', fontWeight: 700, fontSize: 13 }}>Sent back</span>}
                                     <button disabled={onbBusy === r.id} onClick={() => approveOnb(r.id)} style={{ padding: '7px 14px', borderRadius: 8, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer', background: '#16794A', color: '#D6FFE9' }}>{onbBusy === r.id ? '…' : 'Approve'}</button>
                                     <button disabled={onbBusy === r.id} onClick={() => { setOnbRejecting(onbRejecting === r.id ? null : r.id); setOnbRejectReason(''); }} style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid #3A2530', fontWeight: 700, fontSize: 13, cursor: 'pointer', background: 'transparent', color: '#fca5a5' }}>Reject</button>
                                   </>

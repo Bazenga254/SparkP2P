@@ -5,6 +5,19 @@ const http = require('http');
 const { execFile, execSync } = require('child_process');
 const puppeteer = require('puppeteer-core');
 const aiScanner = require('./ai-scanner');
+
+// Render the app's OWN window in SOFTWARE, not via the GPU. GPU-accelerated Chromium windows
+// render as a BLACK/blank rectangle over remote-desktop tools (AnyDesk / RDP / TeamViewer) and on
+// some weak/old GPU drivers — the exact "loads then goes black / blank window" clients report.
+// Must run BEFORE the app 'ready' event. (The automation Chrome already uses --disable-gpu; this
+// is the equivalent for the shell UI window.)
+try { app.disableHardwareAcceleration(); } catch (_) {}
+try { app.commandLine.appendSwitch('disable-gpu-compositing'); } catch (_) {}
+
+// Prefer IPv4 for ALL outbound connections (IMAP, fetch, etc.). Many client machines have
+// broken/blocked IPv6, and Node's happy-eyeballs then throws an opaque "AggregateError"
+// (all addresses failed) when connecting to e.g. imap.gmail.com. Forcing IPv4-first fixes it.
+try { require('dns').setDefaultResultOrder('ipv4first'); } catch (_) {}
 let autoUpdater = null; // lazy-loaded inside checkForUpdates() after app is ready
 
 // â"€â"€ Local control server on port 9223 â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -197,6 +210,31 @@ const CDP_PORT = 9222;
 const POLL_INTERVAL_ACTIVE = 5000; // 5 seconds — cycle through all active orders
 const POLL_INTERVAL_IDLE   = 5000; // 5 seconds — no orders, scan faster
 
+// ── Issue 3: keep a stuck SELL order from blocking BUY orders ─────────────────
+// Sell and buy processing share one poll cycle + one scanningInProgress lock (and
+// shared globals like activeOrderNumber), so they can't be run truly in parallel
+// without corrupting that state. Instead we BOUND sells so control always returns
+// to the buy loop: (1) every sell browser action funnels through withSellTab —
+// cap how long a single one may run before we abandon it; (2) cap total time spent
+// on sells per cycle WHILE a buy order is waiting to be paid. Every sell state
+// transition is idempotent, so an abandoned/deferred sell simply resumes next cycle.
+const SELL_TAB_ACTION_TIMEOUT_MS = 150000; // max ms for ONE sell action; high enough that a release can STAY on the email page waiting for the OTP without being abandoned
+const SELL_PHASE_BUDGET_MS       = 40000; // max ms spent on sells per cycle while an unpaid buy order is queued
+
+// email_otp_input: 6-digit codes we've already SUBMITTED for an order (keyed by orderNumber).
+// A release that keeps re-triggering must never re-paste a code Binance already rejected —
+// that was the "perpetual resend" loop. We mark the pre-send (stale) code + every tried code,
+// and wait for a genuinely NEW one before pasting.
+const emailOtpTriedCodes = new Map(); // orderNumber -> Set<string>
+function _emailTried(order) { let s = emailOtpTriedCodes.get(order); if (!s) { s = new Set(); emailOtpTriedCodes.set(order, s); } return s; }
+const emailOtpNoCredAlerted = new Set(); // orders we've already warned about a missing Gmail App Password
+// Rate-limit protection for Binance's "Send Code" (error 015002 "Too many requests"):
+const emailOtpLastSentAt = new Map();     // order -> ts of last Send Code click (min 60s between clicks)
+const emailOtpBaselineUid = new Map();    // order -> baseline IMAP UID from that send (reused across retries)
+const emailOtpCooldownUntil = new Map();  // order -> ts; after a 015002, don't touch Send Code until this passes
+const emailOtpActiveCode = new Map();     // order -> { code, at }: last fresh code read. Reused across re-entries so we do NOT re-click "Get Code" (the 015002 cause) while it's still valid (~10 min).
+const emailOtpSubmitCount = new Map();    // order -> times the current active code has been submitted; after a few rejects we discard it and request one fresh code.
+
 let mainWindow = null;
 let tray = null;
 let token = null;
@@ -252,6 +290,8 @@ const buyPaymentDetailsCache = {};              // orderNum → paymentDetails e
 const sellRejectionMsgSent = new Set();         // sell orderNums where the polite cancel request was already sent
 const sellPayInstructSentOrders = new Set();    // sell orderNums where payment instructions sent to buyer
 const sellPayMsgProgress = {};                  // orderNum → # of the 5 instruction msgs CONFIRMED sent (idempotent retries — never re-send a delivered msg)
+const sellApprovalWatching = new Set();         // sell orderNums with a live INSTANT approval watcher (one per order)
+const sellSendInProgress = new Set();           // sell orderNums whose payment-instructions send is running (blocks double-send from watcher + scan loop)
 const lastSellDeficitMsg = {};                  // orderNum → KES deficit last sent to buyer (dedup)
 const sellHeldOrders = new Map();               // orderNum → {reason,detail,heldAt} — paid but held (payer name mismatch)
 const sellHoldDecisionAsked = new Set();        // sell orderNums where the HOLD- merchant decision was already requested
@@ -595,7 +635,16 @@ if (token) {
 // ELECTRON
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Nuke any ZOMBIE service worker (and its Cache Storage) left by old PWA builds BEFORE loading
+  // the UI. Those SWs serve a stale cached index.html that points at JS bundles later web rebuilds
+  // deleted (404) → React can't boot → blank/black window. We clear ONLY serviceworkers +
+  // cachestorage; cookies and localStorage (the login token) are preserved, so this does NOT log
+  // the user out. Cheap + idempotent, so it's safe to run on every launch.
+  try {
+    const { session } = require('electron');
+    await session.defaultSession.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] });
+  } catch (_) { /* ignore */ }
   createMainWindow();
   createTray();
   aiScanner.initAI(anthropicApiKey);
@@ -1762,6 +1811,7 @@ async function sendChatViaWebSocket(page, message) {
     // seeds a fresh order's sessionId). Up to ~3s — better than instantly falling to a DOM
     // send that breaks on the Dual-Identity chat UI. Bails early the instant it's ready.
     let st = { socket: false, sess: false, src: null };
+    let _mnt = 0;   // how many times we actively poked the chat panel to mount
     for (let w = 0; w < 16; w++) {   // up to ~8s: on an on-demand (cold) tab the chat socket + REST
                                      // sessionId harvest need a moment after the page loads; bails early
       st = await page.evaluate(() => {
@@ -1776,9 +1826,41 @@ async function sendChatViaWebSocket(page, message) {
         } catch (e) { return { socket: false, sess: false, src: null }; }
       }).catch(() => ({ socket: false, sess: false, src: null }));
       if (st.socket && st.sess) break;
+      // ── ACTIVE WARM (makes the FIRST send instant) ────────────────────────────
+      // On a freshly-opened order under the new Dual-Identity UI the chat panel is
+      // COLLAPSED, so the page never fires the session-statistics REST call and the
+      // sessionId is never harvested — the first WS send then fails, falls to the
+      // (broken) DOM path, aborts, and the buyer only gets details a retry-cycle or
+      // two later. Force the panel to mount by clicking the SAFE in-page "Chat"
+      // toggle: that fires the REST call the WS hook harvests the sessionId from, so
+      // the very first send goes out over the socket with no delay. Poke a few times,
+      // spread across the wait, until the session is known.
+      if (!st.sess && _mnt < 4) {
+        _mnt++;
+        await page.evaluate(() => {
+          try {
+            // Already showing a chat input? Then the panel is mounted — nothing to do.
+            const inputs = [...document.querySelectorAll('[placeholder*="message" i], textarea, div[contenteditable="true"]')];
+            if (inputs.some(el => el.offsetParent !== null)) return;
+            const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (tw.nextNode()) {
+              const t = (tw.currentNode.textContent || '').trim().toLowerCase();
+              if (t === 'chat' || t === 'chat now' || t === 'open chat') {
+                const el = tw.currentNode.parentElement;
+                if (!el) continue;
+                // NEVER the top-nav "Chat" — it routes to /chatroom and navigates the
+                // bot OFF the order page. Only an in-page (order-panel) toggle is safe.
+                if (el.closest('a[href], header, nav, [class*="header" i], [class*="nav" i], [class*="menu" i]')) continue;
+                const r = el.getBoundingClientRect();
+                if (r && r.width > 0 && r.height > 0) { el.click(); break; }
+              }
+            }
+          } catch (e) {}
+        }).catch(() => {});
+      }
       await new Promise(r => setTimeout(r, 500));
     }
-    _lastSendDiag = `ws[socket=${st.socket ? 'y' : 'n'},sess=${st.sess ? 'y' : 'n'}${st.src ? '(' + st.src + ')' : ''}]`;
+    _lastSendDiag = `ws[socket=${st.socket ? 'y' : 'n'},sess=${st.sess ? 'y' : 'n'}${st.src ? '(' + st.src + ')' : ''}${_mnt ? ',mnt=' + _mnt : ''}]`;
     // A verbatim slice of the raw message to match the server's echo (the frame content is not
     // whitespace-normalised, so use the raw first line, not the DOM needle).
     const rawSlice = String(message).split('\n')[0].slice(0, 24);
@@ -1880,9 +1962,171 @@ async function withSellTab(orderNumber, fn) {
       sendBotLog('warn', `Sell ...${orderNumber.slice(-8)} — tab on wrong URL, skipping action`);
       return false;
     }
-    return await fn(tab);
+    // ── HANG GUARD (Issue 3) ────────────────────────────────────────────────
+    // If fn wedges (an MFA screen the bot can't clear, a chat socket that never
+    // acks, a release that stalls), it would hold scanningInProgress and freeze
+    // the whole poll cycle — starving buy-order payments. Bound it: abandon fn
+    // after SELL_TAB_ACTION_TIMEOUT_MS, close the tab, and return false. The
+    // caller treats false as "retry next cycle"; the sell resumes idempotently.
+    const _TIMED_OUT = { __sellTimeout: true };
+    let _timer = null;
+    const _timeout = new Promise((resolve) => {
+      _timer = setTimeout(() => {
+        sendBotLog('warning', `Sell ...${orderNumber.slice(-8)} — action exceeded ${Math.round(SELL_TAB_ACTION_TIMEOUT_MS / 1000)}s; abandoning so buy orders aren't blocked (resumes next cycle)`);
+        resolve(_TIMED_OUT);
+      }, SELL_TAB_ACTION_TIMEOUT_MS);
+    });
+    // Run fn on its own promise and swallow any LATE rejection (it can reject
+    // after we've abandoned it, once closeOrderTab tears its tab down).
+    const _fnPromise = (async () => fn(tab))();
+    _fnPromise.catch(() => {});
+    const _result = await Promise.race([_fnPromise, _timeout]);
+    if (_timer) clearTimeout(_timer);
+    if (_result === _TIMED_OUT) return false;
+    return _result;
   } finally {
     await closeOrderTab(orderNumber, 'sell action done — back to tabless monitoring');
+  }
+}
+
+// ── Send the buyer their payment instructions (one place, called by BOTH the instant
+// approval watcher and the scan loop's STEP 3). Guarded so the two paths never double-send
+// the same order. Idempotent: resumes from the first message not yet CONFIRMED-sent. Each
+// order has its OWN tab (orderTabs[orderNumber]), so this is safe to run for one order while
+// the scan loop works a DIFFERENT order. ──────────────────────────────────────────────────
+async function sendSellPaymentInstructions(order, _orderAmount, _isPesaLink) {
+  const _on = order.orderNumber;
+  if (sellPayInstructSentOrders.has(_on) || sellSendInProgress.has(_on)) return;
+  sellSendInProgress.add(_on);
+  try {
+    const _PAYBILL = traderChoicePaybill || '444174';
+    const _choiceAccNum = traderChoiceAccountNumber || '';
+    const _accName = traderChoiceAccountName || '';
+    const _nameLine = _accName ? `\nAccount Name: ${_accName}` : '';
+    let _payMsgs = [];
+    if (_isPesaLink) {
+      _payMsgs = [
+        `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank. Your crypto is released automatically once payment is confirmed.`,
+        `Payment details are as follows:\n\n` +
+        `Bank: Choice Microfinance Bank\n` +
+        `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
+        `Mode: M-Pesa Paybill\n` +
+        `Paybill: ${_PAYBILL}\n` +
+        `Account number: ${_choiceAccNum}\n\n` +
+        `📌 Paying via PesaLink? Please use the account number below and ignore the Paybill.\n\n` +
+        `Copy paste 👇👇`,
+        `${_choiceAccNum}`,
+        `${_PAYBILL}`,
+        `Hi 👋\nPlease proceed, I'm online for fast release.`,
+      ];
+    } else if (_orderAmount > 250000) {
+      const _second = _orderAmount - 250000;
+      _payMsgs = [
+        `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions. Your crypto is released automatically once payment is confirmed.`,
+        `Payment details are as follows:\n\n` +
+        `Choice Bank\n` +
+        `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
+        `Mode: M-Pesa Paybill\n` +
+        `Paybill: ${_PAYBILL}\n` +
+        `Account number: ${_choiceAccNum}\n\n` +
+        `1. Send KES 250,000 first\n` +
+        `2. Then send KES ${_second.toLocaleString()} to the same Paybill and account\n\n` +
+        `Copy paste 👇👇`,
+        `${_choiceAccNum}`,
+        `${_PAYBILL}`,
+        `Hi 👋\nPlease proceed, I'm online for fast release.`,
+      ];
+    } else {
+      _payMsgs = [
+        `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is confirmed.`,
+        `Payment details are as follows:\n\n` +
+        `Choice Bank\n` +
+        `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
+        `Mode: M-Pesa Paybill\n` +
+        `Paybill: ${_PAYBILL}\n` +
+        `Account number: ${_choiceAccNum}\n\n` +
+        `Copy paste 👇👇`,
+        `${_choiceAccNum}`,
+        `${_PAYBILL}`,
+        `Hi 👋\nPlease proceed, I'm online for fast release.`,
+      ];
+    }
+    if (!_choiceAccNum) {
+      console.log(`[SparkP2P] Order ${_on} -- Choice Bank account not set, cannot send instructions`);
+      return;
+    }
+    const _sent = await withSellTab(_on, async (tab) => {
+      let i = sellPayMsgProgress[_on] || 0;
+      for (; i < _payMsgs.length; i++) {
+        const _ok = await sendBinanceChatMessage(tab, _payMsgs[i]);
+        if (!_ok) {
+          console.log(`[SparkP2P] Order ${_on} -- chat send failed at message ${i + 1}/${_payMsgs.length} (${sellPayMsgProgress[_on] || 0} already sent); will resume next cycle`);
+          return false;
+        }
+        sellPayMsgProgress[_on] = i + 1;   // confirmed — never re-send this one
+        // Small gap between messages so Binance chat doesn't drop them — cut from the old
+        // 1.0-1.8s so the buyer gets the copy-paste details within ~2s of approval, not 5-9s,
+        // while staying safe enough that Binance still accepts each message.
+        if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 400 + Math.random() * 300));
+      }
+      return true;
+    });
+    if (_sent) {
+      sellPayInstructSentOrders.add(_on);
+      _saveOrderFlag(_on, 'sellInstructionsSent', true);
+      console.log(`[SparkP2P] Order ${_on} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
+      sendBotLog('success', `Sell order ...${_on.slice(-8)} — payment details sent to buyer (via ${_lastChatVia || '?'})`);
+    } else {
+      sendBotLog('warning', `Sell order ...${_on.slice(-8)} — could NOT send payment details (chat not ready) [${_lastSendDiag.trim() || 'no-diag'}]. Retrying next cycle.`);
+    }
+  } finally {
+    sellSendInProgress.delete(_on);
+  }
+}
+
+// ── INSTANT approval watcher ──────────────────────────────────────────────────────────────
+// Started the moment a sell order is sent for Telegram approval. Long-polls the backend (which
+// now returns within ~1s of the merchant tapping Approve, instead of on the scan loop's next
+// ~15-44s lap) and, on approval, sends the payment instructions IMMEDIATELY on this order's own
+// tab — decoupled from the serial scan loop. This is what makes approval → buyer-gets-details a
+// ~1-2s operation. Fire-and-forget; fully wrapped so it can never crash the bot. The scan loop's
+// STEP 2/3 remain as a fallback (guarded), so a watcher that dies is still recovered next cycle.
+async function startSellApprovalWatcher(order, _orderAmount, _isPesaLink, token) {
+  const _on = order.orderNumber;
+  if (sellApprovalWatching.has(_on)) return;
+  sellApprovalWatching.add(_on);
+  try {
+    const _deadline = Date.now() + 50 * 60 * 1000;   // give up after ~50 min (approval window)
+    while (Date.now() < _deadline) {
+      if (sellRejectedOrders.has(_on) || sellPayInstructSentOrders.has(_on)) return;
+      let _status = 'pending';
+      try {
+        const _r = await fetch(
+          `${API_BASE}/telegram/approval-status?order_number=${encodeURIComponent(_on)}&wait=25`,
+          { headers: { 'Authorization': `Bearer ${token}` } }
+        );
+        _status = (await _r.json()).status || 'pending';
+      } catch (_) {
+        await new Promise(r => setTimeout(r, 2000));   // network blip — back off, retry
+        continue;
+      }
+      if (_status === 'approved') {
+        sellApprovedOrders.add(_on);
+        sendBotLog('success', `Sell order ${_on} approved — sending payment details now`);
+        await sendSellPaymentInstructions(order, _orderAmount, _isPesaLink);
+        return;
+      } else if (_status === 'rejected' || _status === 'timeout') {
+        sellRejectedOrders.add(_on);   // scan loop sends the polite excuse message
+        return;
+      } else if (_status === 'not_found') {
+        await new Promise(r => setTimeout(r, 2000));   // notification not registered yet — retry
+      }
+      // 'pending' → immediately long-poll again (the wait=25 above already blocked server-side)
+    }
+  } catch (e) {
+    sendBotLog('warning', `Sell approval watcher error ...${_on.slice(-8)}: ${(e && e.message) || e}`);
+  } finally {
+    sellApprovalWatching.delete(_on);
   }
 }
 
@@ -3826,9 +4070,11 @@ async function detectOrderState(page) {
     return 'order_complete';
   }
 
-  // Passkey screen â€" check before security_verification
+  // Passkey screen â€" check before security_verification. Return 'passkey_failed'
+  // (the name every handler acts on) — 'passkey_required' was handled NOWHERE, so a
+  // passkey screen classified here used to stall unhandled.
   if (lower.includes('verify with passkey') || lower.includes('my passkeys are not available')) {
-    return 'passkey_required';
+    return 'passkey_failed';
   }
 
   // Security verification in progress
@@ -4484,8 +4730,19 @@ async function idleScan(page) {
   } else {
   const sortedSellOrders = [...orders.sell].sort((a, b) =>
     (orderFirstSeenAt[a.orderNumber] || Date.now()) - (orderFirstSeenAt[b.orderNumber] || Date.now()));
+  const _sellPhaseStart = Date.now();
   for (const order of sortedSellOrders) {
     if (pauseNavigation) break;
+    // ── Issue 3: yield to waiting buy orders ─────────────────────────────────
+    // Sells and buys share this cycle's lock. If we've already spent the sell
+    // budget AND a buy order is queued unpaid, stop starting new sells now so the
+    // buy loop below runs promptly. The remaining sells resume next cycle (all
+    // sell state is idempotent). When no buy is waiting, sells run unbounded.
+    if ((Date.now() - _sellPhaseStart) > SELL_PHASE_BUDGET_MS && getFirstUnpaidBuy(orders.buy)) {
+      console.log(`[SparkP2P] Sell budget (${Math.round(SELL_PHASE_BUDGET_MS / 1000)}s) reached with a buy order waiting — yielding to buys; remaining sells resume next cycle`);
+      sendBotLog('info', `Pausing sells to pay a waiting buy order — sells continue next cycle`);
+      break;
+    }
     const seenMs = Date.now() - (orderFirstSeenAt[order.orderNumber] || Date.now());
     const seenMins = Math.floor(seenMs / 60000);
     console.log(`[SparkP2P] Checking sell order ${order.orderNumber} (KES ${order.totalPrice}, seen ${seenMins}m)`);
@@ -4539,6 +4796,13 @@ async function idleScan(page) {
       delete sellOrderDetailsCache[order.orderNumber];
       sellHeldOrders.delete(order.orderNumber);
       sellHoldDecisionAsked.delete(order.orderNumber);
+      emailOtpTriedCodes.delete(order.orderNumber);
+      emailOtpNoCredAlerted.delete(order.orderNumber);
+      emailOtpLastSentAt.delete(order.orderNumber);
+      emailOtpBaselineUid.delete(order.orderNumber);
+      emailOtpCooldownUntil.delete(order.orderNumber);
+      emailOtpActiveCode.delete(order.orderNumber);
+      emailOtpSubmitCount.delete(order.orderNumber);
     };
 
     // -- Complete -------------------------------------------------------------
@@ -4807,6 +5071,10 @@ async function idleScan(page) {
           }).catch(() => null);
           sellApprovalRequestedOrders.add(order.orderNumber);
           sendBotLog('info', `Sell order ${order.orderNumber} -- waiting for Telegram approval`);
+          // Start the INSTANT approval watcher (long-poll + immediate send on its own tab), so
+          // approval -> buyer-gets-details is ~1-2s instead of waiting for the next scan lap.
+          // Fire-and-forget; it self-guards against duplicates and can't crash the bot.
+          startSellApprovalWatcher(order, _orderAmount, _isPesaLink, token);
         }
         continue; // move to next order while waiting
       }
@@ -4832,108 +5100,12 @@ async function idleScan(page) {
         }
       }
 
-      // STEP 3: Send payment instructions -- open tab on demand, type, close
+      // STEP 3: Send payment instructions. Normally the instant approval watcher has already
+      // done this the moment the merchant tapped Approve; this is the FALLBACK for when the
+      // watcher died (e.g. app restart) or full-auto approved without a watcher. The shared
+      // sender is idempotent and self-guards against double-send.
       if (sellApprovedOrders.has(order.orderNumber) && !sellPayInstructSentOrders.has(order.orderNumber)) {
-        const _PAYBILL = traderChoicePaybill || '444174';
-        const _choiceAccNum = traderChoiceAccountNumber || '';
-        const _accName = traderChoiceAccountName || '';
-        // One "Payment details" block the buyer can read top-to-bottom, then the
-        // two values they must actually type sent as their OWN messages — Binance
-        // chat lets you tap-copy a whole message, so a bare number is one tap
-        // while the same number buried in a paragraph has to be hand-typed (and
-        // mistyped). The 👇 points at those copy-paste messages.
-        const _nameLine = _accName ? `\nAccount Name: ${_accName}` : '';
-        // NB: the buyer never has to type a confirmation code. Choice Bank matches
-        // the payment by trader + amount and auto-releases, so the old "type your
-        // code/reference here" message was busywork that made buyers think they
-        // had a manual step — removed from every variant. Each flow closes on the
-        // two copy-paste values (account number, then paybill) and a friendly note.
-        let _payMsgs = [];
-        if (_isPesaLink) {
-          _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via PesaLink to Choice Microfinance Bank. Your crypto is released automatically once payment is confirmed.`,
-            `Payment details are as follows:\n\n` +
-            `Bank: Choice Microfinance Bank\n` +
-            `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
-            `Mode: M-Pesa Paybill\n` +
-            `Paybill: ${_PAYBILL}\n` +
-            `Account number: ${_choiceAccNum}\n\n` +
-            // This order is being paid over PesaLink (a direct bank transfer), so
-            // the paybill above is only for buyers who'd rather use M-Pesa. Tell a
-            // PesaLink payer to ignore it — the paybill also can't take amounts
-            // over KES 250,000, which large PesaLink orders exceed.
-            `📌 Paying via PesaLink? Please use the account number below and ignore the Paybill.\n\n` +
-            `Copy paste 👇👇`,
-            `${_choiceAccNum}`,
-            `${_PAYBILL}`,
-            `Hi 👋\nPlease proceed, I'm online for fast release.`,
-          ];
-        } else if (_orderAmount > 250000) {
-          const _second = _orderAmount - 250000;
-          _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa in TWO transactions. Your crypto is released automatically once payment is confirmed.`,
-            `Payment details are as follows:\n\n` +
-            `Choice Bank\n` +
-            `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
-            `Mode: M-Pesa Paybill\n` +
-            `Paybill: ${_PAYBILL}\n` +
-            `Account number: ${_choiceAccNum}\n\n` +
-            `1. Send KES 250,000 first\n` +
-            `2. Then send KES ${_second.toLocaleString()} to the same Paybill and account\n\n` +
-            `Copy paste 👇👇`,
-            `${_choiceAccNum}`,
-            `${_PAYBILL}`,
-            `Hi 👋\nPlease proceed, I'm online for fast release.`,
-          ];
-        } else {
-          _payMsgs = [
-            `Hello! Please send KES ${_orderAmount.toLocaleString()} via M-Pesa to the Paybill below. Your crypto is released automatically once payment is confirmed.`,
-            `Payment details are as follows:\n\n` +
-            `Choice Bank\n` +
-            `Account number: ${_choiceAccNum}${_nameLine}\n\n` +
-            `Mode: M-Pesa Paybill\n` +
-            `Paybill: ${_PAYBILL}\n` +
-            `Account number: ${_choiceAccNum}\n\n` +
-            `Copy paste 👇👇`,
-            `${_choiceAccNum}`,
-            `${_PAYBILL}`,
-            `Hi 👋\nPlease proceed, I'm online for fast release.`,
-          ];
-        }
-        if (_choiceAccNum) {
-          // HONOUR the chat-send result. sendBinanceChatMessage returns false when the chat panel
-          // never rendered / the send failed — previously the callback returned true regardless, so
-          // a silent failure was logged as "sell action done" and the buyer got NO payment details
-          // (and it was never retried). Now: if any message fails to send, abort, leave the order
-          // UNMARKED, and retry next cycle with a ready chat.
-          // IDEMPOTENT: resume from the first message not yet CONFIRMED-sent. A failed send
-          // aborts and retries next cycle — but we must NEVER re-send a message that already
-          // went out (that spammed the buyer with duplicate "Payment details" blocks). Progress
-          // is tracked per order; on retry we pick up exactly where we left off.
-          const _sent = await withSellTab(order.orderNumber, async (tab) => {
-            let i = sellPayMsgProgress[order.orderNumber] || 0;
-            for (; i < _payMsgs.length; i++) {
-              const _ok = await sendBinanceChatMessage(tab, _payMsgs[i]);
-              if (!_ok) {
-                console.log(`[SparkP2P] Order ${order.orderNumber} -- chat send failed at message ${i + 1}/${_payMsgs.length} (${sellPayMsgProgress[order.orderNumber] || 0} already sent); will resume next cycle`);
-                return false;
-              }
-              sellPayMsgProgress[order.orderNumber] = i + 1;   // confirmed — never re-send this one
-              if (i < _payMsgs.length - 1) await new Promise(r => setTimeout(r, 1000 + Math.random() * 800));
-            }
-            return true;
-          });
-          if (_sent) {
-            sellPayInstructSentOrders.add(order.orderNumber);
-            _saveOrderFlag(order.orderNumber, 'sellInstructionsSent', true);
-            console.log(`[SparkP2P] Order ${order.orderNumber} -- instructions sent (${_isPesaLink ? 'PesaLink' : _orderAmount > 250000 ? 'M-Pesa split' : 'M-Pesa'}, paybill ${_PAYBILL}, acct ${_choiceAccNum})`);
-            sendBotLog('success', `Sell order ...${order.orderNumber.slice(-8)} — payment details sent to buyer (via ${_lastChatVia || '?'})`);
-          } else {
-            sendBotLog('warning', `Sell order ...${order.orderNumber.slice(-8)} — could NOT send payment details (chat not ready) [${_lastSendDiag.trim() || 'no-diag'}]. Retrying next cycle.`);
-          }
-        } else {
-          console.log(`[SparkP2P] Order ${order.orderNumber} -- Choice Bank account not set, cannot send instructions`);
-        }
+        await sendSellPaymentInstructions(order, _orderAmount, _isPesaLink);
         continue; // move to next order immediately after sending instructions
       }
 
@@ -6204,8 +6376,43 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
       if (_nextQueued.length > 0) sendBotLog('info', 'Payment sent for ...' + order.orderNumber.slice(-8) + '. Processing next order ...' + _nextQueued[0].orderNumber.slice(-8) + (' (' + _nextQueued.length + ' remaining)'));
       buyReminderSentOrders.delete(order.orderNumber);
 
+      // ── MONEY-CRITICAL — MARK PAID FIRST, before ANY DOM work ─────────────────────────
+      // This is a pure SAPI call (no browser tab needed). It used to sit AFTER bringToFront()
+      // + a 15s navigation + a chat send; under load those DOM steps hang or throw on a dead/
+      // slow page, so mark-paid was skipped entirely, Binance's 15-min timer elapsed, and the
+      // merchant lost money they had already sent (e.g. Irene's order 2292…5808 → Canceled).
+      // Doing it here — immediately, with retries, decoupled from the DOM — is the fix.
+      if (!markPaidDoneOrders.has(order.orderNumber)) {
+        for (let _mpTry = 1; _mpTry <= 3 && !markPaidDoneOrders.has(order.orderNumber); _mpTry++) {
+          const _mpR = await fetch(`${API_BASE}/ext/mark-paid`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ order_number: order.orderNumber }),
+          }).catch(() => null);
+          const _mpOk = _mpR?.ok ? (await _mpR.json().catch(() => ({}))).ok : false;
+          if (_mpOk) {
+            markPaidDoneOrders.add(order.orderNumber);
+            _saveOrderFlag(order.orderNumber, 'markPaidDone', true);
+            console.log(`[SparkP2P] ✅ EP-17 mark-paid (immediate) for ${order.orderNumber} on attempt ${_mpTry}`);
+          } else {
+            console.log(`[SparkP2P] ⚠️ EP-17 mark-paid (immediate) attempt ${_mpTry} failed for ${order.orderNumber} — retrying`);
+            await new Promise(r => setTimeout(r, 1200));
+          }
+        }
+        if (!markPaidDoneOrders.has(order.orderNumber)) {
+          sendBotLog('error', `URGENT: paid buy ...${order.orderNumber.slice(-8)} but could NOT mark it paid on Binance after 3 tries — server safety net will retry. Watch the timer.`);
+        }
+      }
+      // Tell the server payment was sent NOW — advances the order to PAYMENT_SENT so the
+      // buy_release_monitor engages even if the DOM steps below die. Idempotent (fee recorded once).
+      await fetch(`${API_BASE}/ext/report-payment-sent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ order_number: order.orderNumber, success: true, channel: method === 'mpesa' ? 'MPESA' : 'BANK' }),
+      }).catch(() => {});
+
       // Navigate back to Binance order page
-      await oPage.bringToFront();
+      await oPage.bringToFront().catch(() => {});   // dead/slow page must not abort — mark-paid already done above
       await oPage.goto(`https://p2p.binance.com/en/fiatOrderDetail?orderNo=${order.orderNumber}`,
         { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       // Wait for the chat panel to render (Binance P2P uses contenteditable div, not textarea)
@@ -6251,6 +6458,61 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
           console.log(`[SparkP2P] ⚠️ EP-17 mark-paid failed for ${order.orderNumber} — will retry next cycle`);
         }
       }
+
+      // ── RELAY-INDEPENDENT LAST RESORT ────────────────────────────────────────────────
+      // If the API mark-paid still hasn't confirmed (its only route to Binance is the HMAC
+      // relay, which can be saturated under load), click "I have transferred, notify seller"
+      // directly in the browser session — a DIFFERENT path to Binance (cookie session, not the
+      // relay). We're already on the order page here. This guarantees a paid order is marked
+      // even if the relay path is down; marking a buy paid does not trigger email/TOTP.
+      if (!markPaidDoneOrders.has(order.orderNumber)) {
+        try {
+          for (let _t = 1; _t <= 3 && !markPaidDoneOrders.has(order.orderNumber); _t++) {
+            await dismissBinanceModals(oPage).catch(() => {});
+            const _pending = await oPage.evaluate(() => {
+              const t = (document.body.innerText || '').toLowerCase();
+              return t.includes('pending the seller to release') || t.includes('seller to release') || t.includes('notify the seller');
+            }).catch(() => false);
+            if (_pending) {
+              markPaidDoneOrders.add(order.orderNumber);
+              _saveOrderFlag(order.orderNumber, 'markPaidDone', true);
+              console.log(`[SparkP2P] ✅ DOM fallback: ${order.orderNumber} already at Pending Release — marked done`);
+              break;
+            }
+            const _clk = await clickButton(oPage, 'transferred', 'notify seller', 'transferred, notify seller', 'payment done', 'i have paid');
+            if (_clk) {
+              await new Promise(r => setTimeout(r, 1500));
+              await oPage.evaluate(() => { document.querySelectorAll('input[type="checkbox"]').forEach(cb => { if (!cb.checked) cb.click(); }); }).catch(() => {});
+              await new Promise(r => setTimeout(r, 600));
+              await clickButton(oPage, 'confirm', 'yes').catch(() => {});
+              await new Promise(r => setTimeout(r, 2500));
+              const _ok = await oPage.evaluate(() => {
+                const t = (document.body.innerText || '').toLowerCase();
+                return t.includes('pending the seller to release') || t.includes('seller to release') || t.includes('notify the seller');
+              }).catch(() => false);
+              if (_ok) {
+                markPaidDoneOrders.add(order.orderNumber);
+                _saveOrderFlag(order.orderNumber, 'markPaidDone', true);
+                sendBotLog('warn', `Marked buy ...${order.orderNumber.slice(-8)} PAID via browser fallback (the API relay path had failed).`);
+                console.log(`[SparkP2P] ✅ DOM fallback marked ${order.orderNumber} paid on attempt ${_t}`);
+                await fetch(`${API_BASE}/ext/report-payment-sent`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                  body: JSON.stringify({ order_number: order.orderNumber, success: true, channel: method === 'mpesa' ? 'MPESA' : 'BANK' }),
+                }).catch(() => {});
+                break;
+              }
+            }
+            if (_t < 3) { await oPage.reload({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {}); await new Promise(r => setTimeout(r, 2500)); }
+          }
+          if (!markPaidDoneOrders.has(order.orderNumber)) {
+            sendBotLog('error', `URGENT: paid buy ...${order.orderNumber.slice(-8)} could NOT be marked paid by API OR browser fallback — the server safety net will keep retrying. Check the order NOW.`);
+          }
+        } catch (_domE) {
+          console.log(`[SparkP2P] DOM fallback error for ${order.orderNumber}: ${_domE.message?.slice(0, 60)}`);
+        }
+      }
+
       // Send receipt screenshot in chat if we have one
       if (imResult.screenshot) {
         await sendImageInBinanceChat(oPage, imResult.screenshot).catch(() => {});
@@ -6787,100 +7049,55 @@ function generateTOTPAtCounter(secret, counter) {
 // â€¢ If no qualifying email found, returns null so the caller can resend.
 // â€¢ If multiple emails exist, uses the timestamp to pick the latest one.
 async function _readEmailOTPOnce(gmailPage, sentAfterMs) {
-  // Search Binance security emails sent in the last hour
+  // DOM-ONLY, LATEST-CODE reader — no Vision, resolves in milliseconds once the email
+  // body renders. Search the Binance release OTP sender, newest first.
   await gmailPage.goto(
-    'https://mail.google.com/mail/u/0/#search/from%3Ado-not-reply%40binance.com+subject%3Averification+newer_than%3A1h',
-    { waitUntil: 'networkidle2', timeout: 15000 }
+    // Sender is do-not-reply@ses.binance.com and the subject "[Binance] Release P2P
+    // Payment" has no "verification" word — so match by the ses.binance.com sender + recency.
+    'https://mail.google.com/mail/u/0/#search/from%3Ases.binance.com+newer_than%3A1h',
+    { waitUntil: 'domcontentloaded', timeout: 15000 }
   ).catch(() => {});
-  await new Promise(r => setTimeout(r, 2500));
 
-  // Collect all email rows with their timestamps
-  const emails = await gmailPage.evaluate(() => {
-    const rows = document.querySelectorAll('tr.zA');
-    return Array.from(rows).map((row, idx) => {
-      const timeEl = row.querySelector('td.xW span, td.xW, [data-tooltip]');
-      const subjectEl = row.querySelector('span.bog, .y6 span');
-      return {
-        idx,
-        timeText: timeEl?.getAttribute('data-tooltip') || timeEl?.title || timeEl?.innerText || '',
-        subject: subjectEl?.innerText || '',
-      };
-    });
-  });
-
-  console.log(`[SparkP2P] Gmail: found ${emails.length} Binance email(s)`);
-
-  if (emails.length === 0) return null;
-
-  // Find the most recent email that was sent AFTER sentAfterMs
-  // Gmail timestamps are like "Apr 2, 2026, 3:45 PM" â€" parse them
-  let targetIdx = null;
-  const now = Date.now();
-  const OTP_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
-
-  for (const email of emails) {
-    // Try to parse the tooltip timestamp (full date+time)
-    let emailTime = null;
-    if (email.timeText) {
-      try { emailTime = new Date(email.timeText).getTime(); } catch (_) {}
-    }
-
-    // If we can parse the time, check it's within the OTP window
-    if (emailTime && !isNaN(emailTime)) {
-      const ageMs = now - emailTime;
-      if (ageMs <= OTP_MAX_AGE_MS && emailTime >= sentAfterMs) {
-        console.log(`[SparkP2P] Found qualifying email (age: ${Math.round(ageMs/1000)}s): "${email.subject}"`);
-        targetIdx = email.idx; // first match = newest (Gmail sorts newest first)
-        break;
-      } else if (ageMs > OTP_MAX_AGE_MS) {
-        console.log(`[SparkP2P] Email too old (${Math.round(ageMs/1000)}s), skipping`);
-      }
-    } else {
-      // Can't parse time â€" fall back to just using the first (newest) email
-      // if it arrived after we triggered the send
-      if (targetIdx === null) targetIdx = email.idx;
-    }
+  // Open the NEWEST result. Gmail sorts newest-first, so tr.zA:first-of-list is the most
+  // recent email/thread. Poll briefly for the list to render instead of a fixed sleep.
+  let opened = false;
+  for (let i = 0; i < 20; i++) {                 // up to ~4s
+    opened = await gmailPage.evaluate(() => {
+      const row = document.querySelector('tr.zA');
+      if (!row) return false;
+      row.click();
+      return true;
+    }).catch(() => false);
+    if (opened) break;
+    await new Promise(r => setTimeout(r, 200));
   }
+  if (!opened) { console.log('[SparkP2P] Gmail: no Binance OTP email yet'); return null; }
 
-  if (targetIdx === null) {
-    console.log('[SparkP2P] No qualifying recent Binance email found');
-    return null;
-  }
-
-  // Click the selected email
-  const clicked = await gmailPage.evaluate((idx) => {
-    const rows = document.querySelectorAll('tr.zA');
-    if (rows[idx]) { rows[idx].click(); return true; }
-    return false;
-  }, targetIdx);
-
-  if (!clicked) return null;
-  await new Promise(r => setTimeout(r, 2000));
-
-  // Extract 6-digit OTP â€" look for patterns like "123456" or "Your code is 123456"
-  const emailText = await gmailPage.evaluate(() => document.body.innerText).catch(() => '');
-
-  // Match 6-digit code â€" prefer one near keywords like "code", "verification", "OTP"
-  const lines = emailText.split('\n');
+  // Extract the LATEST code straight from the DOM. Binance threads these emails (same
+  // subject), so the opened conversation stacks every message oldest→newest, top→bottom.
+  // We read the LAST message body (div.a3s = newest) and take the 6-digit code next to
+  // "verification code" — so we always get the freshest code, never a stale earlier one.
   let code = null;
-  for (const line of lines) {
-    const lower = line.toLowerCase();
-    if (lower.includes('verif') || lower.includes('code') || lower.includes('otp') || lower.includes('security')) {
-      const m = line.match(/\b(\d{6})\b/);
-      if (m) { code = m[1]; break; }
-    }
-  }
-  // Fallback: any 6-digit number in the body
-  if (!code) {
-    const m = emailText.match(/\b(\d{6})\b/);
-    if (m) code = m[1];
+  for (let i = 0; i < 20; i++) {                 // up to ~4s for the body to render
+    code = await gmailPage.evaluate(() => {
+      const bodies = Array.from(document.querySelectorAll('div.a3s'))
+        .filter((el) => el.offsetParent !== null && (el.innerText || '').trim());
+      if (!bodies.length) return null;
+      const text = bodies[bodies.length - 1].innerText || '';   // newest message
+      const near = text.match(/verification code[^0-9]{0,20}(\d{6})/i);
+      if (near) return near[1];
+      const all = text.match(/\b\d{6}\b/g);                     // else last 6-digit run
+      return all && all.length ? all[all.length - 1] : null;
+    }).catch(() => null);
+    if (code) break;
+    await new Promise(r => setTimeout(r, 200));
   }
 
   if (code) {
-    console.log(`[SparkP2P] Email OTP extracted: ${code}`);
+    console.log(`[SparkP2P] Email OTP (DOM, latest) = ${code}`);
     return code;
   }
-  console.log('[SparkP2P] Could not extract OTP code from email body');
+  console.log('[SparkP2P] Could not DOM-extract OTP from newest email');
   return null;
 }
 
@@ -6906,10 +7123,12 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
       logger: false,
     });
     await client.connect();
-    await client.mailboxOpen('INBOX');
+    await _openGmailAllMail(client);
 
     const since = new Date(sentAfterMs - 60000);
-    const uids = await client.search({ from: 'do-not-reply@binance.com', since }, { uid: true });
+    // Sender is do-not-reply@ses.binance.com (NOT @binance.com). IMAP `from` is a
+    // substring match on the From header, so 'ses.binance.com' matches it robustly.
+    const uids = await client.search({ from: 'binance', subject: 'Release P2P Payment', since }, { uid: true });
 
     if (!uids || uids.length === 0) {
       console.log('[SparkP2P] Gmail IMAP: no recent Binance emails found');
@@ -6918,29 +7137,11 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
     }
 
     const uid = uids[uids.length - 1];
-    let emailText = '';
-    for await (const msg of client.fetch(String(uid), { bodyParts: ['TEXT'], uid: true })) {
-      const part = msg.bodyParts?.get('text') || msg.bodyParts?.get('TEXT') || msg.bodyParts?.get('1');
-      if (part) emailText = Buffer.isBuffer(part) ? part.toString('utf8') : String(part);
-    }
+    const emailText = await _imapDecodedText(client, uid);
     await client.logout();
 
     if (!emailText) { console.log('[SparkP2P] Gmail IMAP: empty email body'); return null; }
-
-    // Extract 6-digit code — prefer line near "code", "verification", "otp"
-    const lines = emailText.split(/[\r\n]+/);
-    let code = null;
-    for (const line of lines) {
-      const l = line.toLowerCase();
-      if (l.includes('verif') || l.includes('code') || l.includes('otp') || l.includes('security')) {
-        const m = line.match(/\b(\d{6})\b/);
-        if (m) { code = m[1]; break; }
-      }
-    }
-    if (!code) {
-      const m = emailText.match(/\b(\d{6})\b/);
-      if (m) code = m[1];
-    }
+    const code = _extractOtpFromText(emailText);
     if (code) { console.log(`[SparkP2P] Gmail IMAP: OTP = ${code}`); return code; }
     console.log('[SparkP2P] Gmail IMAP: no 6-digit code found');
     return null;
@@ -6948,6 +7149,222 @@ async function readEmailOTPviaIMAP(sentAfterMs = Date.now() - 120000) {
     console.error('[SparkP2P] Gmail IMAP error:', e.message?.substring(0, 80));
     if (client) await client.logout().catch(() => {});
     return null;
+  }
+}
+
+// Turn an IMAP/socket error into a readable string — Node's happy-eyeballs throws an
+// AggregateError whose real cause (ETIMEDOUT / ECONNREFUSED / ENOTFOUND / cert) hides in
+// e.errors[]; a bad App Password shows as AUTHENTICATIONFAILED.
+function _imapErr(e) {
+  try {
+    if (e && Array.isArray(e.errors) && e.errors.length) {
+      const codes = e.errors.map((x) => (x && (x.code || x.errno || x.message)) || String(x));
+      return [...new Set(codes)].join(', ').substring(0, 160);
+    }
+    const s = (e && ((e.code ? e.code + ' ' : '') + (e.message || ''))) || String(e);
+    return String(s).substring(0, 160) || 'unknown error';
+  } catch (_) { return 'unknown error'; }
+}
+const _IMAP_OPTS = { host: 'imap.gmail.com', port: 993, secure: true, connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 40000, logger: false };
+
+// Open Gmail's "All Mail" (special-use \All) so Binance OTP emails are found even when a
+// filter archives/labels them out of the Inbox; fall back to INBOX. Returns the opened path.
+async function _openGmailAllMail(client) {
+  try {
+    const boxes = await client.list();
+    const all = boxes.find((b) => b.specialUse === '\\All') || boxes.find((b) => /(\[Gmail\]|\[Google Mail\])\/All Mail/i.test(b.path || ''));
+    if (all && all.path) { await client.mailboxOpen(all.path); return all.path; }
+  } catch (_) {}
+  await client.mailboxOpen('INBOX');
+  return 'INBOX';
+}
+
+// Fetch a message by UID and return DECODED plain text. bodyParts:['TEXT'] returns the RAW,
+// still-encoded (quoted-printable/base64) HTML body — extraction then grabbed a #000000 hex
+// colour instead of the OTP. mailparser decodes everything to clean text/html.
+async function _imapDecodedText(client, uid) {
+  let source = null;
+  try { for await (const msg of client.fetch(String(uid), { source: true }, { uid: true })) { source = msg.source; } } catch (_) {}
+  if (!source) return '';
+  try {
+    const { simpleParser } = require('mailparser');
+    const parsed = await simpleParser(source);
+    const htmlText = parsed.html ? String(parsed.html).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ') : '';
+    return `${parsed.text || ''}\n${htmlText}`;
+  } catch (_) {
+    return source.toString('utf8');
+  }
+}
+
+// Extract a 6-digit OTP from an email body — anchored on "verification code" first. Skips
+// all-same-digit runs (000000/111111…) which are almost always HTML/CSS noise, not real codes.
+function _extractOtpFromText(text) {
+  if (!text) return null;
+  const notReal = (c) => /^(\d)\1{5}$/.test(c);   // 000000, 111111, …
+  const near = String(text).match(/verification code[^0-9]{0,20}(\d{6})/i);
+  if (near && !notReal(near[1])) return near[1];
+  for (const line of String(text).split(/[\r\n]+/)) {
+    const l = line.toLowerCase();
+    if (l.includes('verif') || l.includes('code') || l.includes('otp') || l.includes('security')) {
+      const m = line.match(/\b(\d{6})\b/);
+      if (m && !notReal(m[1])) return m[1];
+    }
+  }
+  const all = (String(text).match(/\b\d{6}\b/g) || []).filter((c) => !notReal(c));
+  return all.length ? all[0] : null;
+}
+
+// Highest Binance-OTP email UID currently in the mailbox — captured BEFORE we click
+// "Send Code". IMAP UIDs increase monotonically, so the fresh code's email will always
+// have a UID GREATER than this. Returns the baseline UID (0 if none / not configured).
+async function imapBaselineBinanceUid() {
+  const creds = loadGmailCredentials();
+  if (!creds || !creds.email || !creds.appPassword) return 0;
+  let client = null;
+  try {
+    const { ImapFlow } = require('imapflow');
+    client = new ImapFlow({ ..._IMAP_OPTS, auth: { user: creds.email, pass: creds.appPassword } });
+    await client.connect();
+    await _openGmailAllMail(client);
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    let uids = [];
+    try { uids = await client.search({ from: 'binance', subject: 'Release P2P Payment', since }, { uid: true }); } catch (_) { uids = []; }
+    await client.logout().catch(() => {});
+    return (uids && uids.length) ? Math.max(...uids) : 0;
+  } catch (e) {
+    if (client) await client.logout().catch(() => {});
+    return 0;
+  }
+}
+
+// ROBUST email-OTP read over IMAP — the reliable path (no browser tab, no DOM, no tab
+// switching, no refresh timing). Only accepts a Binance email whose UID is GREATER than the
+// baseline captured before Send Code — i.e. one that arrived AFTER this request (UID is
+// monotonic, so this is immune to clock skew; any email that came before is automatically
+// invalid). Waits ~15s first (Binance OTP emails take that long to land) so it never reads a
+// stale code, then polls until the fresh, untried code appears. Returns the code or null.
+async function readFreshBinanceOtpViaImap(baselineUid, triedSet, timeoutMs = 55000) {
+  const creds = loadGmailCredentials();
+  if (!creds || !creds.email || !creds.appPassword) return null;
+  let client = null;
+  try {
+    const { ImapFlow } = require('imapflow');
+    client = new ImapFlow({ ..._IMAP_OPTS, auth: { user: creds.email, pass: creds.appPassword } });
+    await client.connect();
+    await _openGmailAllMail(client);
+    const sinceDate = new Date(Date.now() - 24 * 3600 * 1000);  // IMAP SINCE is date-granular
+
+    // Look for a "Release P2P Payment" email with UID > baseline (i.e. it arrived AFTER Send
+    // Code) whose code we haven't tried. No fixed wait — the UID>baseline gate already makes a
+    // stale read impossible, so we can check instantly and grab it the moment it lands.
+    let found = null;
+    const check = async () => {
+      if (found) return;
+      let uids = [];
+      try { uids = await client.search({ from: 'binance', subject: 'Release P2P Payment', since: sinceDate }, { uid: true }); } catch (_) { uids = []; }
+      const fresh = (uids || []).filter((u) => u > baselineUid).sort((a, b) => b - a);   // newest first
+      for (const uid of fresh) {
+        const text = await _imapDecodedText(client, uid);
+        const code = _extractOtpFromText(text);
+        if (code && !triedSet.has(code)) { found = code; console.log(`[Email OTP][IMAP] fresh code = ${code} (uid ${uid} > baseline ${baselineUid})`); return; }
+      }
+    };
+
+    console.log(`[Email OTP][IMAP] baseline UID = ${baselineUid} — watching for the fresh email (IMAP IDLE, instant)…`);
+    // React the INSTANT Gmail pushes a new message (IMAP IDLE → imapflow 'exists' event).
+    const onExists = () => { check().catch(() => {}); };
+    client.on('exists', onExists);
+    await check();   // maybe it already arrived
+
+    // Wait for `found`, with a light keep-alive poll (also the fallback if IDLE misses a push).
+    const deadline = Date.now() + timeoutMs;
+    while (!found && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 2500));
+      await check();
+    }
+    try { client.removeListener('exists', onExists); } catch (_) {}
+    await client.logout().catch(() => {});
+    return found;
+  } catch (e) {
+    console.error('[SparkP2P] IMAP fresh-read error:', e.message?.substring(0, 80));
+    if (client) await client.logout().catch(() => {});
+    return null;
+  }
+}
+
+// TEST the Gmail App Password / IMAP setup — connects, finds the LATEST Binance OTP email
+// (regardless of freshness) and returns its code + when it arrived. Used by the "Test
+// connection" button so a client can confirm setup without waiting for a forced-MFA release.
+async function testGmailImap() {
+  const creds = loadGmailCredentials();
+  if (!creds || !creds.email || !creds.appPassword) return { ok: false, error: 'No Gmail App Password configured' };
+  let client = null;
+  try {
+    const { ImapFlow } = require('imapflow');
+    // Connect with up to 3 tries (the connection is intermittent on some machines).
+    let connErr = null;
+    for (let attempt = 1; attempt <= 3 && !client; attempt++) {
+      const c = new ImapFlow({ ..._IMAP_OPTS, connectionTimeout: 20000, auth: { user: creds.email, pass: creds.appPassword } });
+      try { await c.connect(); client = c; } catch (e) { connErr = e; try { await c.logout(); } catch (_) {} await new Promise(r => setTimeout(r, 1500)); }
+    }
+    if (!client) throw connErr || new Error('connect failed');
+
+    let boxNames = [];
+    try { boxNames = (await client.list()).map((b) => b.path); } catch (_) {}
+    const box = await _openGmailAllMail(client);
+    const since = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    let recent = [], binUids = [], binAny = [];
+    try { recent = await client.search({ since }, { uid: true }); } catch (_) { recent = []; }
+    try { binUids = await client.search({ from: 'binance', subject: 'Release P2P Payment', since }, { uid: true }); } catch (_) { binUids = []; }  // the RELEASE OTP emails
+    try { binAny = await client.search({ from: 'binance', since }, { uid: true }); } catch (_) { binAny = []; }  // any Binance (incl. marketing) — diagnostic only
+
+    // DUMP the newest ~8 emails' headers (From/Subject/Date) so we can SEE exactly what
+    // Gmail returns over IMAP — this pinpoints search-filter vs delivery vs connection.
+    const newest = (recent || []).slice(-8).reverse();
+    const rows = [];
+    for (const uid of newest) {
+      try {
+        for await (const msg of client.fetch(String(uid), { internalDate: true, envelope: true }, { uid: true })) {
+          const from = (msg.envelope && msg.envelope.from ? msg.envelope.from.map((a) => (a.address || '')).join(',') : '') || '';
+          const subject = (msg.envelope && msg.envelope.subject) || '';
+          const when = msg.internalDate ? new Date(msg.internalDate).toISOString().slice(5, 16).replace('T', ' ') : '';
+          rows.push({ from, subject, when });
+        }
+      } catch (_) {}
+    }
+
+    // If Binance emails exist, read the newest one's code + record its real sender.
+    let code = null, whenMins = null, binFrom = '';
+    if (binUids && binUids.length) {
+      const uid = Math.max(...binUids);
+      let when = null;
+      try {
+        for await (const msg of client.fetch(String(uid), { internalDate: true, envelope: true }, { uid: true })) {
+          when = msg.internalDate ? new Date(msg.internalDate).getTime() : null;
+          binFrom = (msg.envelope && msg.envelope.from ? msg.envelope.from.map((a) => (a.address || '')).join(',') : '') || '';
+        }
+      } catch (_) {}
+      const text = await _imapDecodedText(client, uid);
+      code = _extractOtpFromText(text);
+      whenMins = when ? Math.round((Date.now() - when) / 60000) : null;
+    }
+    await client.logout().catch(() => {});
+
+    // Log the diagnostic to Activity Logs (readable server-side).
+    sendBotLog('info', `IMAP diag: box=${box} · recent3d=${(recent || []).length} · releaseOTP=${(binUids || []).length} · anyBinance=${(binAny || []).length}${binFrom ? ' · otpFrom=' + binFrom : ''} · mailboxes=${boxNames.length}`);
+    rows.forEach((r) => sendBotLog('info', `IMAP mail: ${r.when} | ${r.from} | ${String(r.subject).slice(0, 45)}`));
+
+    if (code) return { ok: true, email: creds.email, code, whenMins, count: binUids.length, box, binFrom };
+    if ((binUids || []).length) return { ok: true, email: creds.email, code: null, note: `Connected ✓ — ${binUids.length} release-OTP email(s) found but couldn't read a code from the newest. Logged headers to Activity Logs.` };
+    if ((recent || []).length) return { ok: true, email: creds.email, code: null, note: `Connected ✓ — ${recent.length} recent email(s), ${(binAny || []).length} Binance (marketing incl.), but 0 "Release P2P Payment" OTP emails in 3 days. That's expected if no sell release happened recently.` };
+    return { ok: true, email: creds.email, code: null, note: `Connected ✓ but 0 emails returned over IMAP (box "${box}"). IMAP access may be off in Gmail, or the connection is being filtered.` };
+  } catch (e) {
+    if (client) await client.logout().catch(() => {});
+    const detail = _imapErr(e);
+    const friendly = /AUTHENTICATIONFAILED|auth|login|credential|invalid|\bBAD\b/i.test(detail)
+      ? 'Login failed — check the Gmail address + App Password (2-Step Verification must be ON).'
+      : `Connection error: ${detail}`;
+    return { ok: false, error: friendly };
   }
 }
 
@@ -7158,7 +7575,11 @@ async function readEmailOTPWithVision(binancePage = null) {
 
     // Navigate to Binance verification emails
     await gmailPage.goto(
-      'https://mail.google.com/mail/u/0/#search/from%3Ado-not-reply%40binance.com+subject%3Averification+newer_than%3A1h',
+      // Binance sends the release OTP from do-not-reply@ses.binance.com (NOT @binance.com),
+    // and the RELEASE email's subject is "[Binance] Release P2P Payment" — it has no
+    // "verification" word, so the old `subject:verification` filter excluded it. Match by
+    // the ses.binance.com sender + recency only; the code is picked out of the body below.
+    'https://mail.google.com/mail/u/0/#search/from%3Ases.binance.com+newer_than%3A1h',
       { waitUntil: 'networkidle2', timeout: 15000 }
     ).catch(() => {});
     await new Promise(r => setTimeout(r, 2500));
@@ -7212,6 +7633,40 @@ async function readEmailOTPWithVision(binancePage = null) {
     await new Promise(r => setTimeout(r, 8000));
   }
   return null;
+}
+
+// FAST read of the newest Binance OTP code from the Gmail tab that is ALREADY on the
+// ses.binance.com search (caller navigates ONCE, then polls this). No page reload, no IMAP
+// per call — that was what made it exceed the 120s guard. Tries the newest row's SNIPPET
+// first (the "[Binance] Release P2P Payment" preview contains "Your verification code: NNNNNN"),
+// and only opens the message if the snippet doesn't carry it. Returns the code or null.
+async function readNewestGmailBinanceCode(gmailPage) {
+  if (!gmailPage || gmailPage.isClosed()) return null;
+  try {
+    // 1) Snippet of the newest row — anchored on "verification code" so we never grab an
+    //    order number or unrelated digits.
+    let code = await gmailPage.evaluate(() => {
+      const row = document.querySelector('tr.zA');
+      if (!row) return null;
+      const snip = (row.innerText || '');
+      const m = snip.match(/verification code[^0-9]{0,20}(\d{6})/i);
+      return m ? m[1] : null;
+    }).catch(() => null);
+    if (code) return String(code).trim();
+    // 2) Open the newest row and read the newest message body.
+    await gmailPage.evaluate(() => { const r = document.querySelector('tr.zA'); if (r) r.click(); }).catch(() => {});
+    await new Promise(r => setTimeout(r, 900));
+    code = await gmailPage.evaluate(() => {
+      const bodies = Array.from(document.querySelectorAll('div.a3s')).filter((el) => el.offsetParent !== null && (el.innerText || '').trim());
+      if (!bodies.length) return null;
+      const text = bodies[bodies.length - 1].innerText || '';   // newest message
+      const near = text.match(/verification code[^0-9]{0,20}(\d{6})/i);
+      if (near) return near[1];
+      const all = text.match(/\b\d{6}\b/g);
+      return all && all.length ? all[all.length - 1] : null;
+    }).catch(() => null);
+    return code ? String(code).trim() : null;
+  } catch (_) { return null; }
 }
 
 // â"€â"€ Main readEmailOTP â€" with retry + resend logic â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
@@ -7336,6 +7791,128 @@ async function _findInputNearLabel(page, labelKeyword) {
     }
     return null;
   }, labelKeyword);
+}
+
+// Enter a 6/8-digit MFA code into Binance's step-up modal, which renders INSIDE
+// div#mfa-shadow-host's SHADOW ROOT — so page.$ / querySelector can't reach it.
+// From a live capture: input.bn-textField-input[maxlength="6"] and
+// button.bn-button__primary.mfa-verify-buttonv2 ("Submit"). We focus the input in
+// the shadow root (via the native value setter so Angular/React registers the
+// clear), type with the keyboard (which follows focus across the shadow boundary),
+// then click the shadow "Submit". Returns true if the input was found + typed.
+async function enterMfaCodeShadow(page, code) {
+  // Drive the MFA code input like a HUMAN. Binance's <input class="bn-textField-input">
+  // is a controlled input that IGNORED both page.keyboard.type-after-.focus() and direct
+  // value-setting (the field stayed empty). What works: (1) find the input by piercing the
+  // OPEN shadow roots and read its viewport coords; (2) a TRUSTED CDP mouse click at those
+  // coords focuses the REAL element (through the shadow boundary, works minimized); (3)
+  // clipboard PASTE — exactly what the modal's own "Paste" button does. Keystroke + native
+  // set are kept as fallbacks. Returns true only once the field actually holds the code.
+  const CODE = String(code).trim();
+  const { clipboard } = require('electron');
+
+  // Locate the input, piercing OPEN shadow roots. Inlined in every evaluate below (NO eval /
+  // new Function — Binance's CSP blocks unsafe-eval, so a shared stringified fn can't run).
+  const loc = await page.evaluate(() => {
+    const scan = (root) => {
+      let el = root.querySelector('input.bn-textField-input, input[maxlength="6"], input[maxlength="8"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+      if (el && el.getBoundingClientRect().width > 0) return el;
+      el = Array.from(root.querySelectorAll('input')).find((i) => { const r = i.getBoundingClientRect(); return r.width > 0 && r.height > 0 && i.type !== 'hidden' && !i.disabled && !i.readOnly; });
+      if (el) return el;
+      for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) { const f = scan(h.shadowRoot); if (f) return f; } }
+      return null;
+    };
+    const host = document.querySelector('#mfa-shadow-host');
+    const inp = (host && host.shadowRoot && scan(host.shadowRoot)) || scan(document);
+    if (!inp) return null;
+    const r = inp.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }).catch(() => null);
+  if (!loc) return false;   // not in an open shadow root / main doc — caller's fallback tries
+
+  const readVal = () => page.evaluate(() => {
+    const scan = (root) => {
+      let el = root.querySelector('input.bn-textField-input, input[maxlength="6"], input[maxlength="8"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+      if (el && el.getBoundingClientRect().width > 0) return el;
+      el = Array.from(root.querySelectorAll('input')).find((i) => { const r = i.getBoundingClientRect(); return r.width > 0 && r.height > 0 && i.type !== 'hidden' && !i.disabled && !i.readOnly; });
+      if (el) return el;
+      for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) { const f = scan(h.shadowRoot); if (f) return f; } }
+      return null;
+    };
+    const host = document.querySelector('#mfa-shadow-host');
+    const inp = (host && host.shadowRoot && scan(host.shadowRoot)) || scan(document);
+    return inp ? String(inp.value || '') : '';
+  }).then(v => String(v).replace(/\s/g, '')).catch(() => '');
+
+  // 1) Trusted focus (real mouse click at the input) → clear → clipboard PASTE.
+  try {
+    await page.mouse.click(loc.x, loc.y);
+    await new Promise(r => setTimeout(r, 120));
+    await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
+    await page.keyboard.press('Backspace');
+    clipboard.writeText(CODE);
+    await page.keyboard.down('Control'); await page.keyboard.press('v'); await page.keyboard.up('Control');
+    await new Promise(r => setTimeout(r, 250));
+  } catch (e) {}
+
+  // 2) If paste didn't land, re-focus and type the digits as real keystrokes.
+  let val = await readVal();
+  if (val !== CODE) {
+    try {
+      await page.mouse.click(loc.x, loc.y);
+      await new Promise(r => setTimeout(r, 100));
+      await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
+      await page.keyboard.press('Backspace');
+      await page.keyboard.type(CODE, { delay: 80 });
+      await new Promise(r => setTimeout(r, 250));
+    } catch (e) {}
+    val = await readVal();
+  }
+
+  // 3) Last resort: native value setter + React input/change events.
+  if (val !== CODE) {
+    await page.evaluate((codeStr) => {
+      const scan = (root) => {
+        let el = root.querySelector('input.bn-textField-input, input[maxlength="6"], input[maxlength="8"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+        if (el && el.getBoundingClientRect().width > 0) return el;
+        el = Array.from(root.querySelectorAll('input')).find((i) => { const r = i.getBoundingClientRect(); return r.width > 0 && r.height > 0 && i.type !== 'hidden' && !i.disabled && !i.readOnly; });
+        if (el) return el;
+        for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) { const f = scan(h.shadowRoot); if (f) return f; } }
+        return null;
+      };
+      const host = document.querySelector('#mfa-shadow-host');
+      const inp = (host && host.shadowRoot && scan(host.shadowRoot)) || scan(document);
+      if (!inp) return;
+      inp.focus();
+      const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+      if (desc && desc.set) desc.set.call(inp, codeStr); else inp.value = codeStr;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    }, CODE).catch(() => {});
+    await new Promise(r => setTimeout(r, 200));
+    val = await readVal();
+  }
+
+  console.log(`[MFA] shadow input now "${val}" (want "${CODE}") — ${val === CODE ? 'FILLED ✅' : 'still empty ❌'}`);
+
+  // Click the shadow "Submit" button (only when enabled).
+  await page.evaluate(() => {
+    const scan = (root) => {
+      const byCls = root.querySelector('button.bn-button__primary, button.mfa-verify-buttonv2');
+      if (byCls && byCls.getBoundingClientRect().width > 0) return byCls;
+      const byText = Array.from(root.querySelectorAll('button')).find((b) => /^submit$/i.test((b.textContent || '').trim()) && b.getBoundingClientRect().width > 0);
+      if (byText) return byText;
+      for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) { const f = scan(h.shadowRoot); if (f) return f; } }
+      return null;
+    };
+    const host = document.querySelector('#mfa-shadow-host');
+    const btn = (host && host.shadowRoot && scan(host.shadowRoot)) || scan(document);
+    if (btn && !btn.disabled) {
+      for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) btn.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, composed: true, view: window }));
+      try { btn.click(); } catch (e) {}
+    }
+  }).catch(() => {});
+  return val === CODE;   // true only if the code actually landed in the box
 }
 
 async function enterCodeIntoSection(page, labelKeyword, code) {
@@ -7463,7 +8040,9 @@ async function handleSecurityVerification(page) {
       } else {
         const code = generateTOTP(totpSecret);
         console.log(`[SparkP2P] TOTP code: ${code}`);
-        let entered = await enterCodeIntoSection(page, 'authenticator', code);
+        // Shadow-DOM path first (Binance MFA modal lives in #mfa-shadow-host).
+        let entered = await enterMfaCodeShadow(page, code);
+        if (!entered) entered = await enterCodeIntoSection(page, 'authenticator', code);
         if (!entered) entered = await enterCodeIntoSection(page, 'google', code);
         if (!entered) {
           // Last-resort fallback: type into the first available digit inputs
@@ -7493,19 +8072,41 @@ async function handleSecurityVerification(page) {
     // â"€â"€ Email OTP â€" read from Gmail â"€â"€
     if (verification.hasEmail) {
       console.log('[SparkP2P] Email OTP required â€" fetching from Gmail...');
-      // Click "Get Code" / "Send Code" if present (triggers the email send)
+      // Click "Get Code" / "Send Code" if present (triggers the email send).
+      // Pierce shadow DOM — on the MFA modal this button lives in #mfa-shadow-host.
       const sentCode = await page.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button, a, span')).find(b =>
-          /^(send|get code|send code)$/i.test(b.textContent.trim())
-        );
-        if (btn) { btn.click(); return true; }
+        const scan = (root) => {
+          // The send/resend trigger is a div.bn-mfa-send-code.cursor-pointer (NOT a
+          // <button>). IMPORTANT: on the email MFA step Binance AUTO-SENDS the code
+          // and shows "Resend Code" â€" clicking that would resend (invalidating the
+          // auto-sent code and hitting a cooldown). So only click to SEND when it
+          // hasn't been sent yet ("Send Code"/"Get Code"); otherwise leave it and
+          // just read the auto-sent code.
+          const sc = root.querySelector('.bn-mfa-send-code');
+          if (sc && sc.getBoundingClientRect().width > 0 && /^(send code|get code)$/i.test((sc.textContent || '').trim())) return sc;
+          const btn = Array.from(root.querySelectorAll('button, a, span, div')).find((b) =>
+            /^(send code|get code|send email)$/i.test((b.textContent || '').trim()) &&
+            b.getBoundingClientRect().width > 0 && b.children.length <= 1);
+          if (btn) return btn;
+          for (const h of root.querySelectorAll('*')) { if (h.shadowRoot) { const f = scan(h.shadowRoot); if (f) return f; } }
+          return null;
+        };
+        const host = document.querySelector('#mfa-shadow-host');
+        const btn = (host && host.shadowRoot && scan(host.shadowRoot)) || scan(document);
+        if (btn) {
+          for (const t of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) btn.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, composed: true, view: window }));
+          try { btn.click(); } catch (e) {}
+          return true;
+        }
         return false;
       });
       if (sentCode) console.log('[SparkP2P] Clicked Send Code button');
       // readEmailOTP handles waiting, retrying, and auto-resend automatically
       const emailCode = await readEmailOTP(page);
       if (emailCode) {
-        let entered = await enterCodeIntoSection(page, 'email', emailCode);
+        // Shadow-DOM path first (Binance MFA modal lives in #mfa-shadow-host).
+        let entered = await enterMfaCodeShadow(page, emailCode);
+        if (!entered) entered = await enterCodeIntoSection(page, 'email', emailCode);
         if (!entered) {
           // Fallback: type into digit inputs after any TOTP inputs
           const allDigitInputs = await page.$$('input[maxlength="1"]');
@@ -8767,7 +9368,31 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
       // â"€â"€ DOM pre-check: catch all states without Vision â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
       // ORDER MATTERS: more specific / modal states first; broader states last.
       const domScreen = await page.evaluate(() => {
-        const text = document.body.innerText || '';
+        // Include OPEN SHADOW-ROOT text + inputs. Binance's MFA modal (passkey /
+        // TOTP / email / Submit) all live inside div#mfa-shadow-host's shadow root,
+        // which is NOT reachable via document.body.innerText or document.querySelector.
+        // Without piercing it the classifier missed every MFA screen, returned null,
+        // and fell to Vision (blank when minimized) — the release stall.
+        function collectShadow(root) {
+          let s = '';
+          try {
+            for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) { s += '\n' + (el.shadowRoot.textContent || '') + collectShadow(el.shadowRoot); }
+            }
+          } catch (e) {}
+          return s;
+        }
+        function deepHas(sel) {
+          if (document.querySelector(sel)) return true;
+          function walk(root) {
+            for (const el of root.querySelectorAll('*')) {
+              if (el.shadowRoot) { if (el.shadowRoot.querySelector(sel)) return true; if (walk(el.shadowRoot)) return true; }
+            }
+            return false;
+          }
+          return walk(document);
+        }
+        const text = (document.body.innerText || '') + collectShadow(document);
         const lower = text.toLowerCase();
 
         // 1. Order complete â€" use specific multi-word phrases to avoid false positives
@@ -8785,7 +9410,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         //    "Authenticator App Verification" contains "Authenticator App" so if security_verification
         //    checked first with that substring it would falsely match the TOTP page.
         //    Anchor: an OTP input field must be present on the page.
-        const hasOtpInput = !!document.querySelector('input[maxlength="6"], input[maxlength="8"]');
+        const hasOtpInput = deepHas('input[maxlength="6"], input[maxlength="8"]');
         if (hasOtpInput && (text.includes('Authenticator App Verification') || text.includes('Google Authenticator')))
           return 'totp_input';
 
@@ -8803,11 +9428,25 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           return `security_verification:${progress}`;
         }
 
-        // 6. Passkey screen â€" text not always in innerText (native WebAuthn dialog),
-        //    so only match when we actually see the passkey-specific phrase.
-        const hasPasskeyLink = lower.includes('my passkeys are not available') || lower.includes('passkeys are not available');
-        const hasPasskeyFail = lower.includes('verify with passkey') || lower.includes('verification failed');
-        if (hasPasskeyLink || (hasPasskeyFail && lower.includes('passkey'))) return 'passkey_failed';
+        // 6. Passkey screen â€" Binance renders this modal inside a WEB COMPONENT, so its
+        //    text is NOT in document.body.innerText. That is exactly why the classifier
+        //    used to miss it, return null, fall to Vision (blank when minimized) and
+        //    stall until a human released. Search OPEN SHADOW ROOTS too (same walk the
+        //    passkey handler uses) so the pure-DOM path detects it on its own.
+        let _sdText = '';
+        try {
+          const _collect = (root) => {
+            const hosts = root.querySelectorAll ? root.querySelectorAll('*') : [];
+            for (const el of hosts) {
+              if (el.shadowRoot) { _sdText += ' ' + (el.shadowRoot.textContent || ''); _collect(el.shadowRoot); }
+            }
+          };
+          _collect(document);
+        } catch (e) {}
+        const _pk = (lower + ' ' + _sdText.toLowerCase());
+        const hasPasskeyLink = _pk.includes('my passkeys are not available') || _pk.includes('passkeys are not available');
+        const hasPasskeyFail = _pk.includes('verify with passkey') || _pk.includes('verification failed');
+        if (hasPasskeyLink || (hasPasskeyFail && _pk.includes('passkey'))) return 'passkey_failed';
 
         // 7. Verify Payment page â€" only if the "Payment Received" button is actually clickable.
         //    If the text is present but the button is gone, a dialog (passkey/auth) is covering
@@ -9126,8 +9765,33 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         console.log('[DOM] Passkey screen â€" locating "My Passkeys Are Not Available"...');
         await new Promise(r => setTimeout(r, 800));
 
-        // Search including shadow DOM â€" Binance may render the dialog in a web component
-        const passKeyCoords = await page.evaluate(() => {
+        // PRECISE (from a live DOM capture): Binance renders the MFA modal inside
+        // div#mfa-shadow-host's SHADOW ROOT. The link is
+        //   <div class="bidscls-btnLink2 cursor-pointer" aria-label="My Passkeys Are Not Available">
+        // Reach into that shadow root, find it, and fire a full pointer+click
+        // sequence directly on the element â€" no coordinate guessing, works minimized.
+        let _pkClicked = await page.evaluate(() => {
+          const host = document.querySelector('#mfa-shadow-host');
+          const root = host && host.shadowRoot;
+          if (!root) return false;
+          let el = root.querySelector('[aria-label="My Passkeys Are Not Available"]');
+          if (!el) el = Array.from(root.querySelectorAll('div,a,span,button')).find((e) => {
+            const t = (e.textContent || '').trim().toLowerCase();
+            return t === 'my passkeys are not available' && e.getBoundingClientRect().width > 0;
+          });
+          if (!el) return false;
+          const r = el.getBoundingClientRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          for (const type of ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window, clientX: cx, clientY: cy }));
+          }
+          try { el.click(); } catch (e) {}
+          return true;
+        }).catch(() => false);
+        if (_pkClicked) console.log('[DOM] âœ… "My Passkeys Are Not Available" clicked (mfa-shadow-host, precise)');
+
+        // FALLBACK: generic shadow-DOM text walk + coordinate click (older layouts).
+        const passKeyCoords = _pkClicked ? null : await page.evaluate(() => {
           const phrases = ['my passkeys are not available', 'passkeys are not available', 'passkey is not available'];
 
           function searchRoot(root) {
@@ -9160,7 +9824,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           console.log(`[DOM] Found "${passKeyCoords.text}" <${passKeyCoords.tag}> at (${Math.round(passKeyCoords.x)}, ${Math.round(passKeyCoords.y)}) â€" clicking`);
           await page.mouse.click(passKeyCoords.x, passKeyCoords.y);
           console.log('[DOM] âœ… "My Passkeys Are Not Available" clicked');
-        } else {
+        } else if (!_pkClicked) {
           console.log('[DOM] Not found (incl. shadow DOM) â€" trying Tab keyboard navigation...');
           // Keyboard fallback: Tab moves focus from "Try Again" → "My Passkeys Are Not Available" link
           // Then Enter activates it. Much more reliable than DOM/Vision for modal dialogs.
@@ -9207,10 +9871,14 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         // These headings ARE in the main DOM even when the input box is in a cross-origin iframe.
         // Also catches the progress badge transitioning to 1/2 or 2/2.
         const svAdvanced = () => page.evaluate(() => {
-          const t = document.body.innerText || '';
+          // SHADOW-AWARE: the TOTP/Email heading + code input render inside
+          // #mfa-shadow-host's shadow root, invisible to body.innerText / querySelector.
+          function collectShadow(root){let s='';try{for(const el of root.querySelectorAll('*')){if(el.shadowRoot){s+='\n'+(el.shadowRoot.textContent||'')+collectShadow(el.shadowRoot);}}}catch(e){}return s;}
+          function deepHas(sel){if(document.querySelector(sel))return true;function walk(root){for(const el of root.querySelectorAll('*')){if(el.shadowRoot){if(el.shadowRoot.querySelector(sel))return true;if(walk(el.shadowRoot))return true;}}return false;}return walk(document);}
+          const t = (document.body.innerText || '') + collectShadow(document);
           return (
             t.includes('1/2') || t.includes('2/2') ||
-            !!document.querySelector('input[maxlength="6"], input[maxlength="8"]') ||
+            deepHas('input[maxlength="6"], input[maxlength="8"]') ||
             t.includes('Authenticator App Verification') ||
             t.includes('Google Authenticator') ||
             t.includes('Email Verification') ||
@@ -9228,7 +9896,70 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           }
         };
 
+        // ── Method -1: PRECISE shadow-DOM row click (no Vision, works minimized) ──
+        // Binance renders this "Security Verification Requirements" step-picker inside
+        // div#mfa-shadow-host's shadow root (same host as the passkey modal). Reach in,
+        // find the "Authenticator App" / "Email" ROW, and fire a full pointer+click on
+        // its clickable container — no OOPIF, no screenshot, no coordinate guessing.
+        console.log(`[DOM] Method -1: shadow-DOM click on "${targetText}" row...`);
+        let _svClicked = await page.evaluate((label) => {
+          const wants = label.toLowerCase();
+          function* deepEls(root) { for (const el of root.querySelectorAll('*')) { yield el; if (el.shadowRoot) yield* deepEls(el.shadowRoot); } }
+          const host = document.querySelector('#mfa-shadow-host');
+          const roots = [];
+          if (host && host.shadowRoot) roots.push(host.shadowRoot);
+          roots.push(document);
+          const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+          // Prefer an element whose OWN normalised text IS the label (the row's label node),
+          // not a big container that merely contains it.
+          let target = null;
+          for (const root of roots) {
+            for (const el of deepEls(root)) {
+              const own = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+              if (!own) continue;
+              if ((own === wants || own === wants + ' >' || own.startsWith(wants + ' ')) && own.length <= wants.length + 4 && vis(el)) { target = el; break; }
+            }
+            if (target) break;
+          }
+          // Fallback: smallest visible element that merely CONTAINS the label.
+          if (!target) {
+            for (const root of roots) {
+              const cands = [];
+              for (const el of deepEls(root)) {
+                if ((el.textContent || '').toLowerCase().includes(wants) && vis(el)) {
+                  const r = el.getBoundingClientRect(); cands.push([el, r.width * r.height]);
+                }
+              }
+              if (cands.length) { cands.sort((a, b) => a[1] - b[1]); target = cands[0][0]; break; }
+            }
+          }
+          if (!target) return false;
+          // Walk up to the clickable ROW container so the row's own handler fires.
+          let clickEl = target, p = target;
+          for (let i = 0; i < 6 && p; i++) {
+            try {
+              if (getComputedStyle(p).cursor === 'pointer' || p.getAttribute('role') === 'button' || p.getAttribute('aria-label')) { clickEl = p; break; }
+            } catch (e) {}
+            p = p.parentElement || (p.getRootNode() && p.getRootNode().host) || null;
+          }
+          const r = clickEl.getBoundingClientRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          for (const type of ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            clickEl.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window, clientX: cx, clientY: cy }));
+          }
+          try { clickEl.click(); } catch (e) {}
+          return true;
+        }, targetText).catch(() => false);
+        if (_svClicked) {
+          console.log(`[DOM] ✅ "${targetText}" row clicked (mfa-shadow-host, precise)`);
+          await new Promise(r => setTimeout(r, 1500));
+          advanced = await svAdvanced();
+          if (advanced) { console.log('[DOM] ✅ shadow-DOM row click advanced the page'); markAuthDone(); }
+          else console.log('[DOM] shadow-DOM row click fired but page did not advance — trying OOPIF/Vision...');
+        }
+
         // â"€â"€ Method 0: CDP OOPIF direct JS click (no screenshot, no mouse) â"€â"€â"€â"€â"€â"€â"€â"€
+        if (!advanced) {
         console.log(`[SV] Method 0: OOPIF CDP click on "${targetText}"...`);
         const oopifClicked = await svClickViaOOPIF(page, targetText);
         if (oopifClicked) {
@@ -9236,6 +9967,7 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
           advanced = await svAdvanced();
           if (advanced) { console.log('[SV] âœ… OOPIF click advanced the page'); markAuthDone(); }
           else console.log('[SV] OOPIF click fired but page did not advance â€" trying Claude Vision...');
+        }
         }
 
         // â"€â"€ Method 1: Anchor-based Claude Vision → CDP click (no physical mouse) â"€
@@ -9333,6 +10065,16 @@ async function releaseWithVision(page, orderNumber, action, { skipNavigation = f
         }
         const code = generateTOTP(totpSecret);
         console.log(`[TOTP] Generated code: ${code}`);
+
+        // SHADOW-DOM FIRST: Binance's TOTP input lives inside #mfa-shadow-host's shadow
+        // root, which the frame.querySelector path below CANNOT see — so it always fell
+        // through to Vision (blank when minimized). Type + submit straight into the shadow
+        // input; works minimized, no Vision. Falls through only if no shadow input exists.
+        if (await enterMfaCodeShadow(page, code)) {
+          console.log('[TOTP] ✅ code entered via shadow-DOM (mfa-shadow-host) — no Vision');
+          await new Promise(r => setTimeout(r, 1800));
+          continue;   // re-detect: should advance to email step or complete
+        }
 
         // Step 1: Find TOTP input across ALL frames (may be in cross-origin iframe),
         // CDP-click to focus it, then paste via clipboard Ctrl+V.
@@ -9587,33 +10329,160 @@ Write-Host "done"`;
         continue;
       }
 
-      // â"€â"€ Email OTP â€" DOM send + Gmail extract + DOM fill â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+      // ── Email OTP — WAIT for the fresh code, then DOM fill (no Vision) ──────────
+      // The old code grabbed whatever code was on screen the instant Gmail opened —
+      // usually the PREVIOUS (stale) code, before the just-sent one arrived. Binance
+      // rejected it, the whole release re-triggered, another code was sent, and it
+      // looped forever. Fix: mark the current (stale) code as already-seen, request a
+      // fresh one, then PAUSE until a genuinely NEW (untried) code lands — only then paste.
       if (screen === 'email_otp_input') {
-        // Step 1: Click "Send Code" / "Get Code" via DOM text-node walker
-        const sendClicked = await page.evaluate(() => {
-          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-          while (walker.nextNode()) {
-            const t = (walker.currentNode.textContent || '').trim().toLowerCase();
-            if (t.includes('send code') || t.includes('get code') || t === 'send') {
-              const el = walker.currentNode.parentElement;
-              if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
-            }
-          }
-          return false;
-        }).catch(() => false);
-        console.log(`[Email OTP] Send Code clicked: ${sendClicked}`);
-        await new Promise(r => setTimeout(r, 4000)); // wait for email to arrive
+        // IMAP-ONLY (no browser tab). Every client configures a Gmail App Password in
+        // Settings; the code is read straight from the mail server — no tab to switch to,
+        // nothing to refresh, and the newest UID is always the latest email.
+        const tried = _emailTried(orderNumber);
+        const _creds = loadGmailCredentials();
 
-        // Step 2: Read OTP from Gmail
-        console.log('[Email OTP] Reading OTP from Gmail...');
-        const emailCode = await readEmailOTPWithVision(page);
-        if (!emailCode) {
-          console.error('[Email OTP] OTP not found in Gmail');
-          return { success: false, error: 'Email OTP not found' };
+        if (!_creds || !_creds.email || !_creds.appPassword) {
+          console.error('[Email OTP] Gmail App Password NOT configured — cannot read the release code.');
+          if (!emailOtpNoCredAlerted.has(orderNumber)) {
+            emailOtpNoCredAlerted.add(orderNumber);
+            sendBotLog('error', 'Cannot read the Binance email code — add your Gmail App Password in Settings → Gmail OTP reader.');
+            alertMerchant('⚠️ SparkP2P cannot complete a sell release: your Gmail App Password is not set. Open Settings → Gmail OTP reader and add it (takes 2 minutes).').catch(() => {});
+          }
+          return { success: false, error: 'Gmail App Password not configured' };
         }
-        console.log(`[Email OTP] Got OTP: ${emailCode} â€" filling into Binance`);
+
+        // ── EMAIL OTP — SCREEN-STATE DRIVEN, STAY ON THE PAGE ──────────────────
+        // The email screen tells us what to do: a "Get Code" button = no active code (must
+        // click it); "Code Sent"/"Resend"/a countdown = one is already on the way (don't
+        // re-send); "Please get a verification code first" = we typed a code without an active
+        // request (must click Get Code); "Too many requests (015002)" = rate-limited (wait).
+        // Basing it on SCREEN STATE (not a per-order counter) fixes: never re-clicking Get Code,
+        // spamming during cooldown, and typing stale codes with no active request.
+        const _emailState = () => page.evaluate(() => {
+          function cs(root){let s='';try{for(const el of root.querySelectorAll('*')){if(el.shadowRoot){s+='\n'+(el.shadowRoot.textContent||'')+cs(el.shadowRoot);}}}catch(e){}return s;}
+          const t = ((document.body.innerText || '') + cs(document)).toLowerCase();
+          return {
+            rateLimited: t.includes('too many') || t.includes('015002') || (t.includes('try again') && t.includes('later')),
+            needCode: t.includes('get a verification code first') || t.includes('please get a verification code'),
+            sent: t.includes('code sent') || t.includes('resend') || /\(\s*\d+\s*s\s*\)/.test(t) || /\bin\s*\d+\s*s\b/.test(t),
+          };
+        }).catch(() => ({ rateLimited: false, needCode: true, sent: false }));
+
+        // Robust "Get Code"/"Send Code" click (NEVER "Resend"): find it piercing shadow roots,
+        // then a TRUSTED mouse click at its coords — dispatchEvent alone did NOT register on this
+        // control, so Binance never actually sent a code ("Please get a verification code first").
+        const _clickGetCode = async () => {
+          const loc = await page.evaluate(() => {
+            function* deep(root){ for (const el of root.querySelectorAll('*')){ yield el; if (el.shadowRoot) yield* deep(el.shadowRoot); } }
+            for (const el of deep(document)) {
+              const own = (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+              if (!own || own.length > 12 || own.includes('resend')) continue;
+              if (own === 'get code' || own === 'send code' || own === 'get' || own === 'send') {
+                const r = el.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+              }
+            }
+            return null;
+          }).catch(() => null);
+          if (!loc) return false;
+          try { await page.mouse.click(loc.x, loc.y); } catch (_) {}
+          return true;
+        };
+
+        // ── GATING: the only real cure for 015002 is to REQUEST rarely. A sent code stays valid
+        //    ~10 min, so we click "Get Code" AT MOST once per code-lifetime and REUSE that code on
+        //    every re-entry — instead of re-clicking whenever a countdown label happens to be gone
+        //    (the old `!_st.sent` bug that spammed emails until Binance tripped 015002).
+        const REQ_MIN_INTERVAL_MS = 60 * 1000;     // never click Get Code more than once / 60s
+        const OTP_LIFETIME_MS     = 9 * 60 * 1000; // re-request only after the sent code is ~expired
+        const RL_COOLDOWN_MS      = 5 * 60 * 1000; // after 015002, don't touch Get Code for 5 min
+
+        let _st = await _emailState();
+
+        // A code already read for THIS order and still within its ~10-min life — reuse verbatim.
+        const _cached = emailOtpActiveCode.get(orderNumber);
+        const _cachedUsable = _cached && (Date.now() - _cached.at) < OTP_LIFETIME_MS;
+
+        // Any 015002 → (re)start the cooldown. We do NOT abandon: a code was almost certainly
+        // already sent, so we fall straight through to reading/reusing it — never re-requesting.
+        if (_st.rateLimited) {
+          emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);
+          sendBotLog('warning', `Binance "Get Code" rate-limited (015002) — reusing the code already sent, not re-requesting (order ...${orderNumber.slice(-8)})`);
+        }
+
+        const _inCooldown        = Date.now() < (emailOtpCooldownUntil.get(orderNumber) || 0);
+        const _recentlyRequested = (Date.now() - (emailOtpLastSentAt.get(orderNumber) || 0)) < REQ_MIN_INTERVAL_MS;
+        let baselineUid = emailOtpBaselineUid.get(orderNumber);
+
+        // REQUEST a code only when we genuinely have none usable — never merely because a
+        // countdown label vanished. And only if not gated (cooldown / min-interval / live 015002),
+        // so "Get Code" can never be spammed into a rate-limit again.
+        const _needFreshRequest = !_cachedUsable && (baselineUid == null || _st.needCode);
+        const _mayRequest = !_inCooldown && !_recentlyRequested && !_st.rateLimited;
+
+        if (_needFreshRequest && _mayRequest) {
+          baselineUid = await imapBaselineBinanceUid();   // capture UID baseline right before the send
+          emailOtpBaselineUid.set(orderNumber, baselineUid);
+          emailOtpActiveCode.delete(orderNumber);
+          emailOtpSubmitCount.delete(orderNumber);
+          const clicked = await _clickGetCode();
+          emailOtpLastSentAt.set(orderNumber, Date.now());
+          await new Promise(r => setTimeout(r, 2500));
+          console.log(`[Email OTP] Get Code clicked=${clicked} (baseline ${baselineUid}) — ONE request; will reuse this code on re-entry`);
+          _st = await _emailState();
+          if (_st.rateLimited) emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);
+        } else if (_needFreshRequest) {
+          console.log(`[Email OTP] a fresh code is needed but gated (cooldown=${_inCooldown} recent=${_recentlyRequested} rl=${_st.rateLimited}) — reading/waiting, NOT re-requesting`);
+        } else {
+          console.log(`[Email OTP] ${_cachedUsable ? 'reusing cached code' : 'code already requested'} for this order — not re-requesting`);
+        }
+        if (baselineUid == null) baselineUid = 0;
+
+        // Obtain the code: reuse the cached fresh one, else read the fresh (UID > baseline) email.
+        let emailCode = _cachedUsable ? _cached.code : null;
+        if (!emailCode) {
+          const _emDeadline = Date.now() + 90000;
+          while (!emailCode && Date.now() < _emDeadline && !pauseNavigation) {
+            emailCode = await readFreshBinanceOtpViaImap(baselineUid, tried, 25000);
+            if (emailCode) break;
+            const sMid = await _emailState();
+            if (sMid.rateLimited) emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);  // note, don't re-request
+            console.log('[Email OTP] fresh code not in inbox yet — waiting (no re-request)…');
+            await new Promise(r => setTimeout(r, 2000));
+          }
+          if (emailCode) { emailOtpActiveCode.set(orderNumber, { code: emailCode, at: Date.now() }); emailOtpSubmitCount.set(orderNumber, 0); }
+        }
+        if (!emailCode) {
+          console.error('[Email OTP] no fresh code available yet — retry next cycle (no re-request spam)');
+          return { success: false, error: 'fresh Email OTP not found' };
+        }
+
+        // Bound retries on a code Binance keeps rejecting: after 3 submits of the SAME code with no
+        // progress, discard it (mark tried, drop cache + baseline) so exactly ONE gated re-request
+        // fires next cycle. Prevents both an infinite resubmit AND a re-request storm.
+        const _submits = (emailOtpSubmitCount.get(orderNumber) || 0) + 1;
+        emailOtpSubmitCount.set(orderNumber, _submits);
+        if (_submits > 3) {
+          console.warn(`[Email OTP] code ${emailCode} made no progress after 3 submits — discarding, will request one fresh`);
+          tried.add(emailCode);
+          emailOtpActiveCode.delete(orderNumber);
+          emailOtpSubmitCount.delete(orderNumber);
+          emailOtpBaselineUid.delete(orderNumber);
+          return { success: false, error: 'email code rejected repeatedly — requesting fresh next cycle' };
+        }
+        console.log(`[Email OTP] NEW code = ${emailCode} â€" filling into Binance`);
         await page.bringToFront();
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 800));
+
+        // SHADOW-DOM FIRST: the email-code input is inside #mfa-shadow-host's shadow root,
+        // which the frame.querySelector path below CANNOT see — so it always fell through
+        // to Vision. Type + submit straight into the shadow input; works minimized, no Vision.
+        if (await enterMfaCodeShadow(page, emailCode)) {
+          console.log('[Email OTP] ✅ code entered via shadow-DOM (mfa-shadow-host) — no Vision');
+          await new Promise(r => setTimeout(r, 1800));
+          continue;   // re-detect: should now complete the release
+        }
 
         // Step 3: Find input across ALL frames (may be in cross-origin iframe like risk.binance.com)
         let emailFilled = false;
@@ -15600,6 +16469,15 @@ ipcMain.handle('clear-im-pin', () => { clearImPin(); return { ok: true }; });
 ipcMain.handle('has-im-pin', () => ({ hasPin: !!imPin }));
 ipcMain.handle('save-gmail-credentials', (_e, email, appPassword) => { saveGmailCredentials(email, appPassword); return true; });
 ipcMain.handle('load-gmail-credentials', () => { const c = loadGmailCredentials(); return c ? { email: c.email, hasPassword: !!c.appPassword } : null; });
+ipcMain.handle('test-email-otp', async () => {
+  const r = await testGmailImap();
+  if (r.ok) {
+    sendBotLog('success', `Gmail IMAP test OK (${r.email || ''}) — ${r.code ? 'latest Binance code ' + r.code + (r.whenMins != null ? ' (' + r.whenMins + 'm ago)' : '') : (r.note || 'connected, no recent Binance email')}`);
+  } else {
+    sendBotLog('error', `Gmail IMAP test FAILED — ${r.error || 'unknown'}`);
+  }
+  return r;
+});
 ipcMain.handle('clear-gmail-credentials', () => { clearGmailCredentials(); return true; });
 ipcMain.handle('set-totp-secret', (_, secret) => { totpSecret = secret ? secret.toUpperCase().replace(/\s/g, '') : null; console.log('[SparkP2P] TOTP secret configured'); return { ok: true }; });
 ipcMain.handle('verify-lock-totp', async (_, code) => {

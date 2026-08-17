@@ -10,6 +10,15 @@ const LAST_ACTIVE_KEY = 'sparkp2p_last_active';
 // web/desktop-only. The relay also runs independently of the UI session.
 const isNativeApp = () => !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
+// Public, token-based pages that must NEVER be hijacked by the session redirect. The mobile KYC
+// page (/kyc/:token) is opened on a phone that may still carry a stale login token from an earlier
+// (e.g. Google) sign-in; validating that token here would bounce the merchant to /login before the
+// KYC form can render — the "QR redirects to sparkp2p.com instead of the KYC page" bug.
+const isPublicSelfAuthPath = () => {
+  const p = window.location.pathname || '';
+  return p.startsWith('/kyc/') || p.startsWith('/verify-kyc');
+};
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -45,6 +54,9 @@ export function AuthProvider({ children }) {
   }, [user, resetInactivityTimer]);
 
   const checkAuth = () => {
+    // Never run the session check / redirect on a public token-based page (mobile KYC) — it would
+    // hijack a phone that carries a stale token and throw it to /login instead of the KYC form.
+    if (isPublicSelfAuthPath()) { setLoading(false); return; }
     const token = localStorage.getItem('token');
     if (token) {
       // Check if session expired due to inactivity while app was closed

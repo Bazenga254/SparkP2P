@@ -107,6 +107,7 @@ async def inbound_support_reply(request: Request):
     except Exception:
         payload = dict(await request.form())
     items = payload.get("items") if isinstance(payload, dict) else None
+    attachments = []
     if items and isinstance(items, list):
         item = items[0]
         sender    = (item.get("From") or {}).get("Address", "")
@@ -116,18 +117,31 @@ async def inbound_support_reply(request: Request):
         body      = item.get("RawTextBody") or item.get("ExtractedMarkdownMessage") or ""
         if not body:
             body = re.sub(r"<[^>]+>", " ", item.get("RawHtmlBody") or "")
+        # Inline attachments Choice Bank / the client sent back (when Brevo includes
+        # the base64 Content; download-token-only attachments are skipped).
+        for a in (item.get("Attachments") or []):
+            content = a.get("Content") or a.get("content")
+            if content:
+                attachments.append({"name": a.get("Name") or a.get("name") or "file",
+                                    "content": content,
+                                    "type": a.get("ContentType") or a.get("contentType") or ""})
     else:
         sender    = str(payload.get("sender") or payload.get("From") or "")
         recipient = str(payload.get("recipient") or payload.get("To") or "")
         subject   = str(payload.get("subject") or payload.get("Subject") or "")
         body      = re.sub(r"<[^>]+>", " ", str(payload.get("stripped-text") or payload.get("body-plain") or payload.get("body-html") or ""))
+        # Attachments the inbound SMTP server extracted from the MIME message.
+        for a in (payload.get("attachments") or []):
+            if a.get("content"):
+                attachments.append({"name": a.get("name") or "file", "content": a["content"],
+                                    "type": a.get("type") or ""})
     body = body.strip()
-    logger.info(f"[Support-Reply] from={sender} to={recipient} subject={subject!r}")
+    logger.info(f"[Support-Reply] from={sender} to={recipient} subject={subject!r} attachments={len(attachments)}")
     try:
         from app.core.database import async_session
         from app.api.routes.ops_tickets import handle_inbound_reply
         async with async_session() as db:
-            matched = await handle_inbound_reply(to_addr=recipient, from_addr=sender, subject=subject, body_text=body, db=db)
+            matched = await handle_inbound_reply(to_addr=recipient, from_addr=sender, subject=subject, body_text=body, db=db, attachments=attachments)
         if not matched:
             logger.info("[Support-Reply] no matching ticket for to=%s subject=%r", recipient, subject)
     except Exception as e:

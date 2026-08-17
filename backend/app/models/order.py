@@ -50,7 +50,7 @@ class Order(Base):
     # Buyer/Seller info (from Binance)
     counterparty_name = Column(String(255), nullable=True)         # nickname
     counterparty_real_name = Column(String(255), nullable=True)    # verified/legal name (best-effort, for payer name-match)
-    counterparty_phone = Column(String(20), nullable=True)
+    counterparty_phone = Column(String(64), nullable=True)  # was 20 — PesaLink/bank inbound puts an account no./reference here (>20 chars), which crashed the payment-confirmation commit and blocked auto-release + wallet credit
 
     # Buy side payment details (parsed from Binance)
     seller_payment_method = Column(String(50), nullable=True)  # mpesa | im_bank | other_bank

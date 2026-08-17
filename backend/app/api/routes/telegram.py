@@ -20,6 +20,17 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # In-memory stores
 _link_codes: dict = {}         # code -> {trader_id, expires_at}
 _pending_approvals: dict = {}   # order_number -> {chat_id, message_id, status, trader_id, created_at, type?}
+# Signals a waiting long-poll the INSTANT a merchant taps Approve/Reject, so the desktop learns of
+# the decision in ~1s (event-driven) instead of on its next ~15-44s scan-loop poll. One event per
+# order_number; created lazily by the long-poll and set by the approve/reject callback.
+_approval_events: dict = {}     # order_number -> asyncio.Event
+
+
+def _signal_approval(order_number: str):
+    """Wake any long-poll waiting on this order's approval decision (approve OR reject)."""
+    ev = _approval_events.get(str(order_number))
+    if ev is not None:
+        ev.set()
 _pending_name_checks: dict = {} # order_number -> {chat_id, message_id, status, trader_id, created_at}
 _pending_payment_decisions: dict = {} # order_number -> {chat_id, message_id, status, trader_id, created_at} — buy payment stuck: merchant chooses manual/cancel
 _pending_otp_acks: dict = {}    # order_number -> {chat_id, message_id, trader_id, created_at}
@@ -437,6 +448,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
                 if action in ("approve", "buy_approve"):
                     ap["status"] = "approved"
+                    _signal_approval(order_number)   # wake the desktop's long-poll instantly
                     # Persist to DB so status survives a server restart
                     try:
                         from sqlalchemy import text as _sql_text
@@ -463,6 +475,7 @@ async def telegram_webhook(request: Request, db: AsyncSession = Depends(get_db))
 
                 elif action in ("reject", "buy_decline"):
                     ap["status"] = "rejected"
+                    _signal_approval(order_number)   # wake the desktop's long-poll instantly
                     try:
                         from sqlalchemy import text as _sql_text
                         await db.execute(_sql_text(
@@ -788,39 +801,57 @@ async def request_approval(
 @router.get("/approval-status")
 async def check_approval_status(
     order_number: str,
+    wait: int = 0,   # if >0, LONG-POLL up to this many seconds (capped 30) until the merchant taps
+                     # Approve/Reject — returns within ~1s of the tap instead of on the desktop's
+                     # next ~15-44s scan-loop poll. Backward-compatible: old apps omit it (wait=0).
     trader: Trader = Depends(get_current_trader),
     db: AsyncSession = Depends(get_db),
 ):
-    ap = _pending_approvals.get(order_number)
-
-    # Not in memory — server may have restarted. Restore from DB if the notification exists.
-    if not ap:
-        from sqlalchemy import text as _sql_text
-        row = (await db.execute(_sql_text(
-            "SELECT tg_message_id, last_status FROM sell_order_notifications WHERE order_number = :o"
-        ), {"o": str(order_number)})).first()
-        if row:
+    async def _resolve() -> str:
+        """Current decision: approved | rejected | pending | timeout | not_found."""
+        ap = _pending_approvals.get(order_number)
+        if not ap:
+            # Not in memory — server may have restarted. Restore from DB if the notification exists.
+            from sqlalchemy import text as _sql_text
+            row = (await db.execute(_sql_text(
+                "SELECT tg_message_id, last_status FROM sell_order_notifications WHERE order_number = :o"
+            ), {"o": str(order_number)})).first()
+            if not row:
+                return "not_found"
             _db_status = (row[1] or "").upper()
-            if _db_status in ("APPROVED",):
-                return {"status": "approved"}
-            if _db_status in ("REJECTED",):
-                return {"status": "rejected"}
-            # Pending/unknown — recreate in-memory so next approve/reject press works
+            if _db_status == "APPROVED":
+                return "approved"
+            if _db_status == "REJECTED":
+                return "rejected"
             _pending_approvals[order_number] = {
                 "chat_id": str(trader.telegram_chat_id or ""),
-                "message_id": row[0],
-                "status": "pending",
-                "trader_id": trader.id,
-                "created_at": time.time(),
+                "message_id": row[0], "status": "pending",
+                "trader_id": trader.id, "created_at": time.time(),
             }
-            return {"status": "pending"}
-        return {"status": "not_found"}
+            return "pending"
+        if time.time() - ap["created_at"] > APPROVAL_TIMEOUT:
+            _pending_approvals.pop(order_number, None)
+            return "timeout"
+        return ap["status"]
 
-    if time.time() - ap["created_at"] > APPROVAL_TIMEOUT:
-        _pending_approvals.pop(order_number, None)
-        return {"status": "timeout"}
-
-    return {"status": ap["status"]}
+    status = await _resolve()
+    if status == "pending" and wait and int(wait) > 0:
+        import asyncio
+        ev = _approval_events.get(order_number)
+        if ev is None:
+            ev = asyncio.Event()
+            _approval_events[order_number] = ev
+        # Re-check AFTER registering the event so a tap that lands in this tiny window isn't missed.
+        status = await _resolve()
+        if status == "pending":
+            try:
+                await asyncio.wait_for(ev.wait(), timeout=min(int(wait), 30))
+            except asyncio.TimeoutError:
+                pass
+            status = await _resolve()
+        if ev.is_set():
+            _approval_events.pop(order_number, None)
+    return {"status": status}
 
 
 # ── Send approval request for a BUY order payment ───────────────────────────

@@ -13,7 +13,7 @@ const FAQ = [
   ['Do I need to know how to code to use a Binance P2P bot?',
    'No. Open-source Binance P2P bots on GitHub require Python and manual API coding. SparkP2P is a ready-made app — you download it, paste in your Binance API key and secret, link your M-Pesa and PesaLink (bank) accounts, and it runs. Setup takes under 10 minutes with no coding.'],
   ['How much does a Binance P2P bot cost in Kenya?',
-   'SparkP2P starts at KES 10,000 per month for the Bronze plan, with Silver and Gold plans for higher-volume traders. There are no Binance API or server costs to manage yourself.'],
+   'SparkP2P starts at KES 5,000 per month for the Bronze plan, with Silver and Gold plans for higher-volume traders. There are no Binance API or server costs to manage yourself.'],
   ['Can the bot handle both buying and selling on Binance P2P?',
    'Yes. For sell orders the bot verifies the buyer’s M-Pesa or PesaLink payment and releases the crypto. For buy orders it detects when crypto arrives and pays the seller via M-Pesa automatically.'],
 ];
@@ -22,7 +22,7 @@ const TAKEAWAYS = [
   'SparkP2P is a Binance P2P bot built mainly for Kenyan merchants — it verifies M-Pesa and PesaLink (bank) payments and releases USDT automatically, 24/7, for both buy and sell orders.',
   'You connect with your Binance API key and secret (never your password), and you can keep withdrawal permissions off so the bot can never move funds out of your account.',
   'Unlike open-source GitHub scripts, SparkP2P automates the part that actually matters in Kenya — the M-Pesa and PesaLink payment check — with no coding required.',
-  'Plans start at KES 10,000 per month and setup takes under 10 minutes.',
+  'Plans start at KES 5,000 per month and setup takes under 10 minutes.',
 ];
 
 const TOC = [

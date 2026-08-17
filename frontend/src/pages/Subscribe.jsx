@@ -24,9 +24,9 @@ const PLAN_UI = {
 };
 // Mirrors plans.py; only used for the first paint, before the backend list arrives.
 const PLAN_FALLBACK = [
-  { key: 'starter', label: 'Bronze', price: 10000 },
-  { key: 'pro',     label: 'Silver', price: 11000 },
-  { key: 'pro_max', label: 'Gold',   price: 13000 },
+  { key: 'starter', label: 'Bronze', price: 5000 },
+  { key: 'pro',     label: 'Silver', price: 7500 },
+  { key: 'pro_max', label: 'Gold',   price: 10000 },
 ];
 const fmtKes = n => 'KES ' + Number(n).toLocaleString('en-KE');
 

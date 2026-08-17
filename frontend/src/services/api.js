@@ -30,7 +30,9 @@ api.interceptors.response.use(
       // EXACT match only — this is the session-JWT failure (deps.py is the sole source). A broad
       // match also caught "Invalid or expired OTP code" and other 401s, which logged users out
       // immediately after sign-in (login loop).
-      if (msg === 'Invalid or expired token' && !window.location.pathname.startsWith('/login')) {
+      const _p = window.location.pathname || '';
+      const _isPublicSelfAuth = _p.startsWith('/kyc/') || _p.startsWith('/verify-kyc');
+      if (msg === 'Invalid or expired token' && !_p.startsWith('/login') && !_isPublicSelfAuth) {
         localStorage.removeItem('token');
         window.location.href = '/login?reason=expired';
       }
@@ -217,6 +219,12 @@ export const reverseChoiceTransaction = (transaction_id, reason) => api.post('/c
 export const getCbWithdrawalBank = () => api.get('/traders/cb-withdrawal-bank');
 export const verifyBankAccount = (bank_code, account) => api.get('/traders/verify-bank-account', { params: { bank_code, account } });
 export const saveCbWithdrawalBank = (body) => api.post('/traders/cb-withdrawal-bank', body);
+// Multiple withdrawal bank accounts (up to 3). Add/remove need TOTP + security answer; setting
+// the auto-withdraw account needs TOTP only.
+export const getCbBankAccounts = () => api.get('/traders/cb-bank-accounts');
+export const addCbBankAccount = (body) => api.post('/traders/cb-bank-accounts', body);
+export const deleteCbBankAccount = (id, body) => api.post(`/traders/cb-bank-accounts/${id}/delete`, body);
+export const setCbAutoAccount = (id, totp_code) => api.post(`/traders/cb-bank-accounts/${id}/auto`, { totp_code });
 export const cbWithdrawToBank = (otp, amount) => api.post('/traders/cb-withdraw-to-bank', { otp, amount });
 // Hands-free: waits (up to 2 min) for the Choice Bank SMS OTP to arrive over the
 // MacroDroid relay, then confirms — same relay the buy-order flow uses.
@@ -235,7 +243,7 @@ export const checkChoiceTransaction = ({ ref = '', amount } = {}) => {
   return api.get(`/traders/choice/check-transaction?${p.toString()}`);
 };
 export const choiceStatementStatus = (jobId) => api.get(`/traders/choice/statement/status?job_id=${encodeURIComponent(jobId)}`);
-export const cbWithdrawInitiate = (amount) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount });
+export const cbWithdrawInitiate = (amount, accountId) => api.post('/traders/cb-withdraw-to-bank/initiate', { amount, account_id: accountId || null });
 export const cbWithdrawToMpesa = (otp, amount) => api.post("/traders/cb-withdraw-to-bank", { otp, amount });
 export const cbWithdrawToMpesaInitiate = (amount) => api.post("/traders/cb-withdraw-to-mpesa/initiate", { amount });
 // Payments Hub — Send Money to any M-Pesa number (OTP-confirmed)

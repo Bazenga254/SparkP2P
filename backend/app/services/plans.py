@@ -3,9 +3,9 @@
 Three tiers. Daily limits reset at the trading-day boundary
 (00:00 UTC = 03:00 EAT, see app.core.trading_day). A limit of 0 means UNLIMITED.
 
-    Bronze  KES 10,000/mo   unlimited trades   unlimited Telegram alerts
-    Silver  KES 11,000/mo   unlimited trades   unlimited Telegram alerts
-    Gold    KES 13,000/mo   unlimited trades   unlimited Telegram alerts
+    Bronze  KES 5,000/mo    unlimited trades   unlimited Telegram alerts
+    Silver  KES 7,500/mo    unlimited trades   unlimited Telegram alerts
+    Gold    KES 10,000/mo   unlimited trades   unlimited Telegram alerts
 
 All tiers now have unlimited trades + Telegram alerts; the tiers differ by price,
 price-tracker data visibility (Bronze: bronze only; Silver: +silver; Gold: all)
@@ -52,7 +52,10 @@ async def apply_tier_plan(trader, db) -> bool:
         Subscription.trader_id == trader.id,
         Subscription.status == SubscriptionStatus.ACTIVE,
     ).order_by(Subscription.expires_at.desc()))
-    sub = r.scalar_one_or_none()
+    # A trader can have MORE THAN ONE active row (stacked payments); take the newest by
+    # expiry. scalar_one_or_none() would raise MultipleResultsFound and silently break the
+    # hourly tier sync for that trader.
+    sub = r.scalars().first()
     if not sub or not sub.is_active or sub.plan == SubscriptionPlan.ADVANCED or sub.plan == target:
         return False
     old = sub.plan.value
@@ -64,9 +67,9 @@ async def apply_tier_plan(trader, db) -> bool:
 
 
 PLAN_CONFIG = {
-    SubscriptionPlan.STARTER: {"label": "Bronze", "price": 10000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
-    SubscriptionPlan.PRO:     {"label": "Silver", "price": 11000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
-    SubscriptionPlan.PRO_MAX: {"label": "Gold",   "price": 13000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
+    SubscriptionPlan.STARTER: {"label": "Bronze", "price": 5000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
+    SubscriptionPlan.PRO:     {"label": "Silver", "price": 7500, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
+    SubscriptionPlan.PRO_MAX: {"label": "Gold",   "price": 10000, "daily_trades": UNLIMITED, "daily_tg": UNLIMITED},
     # B2C-via-own-paybill plan — NOT public. Only offered to admin-flagged clients
     # (trader.b2c_own_paybill_enabled). Kept out of PLAN_ORDER so it never shows on the
     # public/Landing pricing; surfaced only on the flagged trader's own Subscriptions tab.

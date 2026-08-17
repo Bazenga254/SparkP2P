@@ -411,6 +411,18 @@ async def poll(
         # Opted out (or unknown): nothing to do. Not an error — the bot just idles.
         return {"jobs": [], "enabled": False}
 
+    # SUBSCRIPTION GATE (do this FIRST, before any credit/relay logic). I&M buy-order
+    # automation is a PAID feature, so it must be gated behind an active subscription
+    # exactly like the desktop bot's auto buy/sell/release. Without this, a merchant
+    # whose plan has lapsed could keep automating I&M payouts by only topping up I&M
+    # credits — a loophole (paying for I&M automation but not the subscription). Only
+    # Choice Bank (the trader's own money) is intentionally never gated; those traders
+    # can't have buy_payout_via_im on anyway. Fail closed: no active plan -> no jobs.
+    from app.services.enforcement import billing_active
+    if not await billing_active(db, trader):
+        logger.info("im-bot poll: trader %s subscription expired/off — I&M automation paused until they pay", trader_id)
+        return {"jobs": [], "enabled": True, "paused": True, "reason": "subscription_expired", "credits": 0}
+
     # PAUSE AT ZERO CREDITS. A trader on a prepaid rail (I&M / own-paybill) must
     # have a credit for the next payout. At zero we serve NO jobs — the bot idles
     # and new Binance orders are ignored until they top up — rather than pay an
@@ -1123,8 +1135,10 @@ async def bot_buy_credits(
 
     est = creditsvc.credits_for(amount, rate)
     try:
+        # NB: description must have no '&' — Safaricom rejects TransactionDesc with special
+        # characters as 500.001.1001. (stk_push now also sanitizes this defensively.)
         result = await mpesa_client.stk_push(
-            phone=phone, amount=amount, account_reference=ref, description="I&M Credits",
+            phone=phone, amount=amount, account_reference=ref, description="IM Credits",
         )
         checkout_id = result.get("CheckoutRequestID")
     except Exception as e:

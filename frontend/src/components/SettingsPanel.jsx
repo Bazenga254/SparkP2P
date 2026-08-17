@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, saveBinance2fa, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount, getCbAutoWithdraw, setCbAutoWithdraw } from '../services/api';
+import { updateSettlement, updateTradingConfig, updateProfile, setSecurityQuestion, requestChangePasswordOtp, changePassword, getProfile, updateVerification, saveBinance2fa, getTotpSetup, verifyAndSaveTotp, removeTotp, choiceOnboardWallet, choiceConfirmOtp, choiceOnboardStatus, choiceGetBalance, kycCreateSession, getCbWithdrawalBank, saveCbWithdrawalBank, verifyBankAccount, getCbAutoWithdraw, setCbAutoWithdraw, getCbBankAccounts, addCbBankAccount, deleteCbBankAccount, setCbAutoAccount } from '../services/api';
+
+const KE_BANKS = [
+  ['01', 'Kenya Commercial Bank (KCB)'],['68', 'Equity Bank'],['11', 'Co-operative Bank'],
+  ['07', 'NCBA Bank'],['02', 'Standard Chartered'],['03', 'Absa Bank Kenya'],
+  ['31', 'Stanbic Bank'],['57', 'I&M Bank'],['63', 'Diamond Trust Bank (DTB)'],
+  ['12', 'National Bank of Kenya'],['70', 'Family Bank'],['66', 'Sidian Bank'],
+  ['35', 'African Banking Corporation (ABC)'],['10', 'Prime Bank'],['53', 'Guaranty Trust Bank'],
+];
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../services/api';
 import RemoteBrowser from './RemoteBrowser';
@@ -78,6 +86,14 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
 
   // Gmail session
   const [gmailConfigured, setGmailConfigured] = useState(false);
+
+  // Gmail IMAP (App Password) — the reliable, tab-free way to read Binance OTP emails
+  const [imapEmail, setImapEmail] = useState('');
+  const [imapPassword, setImapPassword] = useState('');
+  const [imapSaved, setImapSaved] = useState(false);
+  const [imapMsg, setImapMsg] = useState('');
+  const [imapSaving, setImapSaving] = useState(false);
+  const [showImapSetup, setShowImapSetup] = useState(false);
 
   // I&M Bank connection
   const [imConnecting, setImConnecting] = useState(false);
@@ -299,6 +315,29 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     }
   };
 
+  // ── B2C Bot (own-Paybill Daraja send/receive) — same one-click launch as the I&M bot, shown only
+  //    for merchants on the B2C / Own-Paybill plan. Credits are the shared prepaid b2c_credits balance.
+  const [b2cBot, setB2cBot] = useState(null);
+  const [b2cLaunching, setB2cLaunching] = useState(false);
+  const [b2cLaunchMsg, setB2cLaunchMsg] = useState('');
+  const loadB2cBot = async () => {
+    try { const r = await api.get('/b2c-bot/link-status'); setB2cBot(r.data); } catch (_) { setB2cBot(null); }
+  };
+  const launchB2cBot = async () => {
+    setB2cLaunching(true); setB2cLaunchMsg('');
+    try {
+      const r = await api.post('/b2c-bot/handoff');
+      const link = r.data?.deeplink;
+      if (!link) throw new Error('no link');
+      window.location.href = link;
+      setB2cLaunchMsg("✓ Opening B2C Automation… If nothing happens, the app isn't installed — download it, then click Launch again.");
+    } catch (e) {
+      setB2cLaunchMsg('Could not start the launch. Please try again.');
+    } finally {
+      setTimeout(() => setB2cLaunching(false), 1500);
+    }
+  };
+
   // Choose how BUY orders are paid: the merchant's own I&M Bot, or Choice Bank.
   const [payoutBusy, setPayoutBusy] = useState(false);
   const setPayoutMethod = async (viaIm) => {
@@ -313,6 +352,8 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
       setPayoutBusy(false);
     }
   };
+
+  useEffect(() => { loadB2cBot(); }, []);
 
   useEffect(() => {
     loadImBot();
@@ -445,6 +486,20 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
   const [batchEnabled, setBatchEnabled] = useState(profile?.batch_settlement_enabled ?? true);
   const [cbBank, setCbBank] = useState({ bank_name: '', bank_code: '', account: '', account_name: '' });
   const [cbBankLoaded, setCbBankLoaded] = useState(false);
+  // ── Multiple withdrawal bank accounts (up to 3) ──
+  const [cbAccts, setCbAccts] = useState([]);              // saved accounts
+  const [cbAcctsLoaded, setCbAcctsLoaded] = useState(false);
+  const [cbAddOpen, setCbAddOpen] = useState(false);       // add-account form open
+  const [cbAddForm, setCbAddForm] = useState({ bank_name: '', bank_code: '', account: '', account_name: '' });
+  const [cbAddTotp, setCbAddTotp] = useState('');
+  const [cbAddSec, setCbAddSec] = useState('');
+  const [cbAddBusy, setCbAddBusy] = useState(false);
+  const [cbAcctMsg, setCbAcctMsg] = useState('');
+  const [cbActRow, setCbActRow] = useState(null);          // {id, mode:'auto'|'remove'} pending TOTP/security
+  const [cbActTotp, setCbActTotp] = useState('');
+  const [cbActSec, setCbActSec] = useState('');
+  const [cbActBusy, setCbActBusy] = useState(false);
+  const reloadCbAccts = () => getCbBankAccounts().then(r => { setCbAccts(r.data?.accounts || []); setCbAcctsLoaded(true); }).catch(() => setCbAcctsLoaded(true));
   const [cbBankSaving, setCbBankSaving] = useState(false);
   const [cbBankMsg, setCbBankMsg] = useState('');
   const [cbBankVerifyStep, setCbBankVerifyStep] = useState(false);
@@ -561,6 +616,46 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
     window.addEventListener('gmail-connected', checkGmail);
     return () => window.removeEventListener('gmail-connected', checkGmail);
   }, []);
+
+  // Load the saved Gmail App Password status (IMAP) from the desktop app.
+  useEffect(() => {
+    if (!window.sparkp2p?.loadGmailCredentials) return;
+    window.sparkp2p.loadGmailCredentials().then((c) => {
+      if (c && c.hasPassword) { setImapSaved(true); setImapEmail(c.email || ''); }
+    }).catch(() => {});
+  }, []);
+
+  const saveImapCredentials = async () => {
+    const email = imapEmail.trim();
+    const pw = imapPassword.replace(/\s+/g, '');   // Google shows the app password in 4-char groups
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { setImapMsg('Enter a valid Gmail address.'); return; }
+    if (pw.length < 16) { setImapMsg('App Password should be 16 characters (paste it from Google).'); return; }
+    if (!window.sparkp2p?.saveGmailCredentials) { setImapMsg('This can only be set from the desktop app.'); return; }
+    setImapSaving(true); setImapMsg('');
+    try {
+      await window.sparkp2p.saveGmailCredentials(email, pw);
+      setImapSaved(true); setImapPassword(''); setShowImapSetup(false);
+      setImapMsg('Saved ✓ — the bot now reads OTP codes directly from Gmail.');
+    } catch (e) {
+      setImapMsg('Could not save — please try again.');
+    } finally { setImapSaving(false); }
+  };
+
+  const testImapConnection = async () => {
+    if (!window.sparkp2p?.testEmailOtp) { setImapMsg('Test only works from the desktop app.'); return; }
+    setImapSaving(true); setImapMsg('Testing…');
+    try {
+      const r = await window.sparkp2p.testEmailOtp();
+      if (r?.ok) {
+        if (r.code) setImapMsg(`✓ Connected — latest Binance code ${r.code}${r.whenMins != null ? ` (${r.whenMins} min ago)` : ''}. Working end to end.`);
+        else setImapMsg(`✓ ${r.note || 'Connected — no recent Binance email, but the login works.'}`);
+      } else {
+        setImapMsg(`✗ ${r?.error || 'Could not connect.'}`);
+      }
+    } catch (e) {
+      setImapMsg('✗ Test failed — please try again.');
+    } finally { setImapSaving(false); }
+  };
 
   // Redirect to dashboard once all three accounts are connected
   useEffect(() => {
@@ -987,26 +1082,53 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
               )}
             </div>
 
-            {/* Gmail OTP reader */}
+            {/* Gmail OTP reader — App Password (IMAP). Reads the Binance release code
+                straight from the mail server: fast, reliable, no browser tab. */}
             <div className="card">
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(16,185,129,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <div style={{ width: 22, height: 16, borderRadius: 3, background: 'rgba(16,185,129,0.2)', border: '1.5px solid #10b981' }} />
                 </div>
                 <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
-                  background: gmailConfigured ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.12)',
-                  color: gmailConfigured ? '#10b981' : '#6b7280' }}>
-                  {gmailConfigured ? 'Connected' : 'Not set'}
+                  background: imapSaved ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                  color: imapSaved ? '#10b981' : '#f59e0b' }}>
+                  {imapSaved ? 'Connected' : 'Action needed'}
                 </span>
               </div>
               <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 6 }}>Gmail OTP reader</div>
-              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
-                Reads Binance email verification codes via a connected browser session.
+              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+                Reads the Binance release verification code directly from Gmail using a Google
+                <b> App Password</b> — required to auto-complete sell orders. {imapSaved && imapEmail ? <span style={{ color: '#10b981' }}>({imapEmail})</span> : null}
               </div>
-              <button onClick={() => { wasConnectingRef.current = true; window.sparkp2p?.openGmailTab(); }}
-                style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
-                {gmailConfigured ? 'Re-connect Gmail' : 'Connect Gmail'}
-              </button>
+
+              {imapSaved && !showImapSetup ? (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={testImapConnection} disabled={imapSaving}
+                    style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: '#10b981', color: '#04140d', fontWeight: 800, fontSize: 13, cursor: imapSaving ? 'default' : 'pointer', opacity: imapSaving ? 0.6 : 1 }}>
+                    {imapSaving ? 'Testing…' : 'Test connection'}
+                  </button>
+                  <button onClick={() => { setShowImapSetup(true); setImapMsg(''); }}
+                    style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#d1d5db', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                    Update Password
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <input type="email" value={imapEmail} onChange={(e) => setImapEmail(e.target.value)} placeholder="your Gmail address"
+                    style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1px solid #374151', background: '#0b0f17', color: '#e5e7eb', fontSize: 13, boxSizing: 'border-box' }} />
+                  <input type="password" value={imapPassword} onChange={(e) => setImapPassword(e.target.value)} placeholder="16-character App Password"
+                    style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1px solid #374151', background: '#0b0f17', color: '#e5e7eb', fontSize: 13, boxSizing: 'border-box' }} />
+                  <button onClick={saveImapCredentials} disabled={imapSaving}
+                    style={{ width: '100%', padding: '9px 0', borderRadius: 8, border: 'none', background: '#10b981', color: '#04140d', fontWeight: 800, fontSize: 13, cursor: imapSaving ? 'default' : 'pointer', opacity: imapSaving ? 0.6 : 1 }}>
+                    {imapSaving ? 'Saving…' : 'Save App Password'}
+                  </button>
+                  <button onClick={() => { window.sparkp2p?.openExternal ? window.sparkp2p.openExternal('https://myaccount.google.com/apppasswords') : window.open('https://myaccount.google.com/apppasswords', '_blank'); }}
+                    style={{ width: '100%', padding: '8px 0', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
+                    How to get an App Password →
+                  </button>
+                </div>
+              )}
+              {imapMsg ? <div style={{ marginTop: 10, fontSize: 12, color: imapMsg.includes('✓') ? '#10b981' : '#f59e0b' }}>{imapMsg}</div> : null}
             </div>
 
             {/* I&M Bot — the merchant's own downloadable payout bot.
@@ -1058,6 +1180,46 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
                 {imBot?.has_key ? 'Manage keys' : 'Set up manually'}
               </button>
             </div>
+
+            {/* B2C Bot — only for merchants on the B2C / Own-Paybill plan. Mirrors the I&M bot card:
+                one-click launch via the b2c-automation:// deep link, live status, and credits. */}
+            {b2cBot?.on_b2c_plan && (
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(139,92,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ width: 20, height: 20, borderRadius: 4, background: 'rgba(139,92,246,0.2)', border: '1.5px solid #8b5cf6' }} />
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 20,
+                  background: b2cBot?.online ? 'rgba(16,185,129,0.15)' : b2cBot?.has_key ? 'rgba(245,158,11,0.15)' : 'rgba(107,114,128,0.12)',
+                  color: b2cBot?.online ? '#10b981' : b2cBot?.has_key ? '#f59e0b' : '#6b7280' }}>
+                  {b2cBot?.online ? 'Connected' : b2cBot?.has_key ? 'Offline' : 'Not set'}
+                </span>
+              </div>
+              <div style={{ fontWeight: 700, color: '#fff', fontSize: 15, marginBottom: 6 }}>B2C Bot</div>
+              <div style={{ color: '#6b7280', fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
+                Pays buys + receives sells from your own M-Pesa Paybill, on your own machine.
+                <strong style={{ color: '#9ca3af' }}> {(b2cBot?.credits ?? 0).toLocaleString()} credits</strong> left.
+              </div>
+              {b2cBot?.has_key && (
+                <div style={{ fontSize: 11, color: b2cBot?.online ? '#10b981' : '#f59e0b', marginBottom: 10 }}>
+                  {b2cBot?.online
+                    ? `Bot online · seen ${imBotSeen(b2cBot.last_seen_at)}`
+                    : `Bot not running · last seen ${imBotSeen(b2cBot.last_seen_at)}`}
+                </div>
+              )}
+              <button onClick={launchB2cBot} disabled={b2cLaunching}
+                style={{ width: '100%', padding: '9px 0', borderRadius: 8, marginBottom: 8,
+                  border: 'none', background: '#8b5cf6', color: '#fff', fontWeight: 700, fontSize: 13,
+                  cursor: b2cLaunching ? 'wait' : 'pointer' }}>
+                {b2cLaunching ? 'Launching…' : '🚀 Launch B2C Bot'}
+              </button>
+              {b2cLaunchMsg && (
+                <div style={{ fontSize: 11, color: b2cLaunchMsg.startsWith('✓') ? '#10b981' : '#f59e0b', lineHeight: 1.5 }}>
+                  {b2cLaunchMsg}
+                </div>
+              )}
+            </div>
+            )}
 
             {/* Binance TOTP verification */}
             <div className="card">
@@ -2388,7 +2550,133 @@ export default function SettingsPanel({ profile, onUpdate, initialSection }) {
         return null;
       })()}
 
-      {activeSection === 'bank' && (
+      {activeSection === 'bank' && !cbAcctsLoaded && (() => { reloadCbAccts(); return null; })()}
+
+      {/* ── Saved withdrawal bank accounts (up to 3) ── */}
+      {activeSection === 'bank' && cbAcctsLoaded && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+            <h3 style={{ margin: 0 }}>🏦 Withdrawal Bank Accounts</h3>
+            <span style={{ fontSize: 11, color: '#9ca3af' }}>{cbAccts.length}/3 saved</span>
+          </div>
+          <p style={{ color: '#6b7280', fontSize: 13, marginBottom: 14 }}>
+            Save up to 3 bank accounts. Auto-withdraw sweeps to the one marked <b style={{ color: '#10b981' }}>Auto</b>; on a manual withdrawal you choose which account to send to.
+          </p>
+
+          {cbAccts.length === 0 && (
+            <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>No withdrawal accounts saved yet. Add one below.</div>
+          )}
+
+          {cbAccts.map(a => (
+            <div key={a.id} style={{ border: '1px solid #374151', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: '#0d0f1e' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#fff' }}>
+                    {a.bank_name}
+                    {a.is_auto && <span style={{ marginLeft: 8, fontSize: 10, background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '2px 8px', borderRadius: 4, fontWeight: 700 }}>AUTO-WITHDRAW</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>{a.account} · {a.account_name}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {!a.is_auto && (
+                    <button onClick={() => { setCbActRow({ id: a.id, mode: 'auto' }); setCbActTotp(''); setCbActSec(''); setCbAcctMsg(''); }}
+                      style={{ fontSize: 11, padding: '5px 10px', borderRadius: 6, border: '1px solid rgba(16,185,129,0.35)', background: 'rgba(16,185,129,0.1)', color: '#10b981', cursor: 'pointer', fontWeight: 600 }}>Set for auto-withdraw</button>
+                  )}
+                  <button onClick={() => { setCbActRow({ id: a.id, mode: 'remove' }); setCbActTotp(''); setCbActSec(''); setCbAcctMsg(''); }}
+                    style={{ fontSize: 11, padding: '5px 10px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.08)', color: '#ef4444', cursor: 'pointer', fontWeight: 600 }}>Remove</button>
+                </div>
+              </div>
+
+              {/* Inline auth prompt for set-auto (TOTP only) / remove (TOTP + security) */}
+              {cbActRow && cbActRow.id === a.id && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #1f2937' }}>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 6 }}>
+                    {cbActRow.mode === 'auto' ? 'Enter your Google Authenticator code to make this the auto-withdraw account.' : 'Confirm removal — enter your Google Authenticator code and security answer.'}
+                  </div>
+                  <input value={cbActTotp} onChange={e => setCbActTotp(e.target.value.replace(/[^\d]/g, ''))} placeholder="6-digit Authenticator code" inputMode="numeric" maxLength={6}
+                    style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+                  {cbActRow.mode === 'remove' && (
+                    <input value={cbActSec} onChange={e => setCbActSec(e.target.value)} placeholder="Security answer"
+                      style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+                  )}
+                  {cbAcctMsg && <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 8 }}>{cbAcctMsg}</div>}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button disabled={cbActBusy || cbActTotp.length < 6 || (cbActRow.mode === 'remove' && !cbActSec.trim())}
+                      onClick={async () => {
+                        setCbActBusy(true); setCbAcctMsg('');
+                        try {
+                          if (cbActRow.mode === 'auto') await setCbAutoAccount(a.id, cbActTotp.trim());
+                          else await deleteCbBankAccount(a.id, { totp_code: cbActTotp.trim(), security_answer: cbActSec.trim() });
+                          setCbActRow(null); await reloadCbAccts();
+                        } catch (err) { setCbAcctMsg(err?.response?.data?.detail || 'Failed. Please try again.'); }
+                        setCbActBusy(false);
+                      }}
+                      style={{ flex: 1, padding: '9px 0', borderRadius: 8, border: 'none', background: cbActRow.mode === 'remove' ? '#dc2626' : 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: (cbActBusy || cbActTotp.length < 6) ? 0.6 : 1 }}>
+                      {cbActBusy ? 'Working…' : cbActRow.mode === 'auto' ? 'Confirm' : 'Remove account'}
+                    </button>
+                    <button onClick={() => { setCbActRow(null); setCbAcctMsg(''); }} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* Add another account */}
+          {cbAccts.length < 3 && !cbAddOpen && (
+            <button onClick={() => { setCbAddOpen(true); setCbAddForm({ bank_name: '', bank_code: '', account: '', account_name: '' }); setCbAddTotp(''); setCbAddSec(''); setCbAcctMsg(''); }}
+              style={{ marginTop: 4, fontSize: 13, padding: '9px 14px', borderRadius: 8, border: '1px dashed #374151', background: 'transparent', color: '#f59e0b', cursor: 'pointer', fontWeight: 600, width: '100%' }}>+ Add {cbAccts.length === 0 ? 'a' : 'another'} bank account</button>
+          )}
+
+          {cbAddOpen && (
+            <div style={{ marginTop: 10, paddingTop: 12, borderTop: '1px solid #1f2937' }}>
+              {!profile?.has_totp && (
+                <div style={{ marginBottom: 10, padding: 10, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid #ef4444', fontSize: 12, color: '#ef4444' }}>
+                  Google Authenticator not set up. Configure it in <strong>Profile &amp; Security</strong> before adding a bank account.
+                </div>
+              )}
+              <select value={cbAddForm.bank_code}
+                onChange={e => { const b = KE_BANKS.find(([c]) => c === e.target.value); setCbAddForm(f => ({ ...f, bank_code: e.target.value, bank_name: b ? b[1] : '' })); }}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: cbAddForm.bank_code ? '#fff' : '#6b7280', fontSize: 13, marginBottom: 10 }}>
+                <option value="">Select bank…</option>
+                {KE_BANKS.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+              </select>
+              <input value={cbAddForm.account} placeholder="Account number"
+                onChange={e => setCbAddForm(f => ({ ...f, account: e.target.value.replace(/[^\d]/g, '') }))}
+                onBlur={async () => {
+                  if (cbAddForm.bank_code && cbAddForm.account.length >= 4) {
+                    try { const res = await verifyBankAccount(cbAddForm.bank_code, cbAddForm.account); const nm = res.data?.account_name; if (nm) setCbAddForm(f => ({ ...f, account_name: nm.toUpperCase() })); } catch { /* type manually */ }
+                  }
+                }}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, marginBottom: 10, boxSizing: 'border-box' }} />
+              <input value={cbAddForm.account_name} placeholder="Account holder name"
+                onChange={e => setCbAddForm(f => ({ ...f, account_name: e.target.value }))}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, marginBottom: 10, boxSizing: 'border-box' }} />
+              <input value={cbAddTotp} onChange={e => setCbAddTotp(e.target.value.replace(/[^\d]/g, ''))} placeholder="6-digit Authenticator code" inputMode="numeric" maxLength={6}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, marginBottom: 10, boxSizing: 'border-box' }} />
+              <input value={cbAddSec} onChange={e => setCbAddSec(e.target.value)} placeholder="Security answer"
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #374151', background: '#111827', color: '#fff', fontSize: 13, marginBottom: 10, boxSizing: 'border-box' }} />
+              {cbAcctMsg && <div style={{ fontSize: 12, color: '#ef4444', marginBottom: 8 }}>{cbAcctMsg}</div>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button disabled={cbAddBusy || !cbAddForm.bank_code || cbAddForm.account.length < 4 || !cbAddForm.account_name.trim() || cbAddTotp.length < 6 || !cbAddSec.trim()}
+                  onClick={async () => {
+                    setCbAddBusy(true); setCbAcctMsg('');
+                    try {
+                      await addCbBankAccount({ bank_name: cbAddForm.bank_name, bank_code: cbAddForm.bank_code, account: cbAddForm.account, account_name: cbAddForm.account_name.trim(), totp_code: cbAddTotp.trim(), security_answer: cbAddSec.trim() });
+                      setCbAddOpen(false); await reloadCbAccts();
+                    } catch (err) { setCbAcctMsg(err?.response?.data?.detail || 'Could not add account.'); }
+                    setCbAddBusy(false);
+                  }}
+                  style={{ flex: 1, padding: '10px 0', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', opacity: cbAddBusy ? 0.6 : 1 }}>
+                  {cbAddBusy ? 'Adding…' : 'Add account'}
+                </button>
+                <button onClick={() => { setCbAddOpen(false); setCbAcctMsg(''); }} style={{ padding: '10px 16px', borderRadius: 8, border: '1px solid #374151', background: 'transparent', color: '#9ca3af', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSection === 'bank' && false && (
         <div className="card" style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <h3 style={{ margin: 0 }}>🏦 Choice Bank Withdrawal Account</h3>

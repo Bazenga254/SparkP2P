@@ -8,16 +8,16 @@
  * Usage:
  *   const { plans, planLabel, planPrice } = usePlans();
  *   planLabel('pro')  -> 'Silver'      planLabel(null) -> 'Free'
- *   planPrice('pro')  -> 11000
+ *   planPrice('pro')  -> 7500
  */
 import { useEffect, useState } from 'react';
 import api from './api';
 
 // Mirrors plans.py. Only used for the first paint, before the fetch lands (and if it fails).
 export const PLAN_FALLBACK = [
-  { key: 'starter', label: 'Bronze', price: 10000 },
-  { key: 'pro',     label: 'Silver', price: 11000 },
-  { key: 'pro_max', label: 'Gold',   price: 13000 },
+  { key: 'starter', label: 'Bronze', price: 5000 },
+  { key: 'pro',     label: 'Silver', price: 7500 },
+  { key: 'pro_max', label: 'Gold',   price: 10000 },
 ];
 
 // Cache across mounts — the catalogue changes about once a year.

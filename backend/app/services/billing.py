@@ -101,6 +101,26 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
     else:
         plan = _highest_affordable(balance)
 
+    # ── ANTI-DOWNGRADE FLOOR ─────────────────────────────────────────────────
+    # A payment must NEVER automatically demote a trader who is still on an active plan
+    # to a cheaper tier. Previously a Gold merchant (price 13,000) who paid only 10,000
+    # settled onto Bronze (the highest tier 10,000 could afford), and the still-active
+    # plan was overwritten with the cheaper one — an unwanted auto-downgrade. Instead we
+    # HOLD the money in the balance ("pay slowly toward renewing your current plan") and
+    # leave them on their current plan until it expires or they top up enough to cover it.
+    # (User: "He should have remained there until he pays the full amount.") A genuine
+    # upgrade (balance covers a higher tier) still goes through; onboarding/new users
+    # with no active plan are unaffected.
+    current_plan = await active_plan(db, trader_id)
+    if current_plan is not None and plan is not None:
+        current_price = float(PLAN_CONFIG[current_plan]["price"])
+        if float(PLAN_CONFIG[plan]["price"]) < current_price:
+            logger.warning(
+                "[Billing] trader %s paid toward %s but balance %.0f < current plan %s price %.0f "
+                "— held in balance, NOT downgraded",
+                trader_id, plan.value, balance, current_plan.value, current_price)
+            plan = None
+
     from app.services.ledger import record_activity
     from app.models.wallet import TransactionType as _TT
 
@@ -161,6 +181,11 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
             amount=price, started_at=now, expires_at=new_exp, mpesa_transaction_id=txn_id or None,
         ))
     trader.tier = plan.value
+    # Price tracker is a subscriber feature (tier only controls WHICH competitor data is visible).
+    # The expiry enforcer turns it OFF via wipe_bot_config, and because it's admin-gated the merchant
+    # can't switch it back on themselves — so a renewed subscription would silently lose the price
+    # tracker. Re-enable it on every activation/renewal so it follows the subscription automatically.
+    trader.price_tracker_enabled = True
     trader.subscription_balance = max(0.0, balance - price)
     # NO free credits on any plan. Everyone starts at 0 and buys prepaid payout
     # credits themselves (see credits.py) — so every user is prompted to top up

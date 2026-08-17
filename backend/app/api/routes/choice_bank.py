@@ -198,8 +198,12 @@ async def _handle_transaction_result(params: dict, raw: dict):
                         _ref = tx_id or _existing.mpesa_transaction_id
                         if _tx_success:
                             _existing.status = PaymentStatus.COMPLETED
-                            if tx_id:
-                                _existing.mpesa_receipt_number = tx_id
+                            # Store the ACTUAL M-Pesa reference (externalTxId, e.g.
+                            # UH5SX2HQBO) that appears on the client's M-Pesa and the
+                            # Choice dashboard — so support can search a case by it.
+                            # Fall back to the Choice txId only if there's no external ref.
+                            if external_ref or tx_id:
+                                _existing.mpesa_receipt_number = external_ref or tx_id
                             # Capture Choice Bank's ACTUAL fee + the channel (for accurate reconciliation)
                             if fee_amount:
                                 _existing.fee = fee_amount
@@ -438,8 +442,11 @@ async def _handle_transaction_result(params: dict, raw: dict):
                 logger.info(f"[ChoiceBank] Duplicate webhook for order {order.binance_order_number}: txId={tx_id} — skipping")
                 return
 
-        # Save this payment (may be partial or exact)
-        is_partial = amount < order.fiat_amount - 5
+        # Save this payment (may be partial or exact).
+        # KES 1 cushion (middle ground): tolerate a shortfall of AT MOST KES 1 so tiny
+        # M-Pesa rounding/fee differences don't trap buyers, but hold on anything short by
+        # MORE than 1 KES (>= ~2). Was KES 5 (leaked up to ~5 bob/order), briefly 0.5 (strict).
+        is_partial = amount < order.fiat_amount - 1
         db.add(Payment(
             order_id=order.id,
             trader_id=trader.id,
@@ -466,7 +473,7 @@ async def _handle_transaction_result(params: dict, raw: dict):
         )
         total_received = float(total_result.scalar() or 0)
 
-        if total_received < order.fiat_amount - 5:
+        if total_received < order.fiat_amount - 1:
             # Still partial — alert the merchant and wait for the balance (no release yet).
             deficit = order.fiat_amount - total_received
             logger.info(
@@ -491,7 +498,11 @@ async def _handle_transaction_result(params: dict, raw: dict):
         # Full amount reached.
         order.payment_confirmed_at = datetime.now(timezone.utc)
         if sender_phone:
-            order.counterparty_phone = sender_phone
+            # Defensive cap: PesaLink/bank inbound sometimes carries a long account no./reference
+            # here (not a phone). A value over the column width used to crash this whole commit —
+            # rolling back the PAYMENT_RECEIVED status + wallet credit, so the order never
+            # auto-released. Column is now 64; truncate to be safe regardless.
+            order.counterparty_phone = str(sender_phone)[:64]
         # NOTE: do NOT overwrite counterparty_name with the sender name — the payer name-check
         # below needs the buyer's Binance name. The sender name is stored on the Payment record.
 
