@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # the enforcer wipes their bot config to zero. Flip on only once legit traders have plans
     # or are marked exempt.
     ENFORCEMENT_ENABLED: bool = False
+    # Gates the standing-order executor (unattended recurring Choice transfers).
+    # OFF until tested — the poller runs but fires nothing while this is False.
+    STANDING_ORDERS_ENABLED: bool = False
 
     # Subscription payments — production M-Pesa Paybill that receives plan payments. Each trader
     # pays with a unique account number SPK<6-digit id>; the C2B confirmation auto-activates.
@@ -80,6 +83,14 @@ class Settings(BaseSettings):
     BREVO_API_KEY: str = ""
     BREVO_FROM_EMAIL: str = "noreply@sparkp2p.com"
     BREVO_FROM_NAME: str = "SparkP2P"
+
+    # Admin dashboard mailbox (Zoho IMAP receive; send goes out via Brevo since the VPS blocks SMTP)
+    MAILBOX_IMAP_HOST: str = "imappro.zoho.com"
+    MAILBOX_IMAP_PORT: int = 993
+    MAILBOX_LOGIN: str = ""            # zoho mailbox login (the underlying mailbox)
+    MAILBOX_APP_PASSWORD: str = ""     # zoho app-specific password
+    MAILBOX_FROM_EMAIL: str = ""       # the address sends go out as (e.g. bonitocheluget@sparkp2p.com)
+    MAILBOX_FROM_NAME: str = "SparkP2P"
 
     # Advanta SMS
     ADVANTA_API_KEY: str = ""

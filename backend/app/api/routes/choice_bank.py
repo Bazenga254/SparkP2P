@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Request, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_trader
@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.core.database import async_session, get_db
 from app.models import Order, OrderStatus, OrderSide, Payment, PaymentDirection, PaymentStatus
 from app.models.trader import Trader
+from app.models.choice_account import ChoiceAccount
 from app.models.wallet import Wallet, WalletTransaction, TransactionType
 from app.services.choice_bank import client as choice
 
@@ -104,6 +105,8 @@ async def choice_bank_webhook(request: Request):
             await _handle_bulk_transfer_result(params, payload)
         elif notification_type == "0015":
             _handle_statement_ready(params, payload)
+        elif notification_type == "0006":
+            await _handle_sme_account_result(params, payload)
         else:
             logger.info(f"[ChoiceBank] Unhandled notification type {notification_type!r}")
     except Exception as exc:
@@ -130,6 +133,42 @@ def _handle_statement_ready(params: dict, raw: dict):
         logger.info(f"[ChoiceBank] 0015: statement ready for job {job_id}")
     else:
         logger.warning(f"[ChoiceBank] 0015 with no jobId/url — params={params}")
+
+
+async def _handle_sme_account_result(params: dict, raw: dict):
+    """Callback 0006 — SME Account Opening Result. Reconcile the pending registry row: re-query
+    the authoritative status and, on approval (3/7), register the account live; on rejection mark
+    the pending row rejected. Always tolerant — returns quietly if nothing matches."""
+    oid = params.get("onboardingRequestId") or raw.get("onboardingRequestId") or ""
+    account_id = params.get("accountId") or ""
+    async with async_session() as db:
+        row = None
+        if oid:
+            row = (await db.execute(select(ChoiceAccount).where(
+                ChoiceAccount.onboarding_request_id == oid))).scalar_one_or_none()
+        if not row and account_id:
+            row = (await db.execute(select(ChoiceAccount).where(
+                ChoiceAccount.account_id == account_id))).scalar_one_or_none()
+        if not row:
+            logger.warning("[ChoiceBank] 0006 SME result — no matching row (oid=%s acct=%s)", oid, account_id)
+            return
+        the_oid = row.onboarding_request_id or oid
+        data = {}
+        try:
+            resp = await choice.get_business_onboarding_status(onboarding_request_id=the_oid)
+            data = resp.get("data") or {}
+        except Exception as e:
+            logger.warning("[ChoiceBank] 0006 status re-query failed: %s", e)
+        status = data.get("onboardingStatus", data.get("status"))
+        acct = data.get("accountId") or account_id
+        if acct and str(status) in ("3", "7"):
+            data.setdefault("accountId", acct)
+            await _complete_sme_onboarding(db, row.trader_id, the_oid, data)
+        elif str(status) in ("4",):   # rejected
+            row.onboarding_status = "rejected"
+            row.kyc_status = "rejected"
+            await db.commit()
+            logger.info("[ChoiceBank] 0006 SME onboarding rejected for trader %s (oid=%s)", row.trader_id, the_oid)
 
 
 async def _handle_transaction_result(params: dict, raw: dict):
@@ -282,6 +321,25 @@ async def _handle_transaction_result(params: dict, raw: dict):
             select(Trader).where(Trader.choice_account_id == account_id)
         )
         trader = trader_result.scalar_one_or_none()
+
+        if not trader:
+            # Multi-account: the money may have landed in a Choice account the trader HOLDS but
+            # which isn't the currently-active mirror (e.g. a payment to the personal account
+            # arrives just after the trader switched their active account to an SME one, because
+            # the bot had already quoted the old account). Resolve the owner via the account
+            # registry so such a payment is still attributed to its trader instead of going
+            # unmatched. Matches on either the internal accountId or the human account number.
+            from app.models.choice_account import ChoiceAccount
+            owner_row = (await db.execute(
+                select(ChoiceAccount).where(
+                    or_(ChoiceAccount.account_id == account_id,
+                        ChoiceAccount.account_number == account_id))
+            )).scalars().first()
+            if owner_row:
+                trader = await db.get(Trader, owner_row.trader_id)
+                if trader:
+                    logger.info("[ChoiceBank] Payment to non-active account %s matched to trader %s via registry",
+                                account_id, trader.id)
 
         if not trader:
             # Idempotency: don't insert if this tx_id is already recorded
@@ -944,14 +1002,32 @@ async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db
         if account_id:
             trader = await db.get(Trader, trader_id)
             if trader:
-                trader.choice_account_id     = account_id
-                trader.choice_account_number = account_number
-                trader.choice_kyc_status     = "approved"
-                await db.commit()
-                logger.info(
-                    f"[ChoiceBank] Trader {trader_id} account activated: "
-                    f"accountId={account_id}, number={account_number}"
-                )
+                # This legacy poller reports the PERSONAL onboarding's account. It must NOT
+                # clobber the trader's active-account mirror if they've deliberately switched to a
+                # different Choice account (e.g. an SME account) — doing so silently reverted the
+                # switch every few minutes (the dashboard polls this). Only refresh the mirror when
+                # the personal account IS the active one (or there's no registry choice yet).
+                from app.models.choice_account import ChoiceAccount
+                active_row = (await db.execute(
+                    select(ChoiceAccount).where(ChoiceAccount.trader_id == trader_id,
+                                                ChoiceAccount.is_active == True)  # noqa: E712
+                )).scalar_one_or_none()
+                switched_away = bool(active_row and active_row.account_id and active_row.account_id != account_id)
+                if switched_away:
+                    logger.info(
+                        f"[ChoiceBank] Personal onboarding status checked for trader {trader_id}, "
+                        f"but active account is {active_row.account_id} ({active_row.account_type}) — "
+                        f"mirror left unchanged (switch preserved)."
+                    )
+                else:
+                    trader.choice_account_id     = account_id
+                    trader.choice_account_number = account_number
+                    trader.choice_kyc_status     = "approved"
+                    await db.commit()
+                    logger.info(
+                        f"[ChoiceBank] Trader {trader_id} account activated: "
+                        f"accountId={account_id}, number={account_number}"
+                    )
 
     return {
         "status": status,
@@ -959,6 +1035,427 @@ async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db
         "accountNumber": data.get("accountNumber"),
         "raw": data,
     }
+
+
+# ── Multi-account registry: hold several Choice accounts, switch the active one ──────────────
+
+def _mirror_active_to_trader(trader: Trader, acc: ChoiceAccount):
+    """Copy a registry row onto the trader's mirror fields so every existing consumer
+    (balance, transfers, paybill, withdrawals, deposits, pollers) transparently uses it.
+    Switching accounts = repointing this mirror; no other code path changes."""
+    trader.choice_account_id     = acc.account_id
+    trader.choice_account_number = acc.account_number
+    trader.choice_kyc_status     = acc.kyc_status
+    if acc.onboarding_status:
+        trader.onboarding_status = acc.onboarding_status
+
+
+async def _register_choice_account(db, trader: Trader, *, account_id: str, account_number: str,
+                                   label: str, account_type: str = "sme", business_type: int = None,
+                                   onboarding_request_id: str = None, make_active: bool = False):
+    """Upsert a Choice account into the registry (idempotent by account_id). Used by SME
+    onboarding completion (Phase 3) and admin tooling. When make_active (or it's the trader's
+    first account), it becomes active and the mirror is repointed."""
+    existing = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader.id,
+                                    ChoiceAccount.account_id == account_id)
+    )).scalar_one_or_none()
+    all_rows = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader.id)
+    )).scalars().all()
+    first_account = len(all_rows) == 0
+    acc = existing or ChoiceAccount(trader_id=trader.id)
+    acc.account_id = account_id
+    acc.account_number = account_number or account_id
+    acc.label = label or acc.label or "Account"
+    acc.account_type = account_type
+    acc.business_type = business_type
+    acc.kyc_status = "approved"
+    acc.onboarding_status = "approved"
+    if onboarding_request_id:
+        acc.onboarding_request_id = onboarding_request_id
+    if not existing:
+        db.add(acc)
+    if make_active or first_account:
+        for r in all_rows:
+            r.is_active = False
+        acc.is_active = True
+        await db.flush()
+        _mirror_active_to_trader(trader, acc)
+    await db.commit()
+    return acc
+
+
+class SwitchAccountRequest(BaseModel):
+    account_row_id: int   # choice_accounts.id to make active
+
+
+@router.get("/choice/accounts")
+async def list_choice_accounts(trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    """List every Choice Bank account this trader holds (active one flagged). Self-heals a legacy
+    trader that has an account but no registry row yet by backfilling it as active."""
+    rows = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader.id).order_by(ChoiceAccount.created_at)
+    )).scalars().all()
+
+    if not rows and trader.choice_account_id:   # self-heal legacy single account
+        acc = ChoiceAccount(
+            trader_id=trader.id, account_id=trader.choice_account_id,
+            account_number=trader.choice_account_number, label="Primary account",
+            account_type="personal", kyc_status=trader.choice_kyc_status,
+            onboarding_status=trader.onboarding_status, is_active=True,
+        )
+        db.add(acc); await db.commit(); await db.refresh(acc)
+        rows = [acc]
+
+    return {"accounts": [
+        {"id": r.id, "account_id": r.account_id, "account_number": r.account_number,
+         "label": r.label, "account_type": r.account_type, "business_type": r.business_type,
+         "kyc_status": r.kyc_status, "onboarding_status": r.onboarding_status,
+         "is_active": r.is_active,
+         "created_at": r.created_at.isoformat() if r.created_at else None}
+        for r in rows
+    ]}
+
+
+@router.post("/choice/accounts/switch")
+async def switch_choice_account(body: SwitchAccountRequest,
+                                trader: Trader = Depends(get_current_trader),
+                                db: AsyncSession = Depends(get_db)):
+    """Make the chosen Choice account active: flip is_active in the registry and repoint the
+    trader's mirror fields. Only an approved/active account can be made active."""
+    target = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.id == body.account_row_id,
+                                    ChoiceAccount.trader_id == trader.id)
+    )).scalar_one_or_none()
+    if not target:
+        raise HTTPException(404, "Account not found")
+    if not target.account_id or (target.kyc_status or "").lower() != "approved":
+        raise HTTPException(400, "That account isn't approved/active yet")
+
+    rows = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader.id)
+    )).scalars().all()
+    for r in rows:
+        r.is_active = (r.id == target.id)
+    _mirror_active_to_trader(trader, target)
+    await db.commit()
+    logger.info("[ChoiceBank] Trader %s switched active Choice account → %s (%s)",
+                trader.id, target.account_id, target.label)
+    return {"status": "switched", "active_account_id": target.account_id, "label": target.label}
+
+
+# ── SME onboarding wizard (Phase 3) ──────────────────────────────────────────
+# Mirrors the personal /choice/onboard/* flow. State lives in a pending choice_accounts
+# row (created at apply, onboarding_status='in_progress'); completion registers the account.
+
+async def _complete_sme_onboarding(db, trader_id: int, onboarding_request_id: str, data: dict):
+    """Mark an approved SME onboarding's account live in the registry. Finds the pending row by
+    onboardingRequestId, fills in the accountId/number, flips it to approved, and — only if the
+    trader has NO active account yet — makes it active (mirrors onto the trader). A 2nd account is
+    added but NOT auto-switched; the user switches deliberately. Safe to call repeatedly."""
+    account_id = data.get("accountId") or data.get("account_id") or ""
+    if not account_id:
+        return None
+    account_number = data.get("accountNumber") or data.get("account_number") or account_id
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        return None
+    row = (await db.execute(select(ChoiceAccount).where(
+        ChoiceAccount.trader_id == trader_id,
+        ChoiceAccount.onboarding_request_id == onboarding_request_id))).scalar_one_or_none()
+    if row and row.account_id == account_id and row.kyc_status == "approved":
+        return row   # already completed
+    all_rows = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader_id))).scalars().all()
+    has_active = any(a.is_active for a in all_rows)
+    if not row:   # fallback: pending row missing — register fresh
+        return await _register_choice_account(
+            db, trader, account_id=account_id, account_number=account_number,
+            label="SME account", account_type="sme",
+            onboarding_request_id=onboarding_request_id, make_active=not has_active)
+    row.account_id = account_id
+    row.account_number = account_number
+    row.kyc_status = "approved"
+    row.onboarding_status = "approved"
+    if not has_active:
+        row.is_active = True
+        _mirror_active_to_trader(trader, row)
+    await db.commit()
+    logger.info("[ChoiceBank] SME account %s registered for trader %s (active=%s)",
+                account_id, trader_id, row.is_active)
+    return row
+
+
+class SmeApplyRequest(BaseModel):
+    mobile: str                 # 9-digit
+    business_type: int          # 1=Sole Prop, 2=LLC, 3=Partnership, 4=NGO/CBO
+    otp_type: str = "SMS"       # SMS | EMAIL
+    email: str = ""
+    label: str = ""             # user-facing account name
+
+
+class SmeOtpSend(BaseModel):
+    onboarding_request_id: str
+    otp_type: str = "SMS"
+
+
+class SmeOtpConfirm(BaseModel):
+    onboarding_request_id: str
+    otp: str
+
+
+class SmeBasicInfo(BaseModel):
+    onboarding_request_id: str
+    business_type: int
+    business_name: str
+    business_cer_num: str
+    business_address: str
+    business_industry: str      # "1".."21"
+    specify_industry: str = ""
+    kra_pin: str = ""
+    # sole proprietorship only:
+    first_name: str = ""
+    middle_name: str = ""
+    last_name: str = ""
+    birthday: str = ""          # yyyy-mm-dd
+    gender: int = 1
+    id_number: str = ""
+    kin_full_name: str = ""
+    kin_relationship: str = ""
+    kin_mobile: str = ""
+    kin_country_code: str = "254"
+    # LLC / partnership / NGO-CBO only:
+    operating_mode: int = 1
+
+
+class SmeMediaUpload(BaseModel):
+    onboarding_request_id: str
+    media_type: str             # File ID e.g. KYCF00001
+    media_b64: str
+    content_type: str = "image"
+
+
+class SmeMediaRemove(BaseModel):
+    onboarding_request_id: str
+    file_id: str
+
+
+class SmeMemberIndividual(BaseModel):
+    onboarding_request_id: str
+    id_type: str = "101"
+    id_number: str
+    mobile: str
+    first_name: str
+    last_name: str
+    kra_pin: str
+    id_front_b64: str
+    id_back_b64: str
+    selfie_b64: str
+    kra_pin_b64: str
+    middle_name: str = ""
+    gender: int | None = None
+    email: str = ""
+    country_code: str = "254"
+
+
+class SmeMemberOrganisation(BaseModel):
+    onboarding_request_id: str
+    company_name: str
+    registration_b64: str
+    registration_type: str = "image"
+
+
+class SmeMemberRemove(BaseModel):
+    onboarding_request_id: str
+    member_id: str
+    member_type: int            # 0=Individual, 1=Organization
+
+
+class SmeSubmitRequest(BaseModel):
+    onboarding_request_id: str
+    action: int = 1             # 1=submit for review, 0=pull back to amend
+
+
+@router.post("/choice/sme/onboard/apply")
+async def sme_apply(body: SmeApplyRequest, trader: Trader = Depends(get_current_trader),
+                    db: AsyncSession = Depends(get_db)):
+    """Step 1: initiate an SME onboarding for the authenticated trader. Creates a pending
+    registry row and returns the onboardingRequestId to drive the rest of the wizard."""
+    if body.business_type not in (1, 2, 3, 4):
+        raise HTTPException(400, "businessType must be 1..4")
+    if body.otp_type.upper() == "EMAIL" and not body.email:
+        raise HTTPException(400, "Email is required when otpType=EMAIL")
+    r = await choice.apply_for_sme_onboarding(str(trader.id), body.mobile, body.business_type,
+                                              body.otp_type.upper(), body.email)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "SME onboarding could not be started"))
+    oid = (r.get("data") or {}).get("onboardingRequestId") or r.get("onboardingRequestId")
+    if not oid:
+        raise HTTPException(502, "Choice returned no onboardingRequestId")
+    db.add(ChoiceAccount(
+        trader_id=trader.id, label=(body.label or "SME account"), account_type="sme",
+        business_type=body.business_type, kyc_status=f"onboarding:{oid}",
+        onboarding_status="in_progress", onboarding_request_id=oid, is_active=False))
+    await db.commit()
+    return {"onboardingRequestId": oid}
+
+
+@router.post("/choice/sme/onboard/otp/send")
+async def sme_otp_send(body: SmeOtpSend, trader: Trader = Depends(get_current_trader)):
+    """Step 2a: send the onboarding OTP (SMS or EMAIL). EMAIL also verifies the email.
+    Initiating the onboarding already dispatches the first code, so a Choice rate-limit
+    ("Request verify code too frequently") means a code is already on its way — surface a
+    clear wait message rather than the raw bank error."""
+    r = await choice.send_otp(body.onboarding_request_id, body.otp_type.upper())
+    if r.get("code") != "00000":
+        msg = r.get("msg", "Could not send OTP")
+        if any(w in msg.lower() for w in ("frequent", "too many", "wait", "try again")):
+            raise HTTPException(429, "A verification code was just sent. Please wait about a "
+                                     "minute for it to arrive before requesting another.")
+        raise HTTPException(400, msg)
+    return {"status": "otp_sent"}
+
+
+@router.post("/choice/sme/onboard/otp/confirm")
+async def sme_otp_confirm(body: SmeOtpConfirm, trader: Trader = Depends(get_current_trader)):
+    """Step 2b: confirm the OTP (30-min window). After this you have 72h to finish steps 3-5."""
+    r = await choice.confirm_otp(body.onboarding_request_id, body.otp.strip())
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Invalid or expired OTP"))
+    return {"status": "confirmed"}
+
+
+@router.post("/choice/sme/onboard/basic-info")
+async def sme_basic_info(body: SmeBasicInfo, trader: Trader = Depends(get_current_trader)):
+    """Step 3: submit KYB basic info, dispatched by businessType."""
+    bt = body.business_type
+    if bt == 1:
+        r = await choice.submit_sole_prop_onboarding(
+            body.onboarding_request_id, body.business_name, body.business_cer_num,
+            body.first_name, body.last_name, body.birthday, body.gender, body.id_number,
+            body.kra_pin, body.kin_full_name, body.kin_relationship, body.kin_mobile,
+            body.business_address, body.business_industry, body.middle_name,
+            body.kin_country_code, body.specify_industry)
+    elif bt == 2:
+        r = await choice.submit_company_onboarding(
+            body.onboarding_request_id, body.business_name, body.business_cer_num, body.kra_pin,
+            body.operating_mode, body.business_address, body.business_industry, body.specify_industry)
+    elif bt == 3:
+        r = await choice.submit_partnership_onboarding(
+            body.onboarding_request_id, body.business_name, body.business_cer_num, body.kra_pin,
+            body.operating_mode, body.business_address, body.business_industry, body.specify_industry)
+    elif bt == 4:
+        r = await choice.submit_organisation_onboarding(
+            body.onboarding_request_id, body.business_name, body.business_cer_num, body.kra_pin,
+            body.operating_mode, body.business_address, body.business_industry, body.specify_industry)
+    else:
+        raise HTTPException(400, "businessType must be 1..4")
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Basic info submission failed"))
+    return {"status": "basic_info_saved"}
+
+
+@router.post("/choice/sme/onboard/upload-media")
+async def sme_upload_media(body: SmeMediaUpload, trader: Trader = Depends(get_current_trader)):
+    """Step 4: upload one KYB document. Returns the fileId (keep to allow removal)."""
+    r = await choice.upload_sme_media(body.onboarding_request_id, body.media_type,
+                                      body.media_b64, body.content_type)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Media upload failed"))
+    return {"status": "uploaded", "fileId": (r.get("data") or {}).get("fileId"),
+            "mediaType": body.media_type}
+
+
+@router.post("/choice/sme/onboard/remove-media")
+async def sme_remove_media(body: SmeMediaRemove, trader: Trader = Depends(get_current_trader)):
+    r = await choice.remove_sme_media(body.onboarding_request_id, body.file_id)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Media removal failed"))
+    return {"status": "removed"}
+
+
+@router.post("/choice/sme/onboard/member/add-individual")
+async def sme_add_member_individual(body: SmeMemberIndividual, trader: Trader = Depends(get_current_trader)):
+    """Step 5: attach an individual shareholder/director (LLC/Partnership/NGO-CBO need ≥2)."""
+    r = await choice.add_sme_member_individual(
+        body.onboarding_request_id, body.id_type, body.id_number, body.mobile,
+        body.first_name, body.last_name, body.kra_pin, body.id_front_b64, body.id_back_b64,
+        body.selfie_b64, body.kra_pin_b64, body.middle_name, body.gender, body.email, body.country_code)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Could not add shareholder"))
+    return {"status": "member_added", "memberId": (r.get("data") or {}).get("memberId")}
+
+
+@router.post("/choice/sme/onboard/member/add-organisation")
+async def sme_add_member_organisation(body: SmeMemberOrganisation, trader: Trader = Depends(get_current_trader)):
+    r = await choice.add_sme_member_organisation(body.onboarding_request_id, body.company_name,
+                                                 body.registration_b64, body.registration_type)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Could not add company shareholder"))
+    return {"status": "member_added", "companyId": (r.get("data") or {}).get("companyId")}
+
+
+@router.post("/choice/sme/onboard/member/remove")
+async def sme_remove_member(body: SmeMemberRemove, trader: Trader = Depends(get_current_trader)):
+    r = await choice.remove_sme_member(body.onboarding_request_id, body.member_id, body.member_type)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Could not remove shareholder"))
+    return {"status": "member_removed"}
+
+
+@router.post("/choice/sme/onboard/submit")
+async def sme_submit(body: SmeSubmitRequest, trader: Trader = Depends(get_current_trader),
+                     db: AsyncSession = Depends(get_db)):
+    """Step 6: send for review (action=1) or pull back to amend (action=0)."""
+    r = await choice.submit_or_pullback_sme(body.onboarding_request_id, body.action)
+    if r.get("code") != "00000":
+        raise HTTPException(400, r.get("msg", "Submit/pull-back failed"))
+    row = (await db.execute(select(ChoiceAccount).where(
+        ChoiceAccount.trader_id == trader.id,
+        ChoiceAccount.onboarding_request_id == body.onboarding_request_id))).scalar_one_or_none()
+    if row:
+        row.onboarding_status = "submitted" if body.action == 1 else "in_progress"
+        await db.commit()
+    return {"status": "submitted_for_review" if body.action == 1 else "pulled_back"}
+
+
+@router.post("/choice/sme/onboard/cancel")
+async def sme_cancel(body: SmeOtpConfirm, trader: Trader = Depends(get_current_trader),
+                     db: AsyncSession = Depends(get_db)):
+    """Cancel an SME onboarding (reuses onboarding_request_id field; otp ignored)."""
+    r = await choice.cancel_sme_onboarding(body.onboarding_request_id)
+    row = (await db.execute(select(ChoiceAccount).where(
+        ChoiceAccount.trader_id == trader.id,
+        ChoiceAccount.onboarding_request_id == body.onboarding_request_id))).scalar_one_or_none()
+    if row and not row.account_id:   # only drop a still-pending row, never a live account
+        await db.delete(row)
+        await db.commit()
+    return {"status": "cancelled", "code": r.get("code")}
+
+
+@router.get("/choice/sme/onboard/status/{onboarding_request_id}")
+async def sme_status(onboarding_request_id: str, trader: Trader = Depends(get_current_trader),
+                     db: AsyncSession = Depends(get_db)):
+    """Poll SME onboarding status. onboardingStatus 3/7 = approved → the account is registered
+    (and made active if the trader had none). Otherwise returns the current status + reject reason."""
+    r = await choice.get_business_onboarding_status(onboarding_request_id=onboarding_request_id)
+    data = r.get("data") or {}
+    status = data.get("onboardingStatus", data.get("status"))
+    if str(status) in ("3", "7") and (data.get("accountId")):
+        await _complete_sme_onboarding(db, trader.id, onboarding_request_id, data)
+    return {"status": status, "accountId": data.get("accountId"),
+            "accountType": data.get("accountType"),
+            "rejectReason": data.get("rejectionReasonMsg") or data.get("rejectReasonMsgs"),
+            "raw": data}
+
+
+@router.get("/choice/sme/onboard/info/{onboarding_request_id}")
+async def sme_info(onboarding_request_id: str, business_type: int,
+                   trader: Trader = Depends(get_current_trader)):
+    """Fetch the full submitted SME info + media list (to re-render the wizard for editing)."""
+    r = await choice.get_sme_onboarding_info(business_type, onboarding_request_id)
+    return {"data": r.get("data") or {}, "code": r.get("code")}
 
 
 class DepositRequest(BaseModel):
@@ -2311,11 +2808,12 @@ async def mpesa_to_bank_deposit(body: MpesaToBankBody, trader: Trader = Depends(
     if body.amount > 150000:
         raise HTTPException(status_code=400, detail="M-Pesa deposits are limited to KES 150,000 per transaction")
 
-    msisdn = "254" + phone
+    # Choice Bank's depositFromMpesa expects the 9-digit MSISDN (no 254/0 prefix), like its
+    # other M-Pesa ops (B2C payeeAccountId). Prepending "254" is rejected as "Invalid mobile number".
     try:
         result = await choice.deposit_from_mpesa(
             account_id=trader.choice_account_id,
-            mobile=msisdn,
+            mobile=phone,
             amount=int(body.amount),
         )
     except Exception as exc:

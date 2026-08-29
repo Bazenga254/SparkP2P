@@ -7,9 +7,9 @@ import { usePlans } from '../services/plans';
 
 // Presentation only — plan names and prices are fetched from the backend (plans.py).
 const LAND_PLAN_FEATURES = {
-  starter: ['Full buy & sell automation', 'Automatic crypto release', 'M-Pesa payment matching', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Market data: Bronze merchants'],
-  pro:     ['Everything in Bronze', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Market data: Silver + Bronze', 'Priority settlement'],
-  pro_max: ['Everything in Silver', 'Unlimited trades/day', 'Unlimited Telegram alerts', 'Market data: all merchants', 'Priority support', 'Dedicated onboarding'],
+  starter: ['Full payment automation', 'Automatic order completion', 'M-Pesa payment matching', 'Unlimited transactions/day', 'Unlimited Telegram alerts', 'Market data: Bronze tier'],
+  pro:     ['Everything in Bronze', 'Unlimited transactions/day', 'Unlimited Telegram alerts', 'Market data: Silver + Bronze', 'Priority settlement'],
+  pro_max: ['Everything in Silver', 'Unlimited transactions/day', 'Unlimited Telegram alerts', 'Market data: all tiers', 'Priority support', 'Dedicated onboarding'],
 };
 
 const FAQS = [
@@ -18,23 +18,23 @@ const FAQS = [
     items: [
       {
         q: 'What is SparkP2P?',
-        a: 'SparkP2P is a desktop application that automates your Binance P2P trading. It monitors incoming orders, verifies M-Pesa payments in real time, releases crypto automatically, and tracks your profits — all without you lifting a finger.',
+        a: 'SparkP2P is a desktop application that automates your payment workflows. It monitors incoming orders, verifies M-Pesa payments in real time, completes orders automatically, and tracks your results — all without you lifting a finger.',
       },
       {
         q: 'Do I need any coding or technical knowledge to use SparkP2P?',
-        a: 'No. SparkP2P is designed for traders, not coders. Download the app, connect your Binance account with your Binance API key and secret, configure your M-Pesa number, and you\'re live. The whole setup takes less than 10 minutes.',
+        a: 'No. SparkP2P is designed for operators, not coders. Download the app, connect your marketplace account, configure your M-Pesa number, and you\'re live. The whole setup takes less than 10 minutes.',
       },
       {
-        q: 'Is SparkP2P safe to use with my Binance account?',
-        a: 'Yes. SparkP2P never asks for your Binance API keys or password. It connects through the Binance website using your existing Chrome browser session — the same session you already use to trade manually. No credentials are stored or transmitted to our servers.',
+        q: 'Is SparkP2P safe to use with my account?',
+        a: 'Yes. SparkP2P never asks for your marketplace password or API keys. It connects through your existing Chrome browser session — the same session you already use — so no credentials are stored or transmitted to our servers.',
       },
       {
         q: 'Which operating systems are supported?',
         a: 'Windows 10 and Windows 11 are fully supported. macOS and Linux versions are in development and coming soon.',
       },
       {
-        q: 'Does SparkP2P work with any Binance account?',
-        a: 'Yes, as long as you have a Binance P2P account that is verified and has active buy or sell ads. SparkP2P works with both individual and merchant accounts.',
+        q: 'Does SparkP2P work with any account?',
+        a: 'Yes, as long as your account is verified and active. SparkP2P works with both individual and business accounts.',
       },
     ],
   },
@@ -43,15 +43,15 @@ const FAQS = [
     items: [
       {
         q: 'How does M-Pesa payment verification work?',
-        a: 'SparkP2P connects to your M-Pesa business paybill and monitors incoming transactions in real time. When a buyer sends M-Pesa, the bot matches the amount and reference to the order, confirms receipt, and releases the crypto automatically — typically within seconds of the payment landing.',
+        a: 'SparkP2P connects to your M-Pesa business paybill and monitors incoming transactions in real time. When a customer sends M-Pesa, the bot matches the amount and reference to the order, confirms receipt, and completes the order automatically — typically within seconds of the payment landing.',
       },
       {
         q: 'What if a buyer sends the wrong amount via M-Pesa?',
-        a: 'If the payment amount does not match the order exactly, SparkP2P will not auto-release. The order stays open and you will receive an alert so you can investigate and act manually.',
+        a: 'If the payment amount does not match the order exactly, SparkP2P will not auto-complete it. The order stays open and you will receive an alert so you can investigate and act manually.',
       },
       {
         q: 'How do I receive my earnings?',
-        a: 'Your trading profits accumulate in your SparkP2P wallet. You can request a withdrawal at any time — funds are sent directly to your registered M-Pesa number or I&M Bank account, depending on your selected settlement method.',
+        a: 'Your proceeds accumulate in your SparkP2P wallet. You can request a withdrawal at any time — funds are sent directly to your registered M-Pesa number or I&M Bank account, depending on your selected settlement method.',
       },
       {
         q: 'What is the minimum withdrawal amount?',
@@ -84,15 +84,15 @@ const FAQS = [
       },
       {
         q: 'Can I pause the bot without closing the app?',
-        a: 'Yes. The SparkP2P dashboard has a pause button that suspends order processing without disconnecting your Binance or M-Pesa sessions. You can resume with one click.',
+        a: 'Yes. The SparkP2P dashboard has a pause button that suspends order processing without disconnecting your marketplace or M-Pesa sessions. You can resume with one click.',
       },
       {
-        q: 'Does the bot handle both buy and sell orders?',
-        a: 'Yes. Both sides are fully automated. For sell orders, the bot verifies the buyer\'s M-Pesa payment and releases crypto. For buy orders, the bot detects when crypto is received and auto-pays the seller via M-Pesa.',
+        q: 'Does the bot handle both incoming and outgoing payments?',
+        a: 'Yes. Both sides are fully automated. For incoming payments, the bot verifies the customer\'s M-Pesa payment and completes the order. For outgoing payments, the bot detects when funds are received and auto-pays the recipient via M-Pesa.',
       },
       {
         q: 'How many orders can the bot handle simultaneously?',
-        a: 'SparkP2P processes one order at a time per trading session to ensure accuracy and avoid double-payments. High-volume traders can run the bot on multiple trading accounts if needed.',
+        a: 'SparkP2P processes one order at a time per session to ensure accuracy and avoid double-payments. High-volume operators can run the bot on multiple accounts if needed.',
       },
     ],
   },
@@ -125,20 +125,20 @@ const FAQS = [
     category: 'Security & Privacy',
     items: [
       {
-        q: 'Does SparkP2P store my Binance login credentials?',
-        a: 'No. SparkP2P uses your existing Chrome browser session to interact with Binance — your login credentials never pass through our servers. The only data we store are your trade records and wallet transactions.',
+        q: 'Does SparkP2P store my marketplace login credentials?',
+        a: 'No. SparkP2P uses your existing Chrome browser session — your login credentials never pass through our servers. The only data we store are your order records and wallet transactions.',
       },
       {
         q: 'Is my M-Pesa business paybill data secure?',
         a: 'Your M-Pesa credentials are stored encrypted on your local device and used only to connect to the M-Pesa org portal for payment verification. They are never transmitted to SparkP2P\'s servers.',
       },
       {
-        q: 'What happens if SparkP2P releases crypto before payment arrives?',
-        a: 'SparkP2P will never release crypto before confirming payment. The M-Pesa verification step is mandatory — the bot waits for the exact payment amount to appear in your paybill before triggering any release on Binance.',
+        q: 'What happens if SparkP2P completes an order before payment arrives?',
+        a: 'SparkP2P will never complete an order before confirming payment. The M-Pesa verification step is mandatory — the bot waits for the exact payment amount to appear in your paybill before completing any order.',
       },
       {
-        q: 'Can SparkP2P access or move my Binance crypto wallet funds?',
-        a: 'No. SparkP2P only interacts with the Binance P2P order flow — it can release crypto held in escrow for active orders. It cannot initiate withdrawals, transfers, or any other actions outside of P2P order processing.',
+        q: 'Can SparkP2P access or move my account funds?',
+        a: 'No. SparkP2P only interacts with your active orders — it can complete orders that are pending payment. It cannot initiate withdrawals, transfers, or any other actions outside of order processing.',
       },
     ],
   },
@@ -252,11 +252,11 @@ export default function Landing() {
         <div className="land-hero-content">
           <div className="land-hero-badge">
             <span className="land-hero-badge-dot"></span>
-            Trusted by P2P Traders across Kenya
+            Trusted by businesses across Kenya
           </div>
-          <h1>Automate Your<br /><span className="land-highlight">Binance P2P Trading</span></h1>
+          <h1>Automate Your<br /><span className="land-highlight">Payment Workflows</span></h1>
           <p className="land-hero-sub">
-            Stop manually releasing crypto and verifying payments. SparkP2P handles everything — M-Pesa verification, auto-release, real-time tracking — powered by Spark AI.
+            Stop processing payments by hand. SparkP2P integrates any payment method — M-Pesa, paybills, and bank transfers — to automate your entire payment workflow, from verification and release to reconciliation, powered by Spark AI.
           </p>
           <div className="land-hero-actions">
             <Link to="/login" className="land-cta-primary">Get Started Free</Link>
@@ -269,50 +269,35 @@ export default function Landing() {
           </div>
         </div>
         <div className="land-hero-mobile-cta">
-          <p>Payments verified. Crypto released. All on autopilot.</p>
+          <p>Payments verified. Orders completed. All on autopilot.</p>
           <Link to="/login" className="land-cta-primary" style={{ display: 'inline-block', marginTop: 16 }}>Get Started Free</Link>
         </div>
         <div className="land-hero-visual">
-          <div className="land-mockup">
-            <div className="land-mockup-header">
-              <div className="land-mockup-dots">
-                <span></span><span></span><span></span>
-              </div>
-              <span className="land-mockup-title">SparkP2P Dashboard</span>
-            </div>
-            <div className="land-mockup-body">
-              <div className="land-mockup-stat-row">
-                <div className="land-mockup-stat">
-                  <span className="land-ms-label">SELL VOLUME</span>
-                  <span className="land-ms-val green">4.2 BTC</span>
+          <div className="land-support-panel">
+            <span className="land-support-heading">We support the following <span className="land-highlight">integrations</span></span>
+              <div className="land-support-list">
+                <div className="land-support-row">
+                  <div className="land-support-logo"><img src="/logos/im.jpg" alt="I&M Bank" /></div>
+                  <div className="land-support-txt">
+                    <span className="nm">I&amp;M Bank automations</span>
+                    <span className="sub">Pay buy orders from your own I&amp;M account</span>
+                  </div>
                 </div>
-                <div className="land-mockup-stat">
-                  <span className="land-ms-label">BUY VOLUME</span>
-                  <span className="land-ms-val blue">3.8 BTC</span>
+                <div className="land-support-row">
+                  <div className="land-support-logo"><img src="/logos/mpesa.jpg" alt="M-Pesa" /></div>
+                  <div className="land-support-txt">
+                    <span className="nm">M-Pesa B2C &amp; C2B</span>
+                    <span className="sub">Pay &amp; collect on your own Paybill</span>
+                  </div>
                 </div>
-                <div className="land-mockup-stat">
-                  <span className="land-ms-label">NET PROFIT</span>
-                  <span className="land-ms-val accent">KES 47,520</span>
-                </div>
-              </div>
-              <div className="land-mockup-orders">
-                <div className="land-mockup-order">
-                  <span className="land-mo-side green">SELL</span>
-                  <span className="land-mo-amount">0.15 BTC</span>
-                  <span className="land-mo-status completed">Auto-Released</span>
-                </div>
-                <div className="land-mockup-order">
-                  <span className="land-mo-side blue">BUY</span>
-                  <span className="land-mo-amount">0.22 BTC</span>
-                  <span className="land-mo-status completed">Auto-Paid</span>
-                </div>
-                <div className="land-mockup-order">
-                  <span className="land-mo-side green">SELL</span>
-                  <span className="land-mo-amount">0.08 BTC</span>
-                  <span className="land-mo-status pending">Verifying...</span>
+                <div className="land-support-row">
+                  <div className="land-support-logo"><img src="/logos/choice.jpg" alt="Choice Microfinance Bank" /></div>
+                  <div className="land-support-txt">
+                    <span className="nm">Choice Microfinance Bank</span>
+                    <span className="sub">Bank rails, PesaLink &amp; withdrawals</span>
+                  </div>
                 </div>
               </div>
-            </div>
           </div>
         </div>
       </section>
@@ -323,17 +308,17 @@ export default function Landing() {
           <div className="land-stats-grid">
             <div className="land-stat">
               <span className="land-stat-num">500<span className="land-stat-plus">+</span></span>
-              <span className="land-stat-label">Active Traders</span>
+              <span className="land-stat-label">Active Businesses</span>
             </div>
             <div className="land-stat-divider" />
             <div className="land-stat">
               <span className="land-stat-num">24/7</span>
-              <span className="land-stat-label">Automated Trading</span>
+              <span className="land-stat-label">Automated Payments</span>
             </div>
             <div className="land-stat-divider" />
             <div className="land-stat">
               <span className="land-stat-num">&lt;10s</span>
-              <span className="land-stat-label">Avg. Release Time</span>
+              <span className="land-stat-label">Avg. Completion Time</span>
             </div>
             <div className="land-stat-divider" />
             <div className="land-stat">
@@ -349,8 +334,8 @@ export default function Landing() {
         <div className="land-section-inner">
           <div className="land-section-header">
             <span className="land-section-tag">Features</span>
-            <h2>Everything You Need to<br /><span className="land-highlight">Trade Hands-Free</span></h2>
-            <p className="land-section-desc">One platform handles your entire Binance P2P workflow — from payment verification to settlement.</p>
+            <h2>Everything You Need to<br /><span className="land-highlight">Run Hands-Free</span></h2>
+            <p className="land-section-desc">One platform handles your entire payment workflow — from verification to settlement.</p>
           </div>
           <div className="land-features-grid">
 
@@ -360,8 +345,8 @@ export default function Landing() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
               </div>
-              <h3>Auto-Release</h3>
-              <p>M-Pesa payment confirmed → crypto released on Binance in seconds. Zero manual intervention, zero missed orders.</p>
+              <h3>Auto-Complete</h3>
+              <p>M-Pesa payment confirmed → the order completes in seconds. Zero manual intervention, zero missed orders.</p>
             </div>
 
             <div className="land-feature-card">
@@ -370,8 +355,8 @@ export default function Landing() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                 </svg>
               </div>
-              <h3>Buy &amp; Sell Automation</h3>
-              <p>Both trading sides handled. Buy orders auto-pay via M-Pesa. Sell orders auto-verify and release to buyers.</p>
+              <h3>Pay &amp; Collect Automation</h3>
+              <p>Both sides handled. Outgoing orders auto-pay via M-Pesa. Incoming orders auto-verify and complete.</p>
             </div>
 
             <div className="land-feature-card">
@@ -381,7 +366,7 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Real-Time Profit Tracking</h3>
-              <p>Live dashboard showing your spread, daily volume, completed orders, and net KES profit — updated after every trade.</p>
+              <p>Live dashboard showing your spread, daily volume, completed orders, and net KES profit — updated after every order.</p>
             </div>
 
             <div className="land-feature-card">
@@ -391,7 +376,7 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Instant Wallet &amp; Withdrawals</h3>
-              <p>Earnings land in your SparkP2P wallet after every trade. Withdraw anytime to M-Pesa or I&amp;M Bank — funds arrive in minutes.</p>
+              <p>Earnings land in your SparkP2P wallet after every order. Withdraw anytime to M-Pesa or I&amp;M Bank — funds arrive in minutes.</p>
             </div>
 
             <div className="land-feature-card">
@@ -421,7 +406,7 @@ export default function Landing() {
                 </svg>
               </div>
               <h3>Secure by Design</h3>
-              <p>No API keys required. SparkP2P uses your existing Chrome session — your Binance credentials never leave your device.</p>
+              <p>No API keys required. SparkP2P uses your existing Chrome session — your credentials never leave your device.</p>
             </div>
 
             <div className="land-feature-card">
@@ -454,9 +439,9 @@ export default function Landing() {
           <div className="land-why-inner">
             <div className="land-why-text">
               <span className="land-section-tag">Why SparkP2P</span>
-              <h2>Built for Serious<br /><span className="land-highlight">P2P Traders</span></h2>
+              <h2>Built for Serious<br /><span className="land-highlight">Traders</span></h2>
               <p className="land-why-desc">
-                SparkP2P is the only desktop tool that combines real-time M-Pesa verification, AI-powered order management, and instant settlement — all in one app built for Kenyan traders.
+                SparkP2P is the only desktop tool that combines real-time M-Pesa verification, AI-powered order management, and instant settlement — all in one app built for Kenyan businesses.
               </p>
               <ul className="land-why-list">
                 <li>
@@ -469,8 +454,8 @@ export default function Landing() {
                 <li>
                   <span className="land-why-check">✓</span>
                   <div>
-                    <strong>Both Buy &amp; Sell Sides</strong>
-                    <p>Full automation for sell order releases and buy order M-Pesa payments.</p>
+                    <strong>Both Incoming &amp; Outgoing</strong>
+                    <p>Full automation for incoming order completion and outgoing M-Pesa payments.</p>
                   </div>
                 </li>
                 <li>
@@ -484,7 +469,7 @@ export default function Landing() {
                   <span className="land-why-check">✓</span>
                   <div>
                     <strong>Instant Withdrawals</strong>
-                    <p>Earnings swept to M-Pesa or I&amp;M Bank within minutes of each completed trade.</p>
+                    <p>Earnings swept to M-Pesa or I&amp;M Bank within minutes of each completed order.</p>
                   </div>
                 </li>
               </ul>
@@ -493,17 +478,17 @@ export default function Landing() {
               <div className="land-why-card">
                 <div className="land-why-card-num">01</div>
                 <h4>Set Up Once</h4>
-                <p>10-minute setup — connect Binance, configure M-Pesa, and you're live. No coding, no API keys, no hassle.</p>
+                <p>10-minute setup — connect your account, configure M-Pesa, and you're live. No coding, no API keys, no hassle.</p>
               </div>
               <div className="land-why-card">
                 <div className="land-why-card-num">02</div>
-                <h4>Trade 24/7</h4>
+                <h4>Run 24/7</h4>
                 <p>SparkP2P runs in the background while you sleep, work, or travel — never miss an order again.</p>
               </div>
               <div className="land-why-card">
                 <div className="land-why-card-num">03</div>
                 <h4>Earn More</h4>
-                <p>More completed orders, zero delays, instant payouts — your entire P2P business on autopilot.</p>
+                <p>More completed orders, zero delays, instant payouts — your entire payment operation on autopilot.</p>
               </div>
             </div>
           </div>
@@ -521,16 +506,16 @@ export default function Landing() {
             <div className="land-step">
               <div className="land-step-num">1</div>
               <div className="land-step-content">
-                <h4>Create Your Ads</h4>
-                <p>Create your P2P ads on Binance as usual</p>
+                <h4>Create Your Listings</h4>
+                <p>Set up your listings as usual</p>
               </div>
             </div>
             <div className="land-step-line"></div>
             <div className="land-step">
               <div className="land-step-num">2</div>
               <div className="land-step-content">
-                <h4>Connect Binance</h4>
-                <p>Connect your Binance account to SparkP2P</p>
+                <h4>Connect Your Account</h4>
+                <p>Connect your marketplace account to SparkP2P</p>
               </div>
             </div>
             <div className="land-step-line"></div>
@@ -559,7 +544,7 @@ export default function Landing() {
           <div className="land-section-header">
             <span className="land-section-tag">Pricing</span>
             <h2>Simple, Transparent<br /><span className="land-highlight">Pricing</span></h2>
-            <p className="land-section-desc">Pick a plan and automate your Binance P2P trading. Pay with M-Pesa, cancel anytime.</p>
+            <p className="land-section-desc">Pick a plan and automate your payment workflows. Pay with M-Pesa, cancel anytime.</p>
           </div>
           <div className="land-pricing-grid">
             {/* Prices come from the backend (plans.py) — this page is public, so a hardcoded
@@ -596,8 +581,8 @@ export default function Landing() {
         <div className="land-section-inner">
           <div className="land-cta-banner-inner">
             <div className="land-cta-banner-text">
-              <h2>Ready to Automate Your<br /><span className="land-highlight">P2P Trading?</span></h2>
-              <p>Join hundreds of traders running SparkP2P around the clock.</p>
+              <h2>Ready to Automate Your<br /><span className="land-highlight">Payments?</span></h2>
+              <p>Join hundreds of businesses running SparkP2P around the clock.</p>
             </div>
             <div className="land-cta-banner-actions">
               <Link to="/login" className="land-cta-primary">Get Started Today</Link>
@@ -613,7 +598,7 @@ export default function Landing() {
           <div className="land-section-header">
             <span className="land-section-tag">Download</span>
             <h2>Get <span className="land-highlight">SparkP2P</span></h2>
-            <p className="land-section-desc">Install once on Windows and trade forever. Auto-updates keep you on the latest version.</p>
+            <p className="land-section-desc">Install once on Windows and automate forever. Auto-updates keep you on the latest version.</p>
           </div>
           <div className="land-download-grid">
             <div className="land-download-card featured-dl">
@@ -689,9 +674,9 @@ export default function Landing() {
         <div className="land-section-inner">
           <div className="land-section-header">
             <span className="land-section-tag">Our Products</span>
-            <h2>I&amp;M <span className="land-highlight">Automation</span></h2>
+            <h2>Companion <span className="land-highlight">apps</span></h2>
             <p className="land-section-desc">
-              An optional companion to SparkP2P for merchants who pay their buy orders straight from their own I&amp;M Bank account.
+              Optional desktop companions to SparkP2P — pay your orders straight from your own bank account or M-Pesa Paybill, fully automated.
             </p>
           </div>
           <div className="land-products-grid">
@@ -706,19 +691,47 @@ export default function Landing() {
                 </div>
                 <div>
                   <h3>I&amp;M Automation</h3>
-                  <p>Pay buy orders from your I&amp;M account</p>
+                  <p>Pay orders from your I&amp;M account</p>
                 </div>
               </div>
               <p className="land-product-desc">
-                A lightweight desktop bot that pays your Binance buy orders directly from your own I&amp;M Bank account over M-Pesa &amp; PesaLink — fully automated. Links to SparkP2P in one click, and your bank login never leaves your computer.
+                A lightweight desktop bot that pays your orders directly from your own I&amp;M Bank account over M-Pesa &amp; PesaLink — fully automated. Links to SparkP2P in one click, and your bank login never leaves your computer.
               </p>
               <ul className="land-product-features">
-                <li>Buy-order M-Pesa &amp; PesaLink payouts</li>
+                <li>M-Pesa &amp; PesaLink payouts</li>
                 <li>One-click launch &amp; sign-in from SparkP2P</li>
                 <li>Prepaid payout credits, pay as you go</li>
                 <li>Your bank credentials stay on your machine</li>
               </ul>
               <a href="/api/download/im-bot" className="land-download-btn">Download for Windows</a>
+              <p className="land-product-note">Windows 10 / 11 · 64-bit · Requires a SparkP2P account</p>
+            </div>
+
+            {/* Mpesa B2C — pays buys + collects sells on the merchant's own Paybill via Daraja */}
+            <div className="land-product-card">
+              <span className="land-product-badge alt">Companion · optional</span>
+              <div className="land-product-head">
+                <div className="land-product-logo b2c">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <rect x="7" y="2.5" width="10" height="19" rx="2.4" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 18.4h2"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3>Mpesa B2C</h3>
+                  <p>Pay &amp; collect on your own M-Pesa Paybill</p>
+                </div>
+              </div>
+              <p className="land-product-desc">
+                A desktop bot that pays your outgoing orders (B2C) and collects your incoming payments (C2B) straight through your own M-Pesa Paybill via Safaricom Daraja — no browser, with instant payer name verification. Links to SparkP2P in one click.
+              </p>
+              <ul className="land-product-features">
+                <li>M-Pesa B2C payouts + C2B receipts</li>
+                <li>Instant payer name verification on collections</li>
+                <li>One-click launch &amp; sign-in from SparkP2P</li>
+                <li>Prepaid credits or weekly unlimited plan</li>
+              </ul>
+              <a href="/api/download/b2c-bot" className="land-download-btn">Download for Windows</a>
               <p className="land-product-note">Windows 10 / 11 · 64-bit · Requires a SparkP2P account</p>
             </div>
           </div>
@@ -762,7 +775,7 @@ export default function Landing() {
               <span>SparkP2P</span>
             </div>
             <p className="land-footer-tagline">
-              Automated Binance P2P trading for Kenya's top traders. Powered by Spark AI.
+              Automated payment workflows for Kenya's businesses. Powered by Spark AI.
             </p>
           </div>
           <div className="land-footer-col">
@@ -772,11 +785,6 @@ export default function Landing() {
             <a href="#how-it-works">How It Works</a>
             <a href="#download">Download</a>
             <Link to="/install">Install Guide</Link>
-          </div>
-          <div className="land-footer-col">
-            <h5>Guides</h5>
-            <Link to="/binance-p2p-bot-kenya">Binance P2P Bot Kenya</Link>
-            <Link to="/automate-binance-p2p-mpesa">Automate Binance P2P with M-Pesa</Link>
           </div>
           <div className="land-footer-col">
             <h5>Support</h5>

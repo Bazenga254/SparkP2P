@@ -133,6 +133,22 @@ async def credits_status(trader_id: int = Depends(_trader_from_b2c_key), db: Asy
         "paybill": settings.SUBSCRIPTION_PAYBILL,
         "account_ref": f"CR{trader_id}",
         "min_deposit": creditsvc.MIN_DEPOSIT_KES,
+        # Binance connection state (held on the SparkP2P side) so the bot's "Binance API" page can
+        # show whether orders will actually flow. Authoritative signal mirrors /traders/me
+        # (traders.py): connected = a valid API key OR a live cookie session. Merchants who connect
+        # by API key have binance_connected=False, so keying off that flag alone reads false-offline.
+        "binance": (lambda has_key=bool(getattr(trader, "binance_api_key", None)),
+                          key_bad=bool(getattr(trader, "binance_api_key_invalid", False)),
+                          cookie=bool(getattr(trader, "binance_connected", False)),
+                          expired=bool(getattr(trader, "binance_session_expired", False)): {
+            "connected": (has_key and not key_bad) or (cookie and not expired),
+            "linked": has_key or cookie,
+            "session_expired": expired,
+            "api_key_invalid": key_bad,
+            "method": "api_key" if has_key else ("session" if cookie else ""),
+            "username": trader.binance_username or trader.binance_nickname or "",
+            "uid": trader.binance_uid or "",
+        })(),
     }
     # Mirror the SparkP2P dashboard EXACTLY: a merchant on the weekly package shows the
     # weekly plan (Unlimited when active, Expired→renew when lapsed) — NOT on-demand credits.

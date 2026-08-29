@@ -252,6 +252,214 @@ async def get_user_kyc(onboarding_request_id: str) -> dict:
     })
 
 
+# ── SME / Business Onboarding ─────────────────────────────────────────────────
+# businessType: 1=Sole Proprietorship, 2=LLC, 3=Partnership, 4=NGO/CBO.
+# Flow: apply → send_otp/confirm_otp (common endpoints, businessId=onboardingRequestId)
+#       → submit basic info (per type) → upload_sme_media (per doc)
+#       → [members for LLC/Partnership/NGO/CBO, ≥2] → submit_or_pullback_sme(action=1)
+#       → poll get_business_onboarding_status(). OTP window 30min; steps 3-5 window 72h.
+
+async def apply_for_sme_onboarding(user_id: str, mobile: str, business_type: int,
+                                   otp_type: str = "SMS", email: str = "") -> dict:
+    """Step 1: initiate an SME onboarding. Returns { onboardingRequestId }. email is required
+    when otp_type == 'EMAIL'. Follow with send_otp(onboardingRequestId, otp_type) → confirm_otp()."""
+    params = {
+        "userId":       user_id,
+        "countryCode":  "254",
+        "mobile":       mobile,
+        "businessType": business_type,
+        "otpType":      otp_type,
+    }
+    if email:
+        params["email"] = email
+    return await _post("/onboarding/business/applyForSmeOnboarding", params)
+
+
+async def submit_sole_prop_onboarding(onboarding_request_id: str, business_name: str, business_cer_num: str,
+                                      first_name: str, last_name: str, birthday: str, gender: int,
+                                      id_number: str, kra_pin: str, kin_full_name: str, kin_relationship: str,
+                                      kin_mobile: str, business_address: str, business_industry: str,
+                                      middle_name: str = "", kin_country_code: str = "254",
+                                      specify_industry: str = "") -> dict:
+    """Basic info for a Sole Proprietorship. gender 0=female/1=male. business_industry is the
+    number 1..21 (21=Others → specify_industry required). No shareholders step for sole props."""
+    params = {
+        "onboardingRequestId": onboarding_request_id,
+        "businessName": business_name, "businessCerNum": business_cer_num,
+        "firstName": first_name, "middleName": middle_name, "lastName": last_name,
+        "birthday": birthday, "gender": gender, "idNumber": id_number, "kraPin": kra_pin,
+        "kinFullName": kin_full_name, "kinRelationship": kin_relationship,
+        "kinCountryCode": kin_country_code, "kinMobile": kin_mobile,
+        "businessAddress": business_address, "businessIndustry": business_industry,
+    }
+    if specify_industry:
+        params["specifyIndustry"] = specify_industry
+    return await _post("/onboarding/business/submitStoreOnboardingRequest", params)
+
+
+def _company_basic_params(onboarding_request_id, business_name, business_cer_num, kra_pin,
+                          operating_mode, business_address, business_industry, specify_industry):
+    p = {
+        "onboardingRequestId": onboarding_request_id,
+        "businessName": business_name, "businessCerNum": business_cer_num, "kraPin": kra_pin,
+        "operatingMode": operating_mode, "businessAddress": business_address,
+        "businessIndustry": business_industry,
+    }
+    if specify_industry:
+        p["specifyIndustry"] = specify_industry
+    return p
+
+
+async def submit_company_onboarding(onboarding_request_id: str, business_name: str, business_cer_num: str,
+                                    kra_pin: str, operating_mode: int, business_address: str,
+                                    business_industry: str, specify_industry: str = "") -> dict:
+    """Basic info for a Limited Liability Company. operating_mode 1=Singly/2=Either/3=Any Two/4=All Jointly."""
+    return await _post("/onboarding/business/submitCompanyOnboardingRequest",
+                       _company_basic_params(onboarding_request_id, business_name, business_cer_num, kra_pin,
+                                             operating_mode, business_address, business_industry, specify_industry))
+
+
+async def submit_partnership_onboarding(onboarding_request_id: str, business_name: str, business_cer_num: str,
+                                        kra_pin: str, operating_mode: int, business_address: str,
+                                        business_industry: str, specify_industry: str = "") -> dict:
+    """Basic info for a Partnership Company."""
+    return await _post("/onboarding/business/submitPartnershipOnboardingRequest",
+                       _company_basic_params(onboarding_request_id, business_name, business_cer_num, kra_pin,
+                                             operating_mode, business_address, business_industry, specify_industry))
+
+
+async def submit_organisation_onboarding(onboarding_request_id: str, business_name: str, business_cer_num: str,
+                                         kra_pin: str, operating_mode: int, business_address: str,
+                                         business_industry: str, specify_industry: str = "") -> dict:
+    """Basic info for an NGO / CBO (businessType 4)."""
+    return await _post("/onboarding/business/submitOrganisationOnboardingRequest",
+                       _company_basic_params(onboarding_request_id, business_name, business_cer_num, kra_pin,
+                                             operating_mode, business_address, business_industry, specify_industry))
+
+
+async def upload_sme_media(onboarding_request_id: str, media_type: str, media_b64: str,
+                           content_type: str = "image") -> dict:
+    """Upload one KYB document. media_type is the File ID (e.g. KYCF00001). Returns { fileId }
+    (keep it to allow remove_sme_media). content_type 'image' or 'pdf'."""
+    return await _post("/onboarding/business/uploadMedia", {
+        "onboardingRequestId": onboarding_request_id,
+        "mediaBase64": media_b64,
+        "mediaType": media_type,
+        "contentType": content_type,
+    })
+
+
+async def remove_sme_media(onboarding_request_id: str, file_id: str) -> dict:
+    """Remove a previously uploaded KYB document by its fileId."""
+    return await _post("/onboarding/business/removeMedia", {
+        "onboardingRequestId": onboarding_request_id,
+        "fileId": file_id,
+    })
+
+
+async def add_sme_member_individual(onboarding_request_id: str, id_type: str, id_number: str,
+                                    mobile: str, first_name: str, last_name: str, kra_pin: str,
+                                    id_front_b64: str, id_back_b64: str, selfie_b64: str, kra_pin_b64: str,
+                                    middle_name: str = "", gender: int = None, email: str = "",
+                                    country_code: str = "254",
+                                    id_front_type: str = "image", id_back_type: str = "image",
+                                    selfie_type: str = "image", kra_pin_type: str = "image") -> dict:
+    """Attach an INDIVIDUAL shareholder/director. id_type 101=National ID/102=Alien ID/103=Passport.
+    LLC/Partnership/NGO/CBO need ≥2 members. Returns { memberId } (keep it for remove_sme_member)."""
+    params = {
+        "onboardingRequestId": onboarding_request_id,
+        "idType": id_type, "idNumber": id_number, "countryCode": country_code, "mobile": mobile,
+        "firstName": first_name, "middleName": middle_name, "lastName": last_name, "kraPin": kra_pin,
+        "idFrontSideFile": id_front_b64, "idFrontSideFileType": id_front_type,
+        "idBackSideFile": id_back_b64, "idBackSideFileType": id_back_type,
+        "selfieFile": selfie_b64, "selfieFileType": selfie_type,
+        "kraPinFile": kra_pin_b64, "kraPinFileType": kra_pin_type,
+    }
+    if gender is not None:
+        params["gender"] = gender
+    if email:
+        params["email"] = email
+    return await _post("/onboarding/business/submitCompanyMember", params)
+
+
+async def add_sme_member_organisation(onboarding_request_id: str, company_name: str,
+                                      registration_b64: str, registration_type: str = "image") -> dict:
+    """Attach a COMPANY (organisation) shareholder. Returns { companyId }."""
+    return await _post("/onboarding/business/submitShareholderCompanyMember", {
+        "onboardingRequestId": onboarding_request_id,
+        "companyName": company_name,
+        "registrationFile": registration_b64,
+        "registrationFileType": registration_type,
+    })
+
+
+async def remove_sme_member(onboarding_request_id: str, member_id: str, member_type: int) -> dict:
+    """Remove a shareholder. member_type 0=Individual (use memberId), 1=Organization (use companyId)."""
+    return await _post("/onboarding/business/removeMember", {
+        "onboardingRequestId": onboarding_request_id,
+        "memberId": member_id,
+        "memberType": member_type,
+    })
+
+
+async def submit_or_pullback_sme(onboarding_request_id: str, action: int) -> dict:
+    """Send the onboarding for review (action=1) or pull it back to amend (action=0). Moves
+    onboardingStatus 2↔9. Must be called with action=1 within 72h of OTP confirmation."""
+    return await _post("/onboarding/business/submitOrPullBackRequest", {
+        "onboardingRequestId": onboarding_request_id,
+        "action": action,
+    })
+
+
+async def cancel_sme_onboarding(onboarding_request_id: str) -> dict:
+    """Cancel an SME onboarding request."""
+    return await _post("/onboarding/business/cancelOnboardingRequest", {
+        "onboardingRequestId": onboarding_request_id,
+    })
+
+
+async def get_business_onboarding_status(onboarding_request_id: str = "", business_cer_no: str = "") -> dict:
+    """Poll SME onboarding status. Pass at least one of onboardingRequestId / businessCerNo.
+    Returns onboardingStatus (int), rejection reason, accountId + accountType on success."""
+    params = {}
+    if onboarding_request_id:
+        params["onboardingRequestId"] = onboarding_request_id
+    if business_cer_no:
+        params["businessCerNo"] = business_cer_no
+    return await _post("/onboarding/business/getBusinessOnboardingStatus", params)
+
+
+async def get_sme_onboarding_info(business_type: int, onboarding_request_id: str) -> dict:
+    """Fetch full submitted SME info+media, dispatching by businessType
+    (1=Store, 2=Company, 3=Partnership, 4=Organisation/NGO/CBO)."""
+    endpoint = {
+        1: "/onboarding/business/getStoreOnboardingInfo",
+        2: "/onboarding/business/getCompanyOnboardingInfo",
+        3: "/onboarding/business/getPartnershipOnboardingInfo",
+        4: "/onboarding/business/getOrganisationOnboardingInfo",
+    }.get(int(business_type), "/onboarding/business/getStoreOnboardingInfo")
+    return await _post(endpoint, {"onboardingRequestId": onboarding_request_id})
+
+
+async def business_open_account(business_name: str, business_cert_id: str,
+                                currency: str = "KES", operating_mode: str = "1") -> dict:
+    """Open ANOTHER account/VA under an already-onboarded SME (no OTP). Names must match the
+    onboarded SME exactly. Returns { applicationId }; result also arrives via webhook. Poll with
+    get_account_opening_status(applicationId)."""
+    return await _post("/account/businessOpenAccount", {
+        "businessName": business_name,
+        "businessCertId": business_cert_id,
+        "currency": currency,
+        "operatingMode": operating_mode,
+    })
+
+
+async def get_account_opening_status(application_id: str) -> dict:
+    """Query a businessOpenAccount request. status 1=Submitted/2=OTP Confirmed/3=Successful;
+    returns accountId + accountName + currency on success."""
+    return await _post("/account/getAccountOpeningStatus", {"applicationId": application_id})
+
+
 # ── Account Queries ───────────────────────────────────────────────────────────
 
 async def validate_account(account_id: str, bank_code: str) -> dict:

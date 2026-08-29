@@ -3,7 +3,7 @@ Prepaid payout credits for I&M Automation.
 
 1 credit = 1 payout. You buy credits by paying KES to paybill 4041355; the number
 you get is round(deposit / your rate) — so a Gold merchant (rate 7) turns KES
-1,000 into 143 credits, Silver (5) into 200, Bronze (4) into 250, a bot-only
+1,000 into 143 credits, Silver (3.5) into 286, Bronze (4) into 250, a bot-only
 user (12) into 83. Each payout the bot makes consumes ONE credit. At zero, the
 bot stops: it ignores new Binance orders until the balance is topped up.
 
@@ -49,20 +49,25 @@ def trader_credits_enabled(trader) -> bool:
 
 def credits_for(amount, rate) -> int:
     """How many credits a deposit buys at a given rate. round(), per the spec's
-    own example (1000 / 7 -> 143). Guards a bad rate rather than dividing by zero."""
-    r = int(rate or 0)
+    own example (1000 / 7 -> 143). The rate may be FRACTIONAL (Silver = 3.5, so
+    1000 -> 286), so price in float — an int() cast here would silently round 3.5
+    down to 3 and over-grant credits. Guards a bad rate rather than dividing by zero."""
+    r = float(rate or 0)
     if r <= 0:
         return 0
     return int(round(float(amount or 0) / r))
 
 
-async def credit_rate_for_trader(db, trader_id: int) -> int:
+async def credit_rate_for_trader(db, trader_id: int) -> float:
     """The rate a trader's credits are priced at — their real plan rate
-    (5/7/8/9/10/12), resolved the one true way (active_plan, never
-    billing_active)."""
+    (Silver 3.5 / Bronze 4 / Gold 7 / B2C 5 / intro 10 / no-sub 12), resolved the
+    one true way (rate_for_trader → what they PAID, never billing_active). May be
+    fractional (Silver 3.5), so do NOT int() it — that would misprice credits."""
     from app.services import im_pricing as pricing
     info = await pricing.rate_for_trader(db, trader_id)
-    return int(info["rate"])
+    # Return the raw rate: int for whole plans (7, 4, 12) so they don't render as
+    # "7.0", float for a fractional plan (Silver 3.5). Both price credits correctly.
+    return info["rate"]
 
 
 def credit_rate_bot_only() -> int:

@@ -286,11 +286,11 @@ async def login(data: LoginRequest, request: Request = None, db: AsyncSession = 
             detail={"code": "invalid_credentials", "message": "Invalid email or password", "attempts_remaining": MAX_LOGIN_ATTEMPTS, "show_reset": False},
         )
 
-    if trader.status == TraderStatus.SUSPENDED:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account suspended",
-        )
+    # A SUSPENDED trader is NOT locked out at login. They sign in to a FROZEN
+    # dashboard where every feature is blurred/disabled EXCEPT Choice Bank (their
+    # own money). The freeze is enforced client-side (Dashboard) and server-side
+    # (enforcement.account_frozen locks the paid/automation features; Choice Bank
+    # routes are never gated). Only Choice Microfinance transacting stays available.
 
     # Step 2: Verify OTP (SMS code OR Google Authenticator TOTP)
     if data.otp_code:
@@ -376,8 +376,8 @@ async def extension_login(data: LoginRequest, db: AsyncSession = Depends(get_db)
     if not trader or not verify_password(data.password, trader.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if trader.status == TraderStatus.SUSPENDED:
-        raise HTTPException(status_code=403, detail="Account suspended")
+    # A SUSPENDED trader signs in to a FROZEN dashboard (everything blurred/disabled
+    # except Choice Bank) — not blocked at login. See enforcement.account_frozen.
 
     token = create_access_token({"sub": str(trader.id), "email": trader.email})
 

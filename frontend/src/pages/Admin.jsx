@@ -5,14 +5,92 @@ import { usePlans } from '../services/plans';
 import { getAdminDashboard, getAdminTraders, getDisputedOrders, getUnmatchedPayments, updateTraderStatus, updateTraderTier, getAdminTransactions, getAdminOrders, getAdminAnalytics, getAdminOnlineTraders, getMessageTemplates, updateMessageTemplate, seedMessageTemplates, getAdminSupportTickets, closeSupportTicket, replyToSupportTicket, uploadSupportAttachment, getAdminWithdrawals, markWithdrawalComplete, markWithdrawalPending, deleteWithdrawal, getRevenueBreakdown, getSubscriptionRevenue, getImRevenue, getImBotAccounts, getImTraders, getImCharges, getAdminSweeps, retrySweep, getAdminPaybillTransactions, getTraderPnl, verifyTotp, resolveUnmatchedPayment } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search, Calendar, Bot } from 'lucide-react';
-import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp, adminVerifyTraderContact, adminConfirmTraderContactVerify } from '../services/api';
+import { RefreshCw, LogOut, LayoutDashboard, Users, AlertTriangle, Banknote, TrendingUp, Settings, UserCheck, ShoppingCart, CheckCircle, Activity, AlertCircle, ArrowRightLeft, DollarSign, Wifi, Repeat, MessageSquare, Save, RotateCcw, ChevronDown, ChevronUp, Copy, Shield, Wallet, Paperclip, X, Building2, Smartphone, Eye, EyeOff, Lock, Share2, Check, XCircle, Receipt, PlusCircle, Trash2, MoreHorizontal, Search, Calendar, Bot, Mail } from 'lucide-react';
+import AdminInbox from '../components/AdminInbox';
+import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateEmployeePermissions, deleteEmployee, deleteTrader, getAdminTraderBotLogs, adminGetKycTraders, adminGetKycLiveStatus, adminResetKyc, adminGetTraderChoiceBalance, adminGetChoicePlatformFloat, adminGetExpenses, adminPostExpense, adminDeleteExpense, adminGetKycSubmissions, adminGetKycSubmission, adminApproveKycSubmission, adminRejectKycSubmission, adminConfirmKycOtp, adminResendKycOtp, adminVerifyTraderContact, adminConfirmTraderContactVerify, adminBackfillChoiceAccount } from '../services/api';
+
+// A trader's choice_account_id briefly holds a temporary onboarding-request id (ONBRD…/SOBIS…)
+// between "approved" and Choice actually issuing the real account number (the KYC poller backfills
+// it within minutes). Never render that raw placeholder as an account number — show "Being created…".
+const isPlaceholderAcct = (id) => !!id && /^(ONBRD|SOBIS)/i.test(String(id));
+const acctLabel = (id) => (isPlaceholderAcct(id) ? 'Being created…' : id);
+
+// Admin-side Choice Bank account switcher (shown in a trader's Bank & payouts tab when the
+// trader holds more than one Choice account, e.g. personal + SME). Self-contained: loads its
+// own list and calls the admin switch endpoint. Switching repoints the trader's mirror fields,
+// so the bot's buyer-facing payment details and incoming-payment matching both move accounts.
+function ChoiceAccountSwitcher({ traderId }) {
+  const [accts, setAccts] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [msg, setMsg] = useState('');
+  const load = () => {
+    api.get(`/admin/traders/${traderId}/choice-accounts`)
+      .then(r => setAccts(r.data?.accounts || []))
+      .catch(() => setAccts([]));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [traderId]);
+
+  const doSwitch = async (row) => {
+    if (row.is_active) return;
+    if (!window.confirm(
+      `Make "${row.label || row.account_number}" (${row.account_number}) this trader's ACTIVE Choice account?\n\n`
+      + `Buyers will be told to pay Paybill 444174 · Account ${row.account_number}, and money will be received there.\n\n`
+      + `Do this only when the trader has NO in-flight sell orders — the running bot picks up the new account on its next credential refresh (or a restart).`
+    )) return;
+    setBusyId(row.id); setMsg('');
+    try {
+      await api.post(`/admin/traders/${traderId}/choice-accounts/switch`, { account_row_id: row.id });
+      setMsg(`Switched to ${row.label || row.account_number}`);
+      load();
+    } catch (e) {
+      setMsg(e.response?.data?.detail || 'Could not switch account');
+    }
+    setBusyId(null);
+  };
+
+  if (accts === null || accts.length <= 1) return null;   // nothing to switch between
+  return (
+    <div style={{ marginBottom: 14, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+      <div className="tdx-sec-label" style={{ margin: '0 0 8px' }}>Active Choice account</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {accts.map(a => {
+          const approved = a.account_id && (a.kyc_status || '').toLowerCase() === 'approved';
+          return (
+            <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: a.is_active ? 'rgba(16,185,129,0.08)' : 'transparent' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>{a.label || a.account_number}</span>
+                  <span style={{ fontSize: 9, textTransform: 'uppercase', background: 'var(--bg-3)', color: 'var(--muted)', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>{a.account_type}</span>
+                  {a.is_active && <span style={{ fontSize: 9, background: 'rgba(16,185,129,0.15)', color: 'var(--pos)', padding: '1px 6px', borderRadius: 4, fontWeight: 700 }}>ACTIVE</span>}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)' }}>{a.account_number || '—'}{!approved && ' · not approved yet'}</div>
+              </div>
+              {!a.is_active && (
+                <button className="act-btn" disabled={!approved || busyId === a.id}
+                  onClick={() => doSwitch(a)}
+                  style={{ whiteSpace: 'nowrap', opacity: approved ? 1 : 0.5 }}>
+                  <ArrowRightLeft size={14} /> {busyId === a.id ? 'Switching…' : 'Make active'}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {msg && <div style={{ fontSize: 12, marginTop: 6, color: msg.includes('Could not') ? 'var(--neg)' : 'var(--pos)' }}>{msg}</div>}
+      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>
+        Switching repoints where buyers pay and where money is received. The bot applies it on its next
+        credential refresh — switch when there are no in-flight sell orders, or restart the bot after.
+      </div>
+    </div>
+  );
+}
 
 const sidebarSections = [
   {
     label: 'OVERVIEW',
     items: [
       { key: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+      { key: 'inbox', icon: Mail, label: 'Inbox' },
       { key: 'transactions', icon: ArrowRightLeft, label: 'Transactions' },
       { key: 'withdrawals', icon: Wallet, label: 'Withdrawals' },
       { key: 'paybill', icon: DollarSign, label: 'Subscriptions' },
@@ -328,8 +406,10 @@ export default function Admin() {
   const [choiceFloat, setChoiceFloat] = useState(null);
   const [choiceFloatLoading, setChoiceFloatLoading] = useState(false);
   const [expenses, setExpenses] = useState([]);
-  const [expensesTotal, setExpensesTotal] = useState(0);
-  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '', category: 'general', expense_date: new Date().toISOString().slice(0, 10) });
+  const [expensesTotal, setExpensesTotal] = useState(0);        // FULL charges landing in the period
+  const [expensesMonthly, setExpensesMonthly] = useState(0);    // sum of monthly recurring rates
+  const [expensesLabel, setExpensesLabel] = useState('');
+  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '', category: 'general', expense_date: new Date().toISOString().slice(0, 10), recurring: true });
   const [expenseSubmitting, setExpenseSubmitting] = useState(false);
   const [kycSelectedTrader, setKycSelectedTrader] = useState(null);
   const [cbBalance, setCbBalance] = useState(null);
@@ -1123,6 +1203,16 @@ export default function Admin() {
     setRevLoading(false);
   };
 
+  // Expenses follow the SAME period as revenue: the total charges each cost's FULL amount
+  // on its charge date (recurring = once per month on that day) — no amortisation.
+  const loadExpenses = (period = revPeriod, month = revMonth) =>
+    adminGetExpenses({ period, month }).then(r => {
+      setExpenses(r.data.expenses || []);
+      setExpensesTotal(r.data.total || 0);
+      setExpensesMonthly(r.data.monthly_total || 0);
+      setExpensesLabel(r.data.label || '');
+    }).catch(() => {});
+
   const handleGenerateInvoice = async () => {
     setInvoiceBusy(true);
     try {
@@ -1356,7 +1446,7 @@ export default function Admin() {
       adminGetKycSubmissions().then(r => setKycSubmissions(r.data.submissions || [])).catch(() => {});
       loadOnbReqs();
     }
-    if (activeTab === 'expenses') { adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {}); loadRevenueBreakdown('today', 'all', 1); loadImBot('today'); setExpSubView('revenue'); }
+    if (activeTab === 'expenses') { setRevPeriod('today'); setRevMonth(''); loadExpenses('today', ''); loadRevenueBreakdown('today', 'all', 1); loadImBot('today'); setExpSubView('revenue'); }
     if (activeTab === 'settings') { loadEmployees(); }
     if (activeTab === 'affiliates') { loadAffiliates(); }
     if (activeTab === 'imbot') { loadImBot('today'); }
@@ -1588,6 +1678,20 @@ export default function Admin() {
 
   const openTraderPage = async (trader) => {
     setViewingTrader({ ...trader });
+    // Eager backfill: if this trader still shows a placeholder account id (ONBRD…/SOBIS…) because
+    // Choice hadn't finished creating the account at approval time, pull the real number NOW instead
+    // of waiting for the 5-minute poller. Fire-and-forget; patches the view + lists when it lands.
+    if (isPlaceholderAcct(trader.choice_account_id)) {
+      adminBackfillChoiceAccount(trader.id).then(r => {
+        const aid = r.data?.account_id;
+        if (r.data?.updated && aid) {
+          const patch = { choice_account_id: aid, choice_account_number: aid, choice_kyc_status: 'approved' };
+          setViewingTrader(v => (v && v.id === trader.id ? { ...v, ...patch } : v));
+          setTraders(list => list.map(x => (x.id === trader.id ? { ...x, ...patch } : x)));
+          setKycTraders(list => list.map(x => (x.id === trader.id ? { ...x, ...patch } : x)));
+        }
+      }).catch(() => {});
+    }
     setViewingTraderWallet(null);
     setCbBalance(null);   // clear the previous trader's Choice Bank balance so it doesn't linger on the new one
     setViewingTraderTx([]);
@@ -1857,6 +1961,8 @@ export default function Admin() {
         </header>
 
         <div className="adm-content">
+          {/* ==================== INBOX ==================== */}
+          {activeTab === 'inbox' && <AdminInbox />}
           {/* ==================== DASHBOARD ==================== */}
           {activeTab === 'dashboard' && dashboard && (
             <>
@@ -3068,7 +3174,7 @@ export default function Admin() {
                             <div className="kpi-val num" style={{ color: 'var(--pos)' }}>
                               {t.choice_account_id ? (cbBalance ? `KES ${(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—') : 'No account'}
                             </div>
-                            <div className="kpi-delta">{t.choice_account_id ? (t.choice_account_id) : 'No Choice Bank account'}</div>
+                            <div className="kpi-delta">{t.choice_account_id ? acctLabel(t.choice_account_id) : 'No Choice Bank account'}</div>
                           </div>
                           <div className="kpi">
                             <div className="kpi-label">Net P&amp;L · Today</div>
@@ -3290,7 +3396,7 @@ export default function Admin() {
                             cbBalance ? (
                               <>
                                 <div className="cb-bal num">KES {(parseFloat(cbBalance.balance) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                                <div className="cb-acct num">Acct {t.choice_account_id} · paybill {connProfile?.choice_paybill || '444174'}</div>
+                                <div className="cb-acct num">Acct {acctLabel(t.choice_account_id)} · paybill {connProfile?.choice_paybill || '444174'}</div>
                                 <div className="cb-tags">
                                   {[['Status', cbBalance.account_status, cbBalance.account_status === 'Normal'],
                                     ['Dormant', cbBalance.dormant_status, cbBalance.dormant_status === 'Normal'],
@@ -3382,6 +3488,7 @@ export default function Admin() {
                         <div className="card">
                         <div className="card-b">
                           <p className="bank-actions-desc">These operations affect the trader's Choice Bank access.</p>
+                          <ChoiceAccountSwitcher traderId={t.id} />
                           <div className="bank-actions">
                           <button className="act-btn act-btn--danger" disabled={resetPwLoading}
                             onClick={async () => {
@@ -3505,7 +3612,7 @@ export default function Admin() {
                         <div className="card">
                         <div className="card-b">
                           <div className="kv">
-                            <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v num">{t.choice_account_id || '—'}</span></div>
+                            <div className="kv-row"><span className="kv-k">Account Number</span><span className="kv-v num">{t.choice_account_id ? acctLabel(t.choice_account_id) : '—'}</span></div>
                             <div className="kv-row"><span className="kv-k">Paybill</span><span className="kv-v num" style={{ color: 'var(--gold)' }}>{connProfile?.choice_paybill || '444174'}</span></div>
                             <div className="kv-row"><span className="kv-k">KYC Status</span><span className="kv-v" style={{ color: t.choice_account_id ? 'var(--pos)' : 'var(--warn)' }}>{t.choice_account_id ? 'Approved' : t.choice_kyc_status || 'Not started'}</span></div>
                             <div className="kv-row"><span className="kv-k">Account Status</span><span className="kv-v" style={{ color: cbBalance?.account_status === 'Normal' ? 'var(--pos)' : cbBalance ? 'var(--neg)' : 'var(--text-3)' }}>{cbBalance?.account_status || '—'}</span></div>
@@ -5608,7 +5715,7 @@ export default function Admin() {
               </div>
               <p style={{ color: 'var(--text-3)', fontSize: 12, margin: '0 0 12px', lineHeight: 1.5 }}>
                 Traders who configured I&amp;M Automation through SparkP2P. They bill at their <b>plan</b> rate —
-                Bronze 4 · Silver 5 · Gold 7 · B2C/VIP (KES 15,000) 5 · no subscription 10 (then 12).
+                Bronze 4 · Silver 3.5 · Gold 7 · B2C/VIP (KES 15,000) 5 · no subscription 10 (then 12).
               </p>
               {imLoading && imTraders.length === 0 ? (
                 <p style={{ color: 'var(--text-3)' }}>Loading…</p>
@@ -6154,7 +6261,7 @@ export default function Admin() {
                   <div className="fin-segment">
                     {[['today','Today'],['week','This week'],['month','This month'],['all','All time']].map(([val, label]) => (
                       <button key={val} className={(revPeriod === val && !revMonth) ? 'on' : ''}
-                        onClick={() => { setRevPeriod(val); setRevMonth(''); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1, ''); loadImBot(val, ''); }}>
+                        onClick={() => { setRevPeriod(val); setRevMonth(''); setRevPage(1); loadRevenueBreakdown(val, revPlan, 1, ''); loadImBot(val, ''); loadExpenses(val, ''); }}>
                         {label}
                       </button>
                     ))}
@@ -6166,17 +6273,17 @@ export default function Admin() {
                     onChange={e => {
                       const m = e.target.value;
                       setRevMonth(m); setRevPage(1);
-                      loadRevenueBreakdown(revPeriod, revPlan, 1, m);
+                      loadRevenueBreakdown(revPeriod, revPlan, 1, m); loadExpenses(revPeriod, m);
                       loadImBot(revPeriod, m);
                     }} />
                   {revMonth && (
                     <button className="fin-btn" title="Clear month filter"
-                      onClick={() => { setRevMonth(''); setRevPage(1); loadRevenueBreakdown(revPeriod, revPlan, 1, ''); loadImBot(revPeriod, ''); }}>
+                      onClick={() => { setRevMonth(''); setRevPage(1); loadRevenueBreakdown(revPeriod, revPlan, 1, ''); loadImBot(revPeriod, ''); loadExpenses(revPeriod, ''); }}>
                       Clear
                     </button>
                   )}
                   <button className="fin-btn" onClick={() => {
-                    adminGetExpenses().then(r => { setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0); }).catch(() => {});
+                    loadExpenses(revPeriod, revMonth);
                     loadRevenueBreakdown(revPeriod, revPlan, 1, revMonth);
                   }}>
                     <RefreshCw size={14} /> Refresh
@@ -6206,7 +6313,7 @@ export default function Admin() {
                     <div className="fin-kpi fin-kpi-exp">
                       <div className="fin-k-label">Total expenses</div>
                       <div className="fin-k-value">{fmtKES(totalExpenses)}</div>
-                      <div className="fin-k-note">All logged expenses</div>
+                      <div className="fin-k-note">{expensesLabel || 'This period'} · charged in full when they land{expensesMonthly ? ` (${fmtKES(expensesMonthly)}/mo recurring)` : ''}</div>
                     </div>
                     <div className={`fin-kpi ${isProfit ? 'fin-kpi-net' : 'fin-kpi-exp'}`}>
                       <div className="fin-k-label">Net profit</div>
@@ -6532,11 +6639,24 @@ export default function Admin() {
                           </select>
                         </div>
                         <div>
-                          <label className="fin-exp-lbl">Date</label>
+                          <label className="fin-exp-lbl">Frequency</label>
+                          <select className="fin-exp-select" value={expenseForm.recurring ? 'monthly' : 'once'}
+                            onChange={e => setExpenseForm(f => ({ ...f, recurring: e.target.value === 'monthly' }))} style={{ width: 150 }}>
+                            <option value="monthly">Monthly (recurring)</option>
+                            <option value="once">One-time</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="fin-exp-lbl">{expenseForm.recurring ? 'Starts' : 'Date'}</label>
                           <input className="fin-exp-input" type="date" value={expenseForm.expense_date}
                             onChange={e => setExpenseForm(f => ({ ...f, expense_date: e.target.value }))}
                             style={{ width: 140, colorScheme: 'dark' }} />
                         </div>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>
+                        {expenseForm.recurring
+                          ? 'Monthly cost — log it once and its FULL amount is charged each month on this day. The day it lands can go negative; you climb back to profit as revenue overtakes it.'
+                          : 'One-off cost — its full amount hits on its date and can push that day negative.'}
                       </div>
                       <div className="fin-expense-form-footer">
                         <button className="fin-btn fin-btn-danger" disabled={expenseSubmitting}
@@ -6544,11 +6664,10 @@ export default function Admin() {
                             if (!expenseForm.description || !expenseForm.amount) return;
                             setExpenseSubmitting(true);
                             try {
-                              await adminAddExpense({ description: expenseForm.description, amount: parseFloat(expenseForm.amount), category: expenseForm.category, expense_date: expenseForm.expense_date });
+                              await adminPostExpense({ description: expenseForm.description, amount: parseFloat(expenseForm.amount), category: expenseForm.category, expense_date: expenseForm.expense_date, recurring: expenseForm.recurring });
                               setExpenseForm(f => ({ ...f, description: '', amount: '' }));
-                              const r = await adminGetExpenses();
-                              setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0);
-                            } catch(err) {} finally { setExpenseSubmitting(false); }
+                              await loadExpenses(revPeriod, revMonth);
+                            } catch(err) { alert('Could not add expense: ' + (err.response?.data?.detail || err.message || 'unknown error')); } finally { setExpenseSubmitting(false); }
                           }}
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           <PlusCircle size={14} /> {expenseSubmitting ? 'Adding…' : 'Add expense'}
@@ -6576,17 +6695,16 @@ export default function Admin() {
                         <tbody>
                           {expenses.map(e => (
                             <tr key={e.id}>
-                              <td style={{ color: '#5b6472' }}>{e.expense_date}</td>
-                              <td style={{ fontWeight: 600 }}>{e.description}</td>
+                              <td style={{ color: '#5b6472' }}>{e.recurring ? `from ${e.expense_date}` : e.expense_date}</td>
+                              <td style={{ fontWeight: 600 }}>{e.description}{e.recurring && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#f59e0b', border: '1px solid rgba(245,158,11,.4)', borderRadius: 5, padding: '2px 6px' }}>Monthly</span>}</td>
                               <td><span className="fin-exp-cat">{e.category}</span></td>
-                              <td className="r" style={{ color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}</td>
+                              <td className="r" style={{ color: '#ef4444', fontWeight: 700 }}>{fmtKES(e.amount)}{e.recurring && <span style={{ color: '#5b6472', fontWeight: 400 }}>/mo</span>}</td>
                               <td style={{ textAlign: 'right' }}>
                                 <button onClick={async () => {
                                   if (!window.confirm('Delete this expense?')) return;
                                   try {
                                     await adminDeleteExpense(e.id);
-                                    const r = await adminGetExpenses();
-                                    setExpenses(r.data.expenses || []); setExpensesTotal(r.data.total || 0);
+                                    await loadExpenses(revPeriod, revMonth);
                                   } catch(err) {}
                                 }} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: 4 }}>
                                   <Trash2 size={14} />
@@ -6913,7 +7031,7 @@ export default function Admin() {
                             </td>
                             <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12.5, color: '#8A94A6', whiteSpace: 'nowrap' }}>{t.phone || '—'}</td>
                             <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12.5, color: t.choice_account_id ? '#EAEEF5' : '#5C6577' }}>
-                              {t.choice_account_id || (t.onboarding_id ? t.onboarding_id.slice(-12) : '—')}
+                              {t.choice_account_id ? acctLabel(t.choice_account_id) : (t.onboarding_id ? t.onboarding_id.slice(-12) : '—')}
                             </td>
                             <td style={S.td}>{statusPill}</td>
                             <td style={{ ...S.td, textAlign: 'right' }}>

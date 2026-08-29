@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, reverseChoiceTransaction, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, getCbBankAccounts, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone, Lock } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import AdsPanel from '../components/AdsPanel';
 import { kycCreateSession } from '../services/api';
@@ -948,6 +948,21 @@ export default function Dashboard() {
   const [withdrawalPage, setWithdrawalPage] = useState(1);
   const [sweepSecondsLeft, setSweepSecondsLeft] = useState(0);
   const [activeTab, setActiveTab] = useState('overview');
+  // ── Account SUSPENDED freeze ────────────────────────────────────────────────
+  // An admin can set a trader's status to 'suspended'. A suspended trader can still
+  // log in, but EVERYTHING is frozen except Choice Bank (their own money): only the
+  // Overview (balance/withdraw), Transactions (Choice history) and My Paybill
+  // (receive) tabs stay usable — every other tab is blurred and unclickable. The
+  // server also refuses the bot's paid features for a suspended account
+  // (enforcement.account_frozen); this is the matching UI.
+  const suspended = profile?.status === 'suspended';
+  const SUSPEND_ALLOWED_TABS = ['overview', 'transactions', 'paybill'];
+  const tabLocked = (key) => suspended && !SUSPEND_ALLOWED_TABS.includes(key);
+  // If a frozen tab is somehow active (e.g. the status changed mid-session), bounce
+  // back to Overview so a suspended trader can never sit on a bot tab.
+  useEffect(() => {
+    if (suspended && !SUSPEND_ALLOWED_TABS.includes(activeTab)) setActiveTab('overview');
+  }, [suspended, activeTab]);
   // Whether merchants see the Affiliates tab — controlled by the admin at runtime
   // (Admin → Affiliates → toggle). Defaults OFF until the flag loads, so it never
   // flashes visible on a slow fetch.
@@ -2110,34 +2125,46 @@ export default function Dashboard() {
             { key: 'logs',          icon: Activity,        label: 'Logs'          },
           ].map(({ key, icon: Icon, label }) => (
             <button key={key}
-              className={`dsb-nav-item${activeTab === key ? ' dsb-active' : ''}`}
-              onClick={() => setActiveTab(key)}
+              className={`dsb-nav-item${activeTab === key ? ' dsb-active' : ''}${tabLocked(key) ? ' dsb-locked' : ''}`}
+              onClick={() => { if (!tabLocked(key)) setActiveTab(key); }}
+              aria-disabled={tabLocked(key)}
+              title={tabLocked(key) ? 'Frozen while your account is suspended' : undefined}
             >
               <Icon size={16} />
               <span>{label}</span>
+              {tabLocked(key) && <Lock size={12} style={{ marginLeft: 'auto' }} />}
             </button>
           ))}
 
           {/* Account nav */}
           <div className="dsb-section-label">Account</div>
           <button
-            className={`dsb-nav-item${activeTab === 'settings' ? ' dsb-active' : ''}`}
-            onClick={() => setActiveTab('settings')}
+            className={`dsb-nav-item${activeTab === 'settings' ? ' dsb-active' : ''}${tabLocked('settings') ? ' dsb-locked' : ''}`}
+            onClick={() => { if (!tabLocked('settings')) setActiveTab('settings'); }}
+            aria-disabled={tabLocked('settings')}
+            title={tabLocked('settings') ? 'Frozen while your account is suspended' : undefined}
           >
             <Settings size={16} /><span>Settings</span>
+            {tabLocked('settings') && <Lock size={12} style={{ marginLeft: 'auto' }} />}
           </button>
           <button
-            className={`dsb-nav-item${activeTab === 'ads' ? ' dsb-active' : ''}`}
-            onClick={() => setActiveTab('ads')}
+            className={`dsb-nav-item${activeTab === 'ads' ? ' dsb-active' : ''}${tabLocked('ads') ? ' dsb-locked' : ''}`}
+            onClick={() => { if (!tabLocked('ads')) setActiveTab('ads'); }}
+            aria-disabled={tabLocked('ads')}
+            title={tabLocked('ads') ? 'Frozen while your account is suspended' : undefined}
           >
             <Megaphone size={16} /><span>Ads</span>
+            {tabLocked('ads') && <Lock size={12} style={{ marginLeft: 'auto' }} />}
           </button>
           {affiliateVisible &&(
             <button
-              className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}`}
-              onClick={() => setActiveTab('affiliates')}
+              className={`dsb-nav-item${activeTab === 'affiliates' ? ' dsb-active' : ''}${tabLocked('affiliates') ? ' dsb-locked' : ''}`}
+              onClick={() => { if (!tabLocked('affiliates')) setActiveTab('affiliates'); }}
+              aria-disabled={tabLocked('affiliates')}
+              title={tabLocked('affiliates') ? 'Frozen while your account is suspended' : undefined}
             >
               <Share2 size={16} /><span>Affiliates</span>
+              {tabLocked('affiliates') && <Lock size={12} style={{ marginLeft: 'auto' }} />}
             </button>
           )}
           <button
@@ -2149,22 +2176,28 @@ export default function Dashboard() {
 
           {/* Setup nav */}
           <div className="dsb-section-label">Setup</div>
-          {!profile?.binance_connected && (
+          {!profile?.binance_connected && !suspended && (
             <button className="dsb-nav-item dsb-warn" onClick={() => setActiveTab('settings')}>
               <Wifi size={16} /><span>Connect Binance</span>
             </button>
           )}
           <button
-            className={`dsb-nav-item dsb-accent${activeTab === 'configure' ? ' dsb-active' : ''}`}
-            onClick={() => setActiveTab('configure')}
+            className={`dsb-nav-item dsb-accent${activeTab === 'configure' ? ' dsb-active' : ''}${tabLocked('configure') ? ' dsb-locked' : ''}`}
+            onClick={() => { if (!tabLocked('configure')) setActiveTab('configure'); }}
+            aria-disabled={tabLocked('configure')}
+            title={tabLocked('configure') ? 'Frozen while your account is suspended' : undefined}
           >
             <SlidersHorizontal size={16} /><span>Configure</span>
+            {tabLocked('configure') && <Lock size={12} style={{ marginLeft: 'auto' }} />}
           </button>
           <button
-            className={`dsb-nav-item dsb-green${activeTab === 'credits' ? ' dsb-active' : ''}`}
-            onClick={() => setActiveTab('credits')}
+            className={`dsb-nav-item dsb-green${activeTab === 'credits' ? ' dsb-active' : ''}${tabLocked('credits') ? ' dsb-locked' : ''}`}
+            onClick={() => { if (!tabLocked('credits')) setActiveTab('credits'); }}
+            aria-disabled={tabLocked('credits')}
+            title={tabLocked('credits') ? 'Frozen while your account is suspended' : undefined}
           >
             <DollarSign size={16} /><span>Subscriptions</span>
+            {tabLocked('credits') && <Lock size={12} style={{ marginLeft: 'auto' }} />}
           </button>
 
           {/* Footer */}
@@ -2184,6 +2217,19 @@ export default function Dashboard() {
 
         <main className="dash-content">
 <MobileRelayBanner />
+{suspended && (
+  <div className="suspend-banner">
+    <Shield size={20} style={{ flexShrink: 0 }} />
+    <div style={{ flex: 1, minWidth: 200 }}>
+      <div style={{ fontWeight: 800, fontSize: 14 }}>Your account is suspended</div>
+      <div style={{ fontSize: 12, marginTop: 3, opacity: 0.9 }}>
+        Every feature is frozen except <strong>Choice Bank</strong> — you can still view your balance,
+        withdraw or send your own money, receive payments and see your Choice Bank transactions.
+        The bot and all other tools are locked. Contact support to find out more.
+      </div>
+    </div>
+  </div>
+)}
 {activeTab === 'overview' && (
           <>
             {/* Daily trade-limit reached — blocking banner with live countdown to the 3 AM reset */}
@@ -5565,11 +5611,13 @@ export default function Dashboard() {
         ].map(({ key, icon: Icon, label }) => {
           const primaryKeys = ['overview','orders','transactions','settings'];
           const isActive = activeTab === key || (key === 'more' && !primaryKeys.includes(activeTab));
+          const locked = key !== 'more' && tabLocked(key);   // 'more' stays open to reach My Paybill
           return (
             <button
               key={key}
-              className={`mob-nav-btn${isActive ? ' mob-active' : ''}`}
-              onClick={() => key === 'more' ? setMobMoreOpen(true) : setActiveTab(key)}
+              className={`mob-nav-btn${isActive ? ' mob-active' : ''}${locked ? ' mob-locked' : ''}`}
+              onClick={() => { if (locked) return; key === 'more' ? setMobMoreOpen(true) : setActiveTab(key); }}
+              aria-disabled={locked}
             >
               <Icon size={22} />
               <span className="mob-nav-label">{label}</span>
@@ -5599,18 +5647,26 @@ export default function Dashboard() {
               { key: 'paybill',      label: 'My Paybill',  icon: CreditCard  },
               ...(affiliateVisible ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
               { key: 'credits',      label: 'Subscriptions', icon: DollarSign  },
-            ].map(({ key, label, icon: Icon }) => (
+            ].map(({ key, label, icon: Icon }) => {
+              const locked = tabLocked(key);
+              return (
               <button key={key}
-                onClick={() => { setActiveTab(key); setMobMoreOpen(false); }}
+                onClick={() => { if (locked) return; setActiveTab(key); setMobMoreOpen(false); }}
+                aria-disabled={locked}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 14,
-                  padding: '13px 24px', background: 'none', border: 'none', cursor: 'pointer',
-                  color: activeTab === key ? '#F59E0B' : '#E5E7EB',
+                  padding: '13px 24px', background: 'none', border: 'none',
+                  cursor: locked ? 'not-allowed' : 'pointer',
+                  pointerEvents: locked ? 'none' : 'auto',
+                  opacity: locked ? 0.4 : 1, filter: locked ? 'blur(0.6px)' : 'none',
+                  color: locked ? '#6B7280' : (activeTab === key ? '#F59E0B' : '#E5E7EB'),
                   fontSize: 14, fontWeight: activeTab === key ? 600 : 400 }}
               >
-                <Icon size={20} color={activeTab === key ? '#F59E0B' : '#9CA3AF'} />
+                <Icon size={20} color={locked ? '#6B7280' : (activeTab === key ? '#F59E0B' : '#9CA3AF')} />
                 {label}
+                {locked && <Lock size={14} style={{ marginLeft: 'auto' }} />}
               </button>
-            ))}
+              );
+            })}
             <div style={{ height: 1, background: '#1f2937', margin: '6px 24px' }} />
             <button
               onClick={() => { setMobMoreOpen(false); logout(); }}

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import init_db, async_session
-from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, im_bot, im_account, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks, ops_tickets, b2c_callbacks, b2c_bot
+from app.api.routes import mpesa, traders, orders, admin, auth, subscriptions, chat, extension, browser, im_bank, im_bot, im_account, support, survey, affiliates, telegram, choice_bank, kyc_flow, squads, webhooks, ops_tickets, b2c_callbacks, b2c_bot, standing_orders, mailbox
 from app.services.binance.poller import order_poller
 from app.services.message_templates import seed_default_templates
 from app.services import bot_monitor
@@ -417,6 +417,11 @@ async def lifespan(app: FastAPI):
     # (PesaLink) once it reaches their configured threshold (every 2 min).
     from app.services.auto_withdraw_poller import auto_withdraw_poller
     auto_withdraw_task = asyncio.create_task(auto_withdraw_poller())
+
+    # Standing orders — merchant-scheduled recurring Choice transfers. The poller
+    # runs always but only MOVES money when settings.STANDING_ORDERS_ENABLED is on.
+    from app.services.standing_order_poller import standing_order_poller
+    standing_order_task = asyncio.create_task(standing_order_poller())
     # Reconcile EVERY Choice Bank credit onto the Transactions page — records
     # inbound payments the webhook/order-matcher missed (e.g. after a cancelled
     # order), with their reference numbers (every 3 min).
@@ -452,6 +457,9 @@ async def lifespan(app: FastAPI):
     # look "completed" in the app, and alert the merchant (every 60s).
     from app.services.outbound_reconcile_poller import outbound_reconcile_poller
     outbound_reconcile_task = asyncio.create_task(outbound_reconcile_poller())
+    # Admin dashboard mailbox — pull new mail from the Zoho mailbox over IMAP (every 60s).
+    from app.services.mail_poller import mailbox_poller
+    mailbox_task = asyncio.create_task(mailbox_poller())
     yield
     # Shutdown
     order_poller.stop()
@@ -507,10 +515,12 @@ app.include_router(im_bot.router, prefix="/api/im-bot", tags=["I&M Bot"])
 # apart from /api/auth (traders) so the two populations never blur.
 app.include_router(im_account.router, prefix="/api/im-account", tags=["I&M Bot Accounts"])
 app.include_router(support.router, prefix="/api", tags=["Support"])
+app.include_router(mailbox.router, prefix="/api", tags=["Mailbox"])
 app.include_router(survey.router, prefix="/api/survey", tags=["Survey"])
 app.include_router(affiliates.router, prefix="/api/affiliates", tags=["Affiliates"])
 app.include_router(telegram.router, prefix="/api/telegram", tags=["Telegram"])
 app.include_router(choice_bank.router, prefix="/api", tags=["Choice Bank"])
+app.include_router(standing_orders.router, prefix="/api", tags=["Standing Orders"])
 app.include_router(kyc_flow.router, prefix="/api", tags=["KYC Flow"])
 app.include_router(squads.router, prefix="/api/squads", tags=["Squad Mode"])
 app.include_router(ops_tickets.router, prefix="/api", tags=["Ops Tickets"])
@@ -638,6 +648,48 @@ async def download_im_bot():
         raise
     except Exception:
         raise HTTPException(status_code=502, detail="Could not fetch the latest I&M Automation release.")
+
+
+# ── Mpesa B2C bot (downloadable) — same pattern as the I&M bot ────────────────
+_B2C_GITHUB_REPO = "Bazenga254/B2C-Automation-releases"
+_b2c_release_cache: dict = {}
+
+
+async def _fetch_latest_b2c_release() -> dict:
+    now = _time.time()
+    if _b2c_release_cache.get("cached_at") and now - _b2c_release_cache["cached_at"] < _CACHE_TTL:
+        return _b2c_release_cache
+    async with _httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://api.github.com/repos/{_B2C_GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    exes = [a for a in data.get("assets", []) if a["name"].endswith(".exe")]
+    # Prefer the hyphenated artifact (no spaces) for a clean download URL.
+    exe = next((a for a in exes if " " not in a["name"]), exes[0] if exes else None)
+    _b2c_release_cache.update({
+        "version": data.get("tag_name", "").lstrip("v"),
+        "url": exe["browser_download_url"] if exe else None,
+        "cached_at": now,
+    })
+    return _b2c_release_cache
+
+
+@app.get("/api/download/b2c-bot")
+async def download_b2c_bot():
+    from fastapi import HTTPException
+    try:
+        info = await _fetch_latest_b2c_release()
+        if not info.get("url"):
+            raise HTTPException(status_code=404, detail="No .exe asset in the latest Mpesa B2C release yet.")
+        return RedirectResponse(info["url"], status_code=302)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not fetch the latest Mpesa B2C release.")
 
 
 # Serve uploaded support attachments

@@ -20,6 +20,10 @@ from app.models.im_charge import ImCharge
 from app.models.im_payout import ImPayout
 from app.models.ad_automation import AdAutomation
 from app.models.platform_setting import PlatformSetting
+from app.models.standing_order import StandingOrder
+from app.models.choice_account import ChoiceAccount
+from app.models.email_message import EmailMessage
+from app.models.email_attachment import EmailAttachment
 
 __all__ = [
     "Squad", "SquadMember",
@@ -38,4 +42,6 @@ __all__ = [
     "BotLog",
     "KycSubmission",
     "MerchantApiKey",
+    "StandingOrder",
+    "ChoiceAccount",
 ]

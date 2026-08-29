@@ -2136,6 +2136,7 @@ async def get_session_health(
 @router.get("/desktop-credentials")
 async def get_desktop_credentials(
     trader: Trader = Depends(get_current_trader),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Returns the trader's decrypted Binance verification credentials to the desktop app.
@@ -2163,6 +2164,21 @@ async def get_desktop_credentials(
         except Exception:
             pass
     account_number = f"P2PT{trader.id:04d}"
+    # Buyer-facing "Account Name" for the active Choice account. For an SME/business account
+    # this must be the business name (the registry label, e.g. "BENNYBOSS SOLUTIONS"), NOT the
+    # trader's personal name — otherwise the bot tells buyers to pay a business account under a
+    # personal name. Personal accounts keep the trader's full name.
+    choice_account_name = trader.full_name or ""
+    try:
+        from app.models.choice_account import ChoiceAccount
+        active_row = (await db.execute(
+            select(ChoiceAccount).where(ChoiceAccount.trader_id == trader.id,
+                                        ChoiceAccount.is_active == True)  # noqa: E712
+        )).scalar_one_or_none()
+        if active_row and (active_row.account_type or "").lower() == "sme" and active_row.label:
+            choice_account_name = active_row.label
+    except Exception:
+        pass
     return {
         "verify_method": trader.binance_verify_method or "none",
         "fund_password": fund_password,
@@ -2176,7 +2192,7 @@ async def get_desktop_credentials(
         "choice_paybill": settings.CHOICE_BANK_PAYBILL,
         # Shown to the buyer in the sell-order payment instructions ("Account
         # Name: …") so they can confirm who they are paying before sending.
-        "choice_account_name": trader.full_name or "",
+        "choice_account_name": choice_account_name,
     }
 
 

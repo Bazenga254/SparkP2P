@@ -33,8 +33,23 @@ async def billing_active(db, trader) -> bool:
     return (await active_plan(db, trader.id)) is not None
 
 
+def account_frozen(trader) -> bool:
+    """A SUSPENDED trader is FROZEN: every paid/automation feature is off, and only
+    Choice Bank (their own money) stays usable. This is an ADMIN action, independent
+    of the billing / ENFORCEMENT_ENABLED switch — a suspended account is frozen even
+    when subscription enforcement is turned off. Choice Bank routes never call this,
+    so a frozen trader can still bank; everything else is locked. The dashboard mirrors
+    this: all tabs except Overview / Transactions / My Paybill are blurred + unclickable."""
+    from app.models.trader import TraderStatus
+    return getattr(trader, "status", None) == TraderStatus.SUSPENDED
+
+
 async def subscription_locked(db, trader) -> bool:
-    """Inverse of billing_active — convenience for endpoints that lock when not entitled."""
+    """Convenience for endpoints that lock when not entitled. Locked when the trader is
+    account-frozen (admin suspension — always, regardless of the enforcement switch) OR
+    not billing_active (subscription expired). Choice Bank is deliberately never gated."""
+    if account_frozen(trader):
+        return True
     return not await billing_active(db, trader)
 
 
@@ -43,9 +58,12 @@ async def can_auto_trade(db, trader):
 
     Returns (allowed: bool, reason: str|None) where reason is one of:
       None                 -> allowed
+      'suspended'          -> account frozen by an admin (only Choice Bank stays usable)
       'subscription_expired' -> no active plan (and not exempt)
       'daily_limit'        -> active plan but daily trade cap reached (resets 03:00 EAT)
     """
+    if account_frozen(trader):
+        return False, "suspended"
     if not settings.ENFORCEMENT_ENABLED:
         return True, None
     if not await billing_active(db, trader):
@@ -63,6 +81,8 @@ async def notifications_allowed(trader_id) -> bool:
         trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
         if not trader:
             return True   # don't drop alerts for unknown traders
+        if account_frozen(trader):
+            return False  # a suspended account gets no bot notifications
         return await billing_active(db, trader)
 
 

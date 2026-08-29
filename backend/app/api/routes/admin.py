@@ -855,6 +855,70 @@ async def admin_choice_verify_email(
     return {"ok": True, "application_id": application_id}
 
 
+class AdminSwitchChoiceAccountIn(BaseModel):
+    account_row_id: int
+
+
+@router.get("/traders/{trader_id}/choice-accounts")
+async def admin_list_choice_accounts(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """List every Choice Bank account a trader holds (personal + any SME), for the admin switcher."""
+    from app.models.choice_account import ChoiceAccount
+    rows = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader_id).order_by(ChoiceAccount.id)
+    )).scalars().all()
+    return {"accounts": [{
+        "id": r.id,
+        "label": r.label,
+        "account_type": r.account_type,
+        "account_number": r.account_number,
+        "account_id": r.account_id,
+        "kyc_status": r.kyc_status,
+        "onboarding_status": r.onboarding_status,
+        "is_active": r.is_active,
+    } for r in rows]}
+
+
+@router.post("/traders/{trader_id}/choice-accounts/switch")
+async def admin_switch_choice_account(
+    trader_id: int,
+    body: AdminSwitchChoiceAccountIn,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin: make the chosen Choice account the trader's ACTIVE one. Repoints the trader's mirror
+    fields (choice_account_id/_number) so the bot's buyer-facing payment details and the backend's
+    incoming-payment matching both move to the new account. Only an approved account qualifies."""
+    from app.models.choice_account import ChoiceAccount
+    from app.api.routes.choice_bank import _mirror_active_to_trader
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    target = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.id == body.account_row_id,
+                                    ChoiceAccount.trader_id == trader_id)
+    )).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Account not found for this trader")
+    if not target.account_id or (target.kyc_status or "").lower() != "approved":
+        raise HTTPException(status_code=400, detail="That account isn't approved/active yet")
+    rows = (await db.execute(
+        select(ChoiceAccount).where(ChoiceAccount.trader_id == trader_id)
+    )).scalars().all()
+    for r in rows:
+        r.is_active = (r.id == target.id)
+    _mirror_active_to_trader(trader, target)
+    await db.commit()
+    await write_audit_log(db, admin, "switch_choice_account", target_trader_id=trader_id,
+                          detail=f"switched active Choice account to {target.label} ({target.account_number})")
+    logger.info("[Admin] Trader %s active Choice account -> %s (%s) by admin %s",
+                trader_id, target.account_id, target.label, admin.full_name)
+    return {"status": "switched", "active_account_id": target.account_id, "label": target.label}
+
+
 @router.post("/traders/{trader_id}/choice-confirm-email-otp")
 async def admin_choice_confirm_email_otp(
     trader_id: int,
@@ -5358,6 +5422,47 @@ async def admin_get_trader_choice_balance(
     }
 
 
+@router.post("/traders/{trader_id}/choice-backfill")
+async def admin_backfill_choice_account(
+    trader_id: int,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Eager backfill: if a trader's choice_account_id is still an onboarding-request placeholder
+    (ONBRD…/SOBIS…) because Choice hadn't finished creating the account at approval time, re-query
+    Choice RIGHT NOW and swap in the real account number the instant it's ready — instead of waiting
+    for the 5-minute KYC poller. Safe no-op if it's not a placeholder or Choice isn't ready yet."""
+    trader = await db.get(Trader, trader_id)
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+
+    cai = (trader.choice_account_id or "")
+    if cai[:5].upper() not in ("ONBRD", "SOBIS"):
+        return {"trader_id": trader_id, "account_id": cai or None, "updated": False, "pending": False}
+
+    from app.services.choice_bank import client as choice
+    aid = ""
+    try:
+        if cai.upper().startswith("SOBIS"):
+            st = await choice.get_business_onboarding_status(onboarding_request_id=cai)
+        else:
+            st = await choice.get_onboarding_status(cai)
+        aid = ((st.get("data") or st).get("accountId")) or ""
+    except Exception:
+        aid = ""
+
+    if aid:
+        trader.choice_account_id = aid
+        trader.choice_account_number = aid
+        if (trader.choice_kyc_status or "") != "approved":
+            trader.choice_kyc_status = "approved"
+        await db.commit()
+        return {"trader_id": trader_id, "account_id": aid, "updated": True, "pending": False}
+
+    # Choice still creating the account — leave the placeholder; UI shows "Being created…".
+    return {"trader_id": trader_id, "account_id": cai, "updated": False, "pending": True}
+
+
 # ── Choice Bank Platform Float ─────────────────────────────────────────────────
 import asyncio as _asyncio
 import time as _time
@@ -5436,32 +5541,87 @@ class ExpenseCreate(BaseModel):
     description: str
     amount: float
     category: str = "general"
-    expense_date: str  # ISO date e.g. "2026-05-26"
+    expense_date: str  # ISO date e.g. "2026-05-26" (start date / one-off date)
+    recurring: bool = True  # True = monthly cost that recurs (log once); False = one-off
+
+
+def _charge_count(ed, recurring, start_date, end_date):
+    """How many times an expense's FULL amount is charged inside [start_date, end_date].
+    NO amortisation — every hit is the whole amount, so a day/period can go negative and
+    only climbs back to profit as revenue overtakes it.
+      • one-off      → 1 if its own date lands in the window, else 0
+      • recurring    → once per calendar month on its day-of-month (clamped to short months),
+                       counting from the expense's own start date onward."""
+    from calendar import monthrange
+    from datetime import date as _d
+    if not ed:
+        return 0
+    if not recurring:
+        return 1 if (ed <= end_date and (start_date is None or start_date <= ed)) else 0
+    count = 0
+    cur = _d(ed.year, ed.month, 1)
+    while cur <= end_date:
+        dim = monthrange(cur.year, cur.month)[1]
+        occ = _d(cur.year, cur.month, min(ed.day, dim))   # this month's charge date
+        if ed <= occ <= end_date and (start_date is None or start_date <= occ):
+            count += 1
+        cur = _d(cur.year + (cur.month // 12), (cur.month % 12) + 1, 1)
+    return count
+
+
+def _expense_period_range(period: str, month: str):
+    """(start_date, end_date, label) in the same terms the revenue breakdown uses.
+    start_date None means 'all time' (each recurring expense starts on its own date)."""
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    today = trading_day_start(now).date()
+    if month.strip():
+        mstart, mend = _month_range(month.strip())
+        return mstart.date(), (mend - timedelta(seconds=1)).date(), mstart.strftime("%B %Y")
+    if period == "today":
+        return today, today, "Today"
+    if period == "week":
+        return trading_week_start(now).date(), today, "This week"
+    if period == "month":
+        return trading_month_start(now).date(), today, "This month"
+    return None, today, "All time"
 
 
 @router.get("/expenses")
 async def list_expenses(
+    period: str = Query("today"),   # today | week | month | all
+    month: str = Query(""),         # YYYY-MM overrides period
     admin: Trader = Depends(get_admin_trader),
     db: AsyncSession = Depends(get_db),
 ):
+    """Operating expenses. `total` charges each expense's FULL amount on its charge date
+    (recurring = once per month on that day) — NO amortisation. The period can go negative
+    the day/month a cost lands and recovers only once revenue overtakes it."""
     from app.models.expense import Expense
     result = await db.execute(
         select(Expense).order_by(Expense.expense_date.desc(), Expense.created_at.desc()).limit(500)
     )
     expenses = result.scalars().all()
+    start_date, end_date, label = _expense_period_range(period, month)
+
+    total = 0.0
+    for e in expenses:
+        recurring = e.recurring if getattr(e, "recurring", None) is not None else True
+        total += e.amount * _charge_count(e.expense_date, recurring, start_date, end_date)
+
     return {
         "expenses": [
             {
-                "id": e.id,
-                "description": e.description,
-                "amount": e.amount,
-                "category": e.category,
+                "id": e.id, "description": e.description, "amount": e.amount,
+                "category": e.category, "recurring": bool(e.recurring if getattr(e, "recurring", None) is not None else True),
                 "expense_date": e.expense_date.isoformat() if e.expense_date else None,
                 "created_at": e.created_at.isoformat() if e.created_at else None,
             }
             for e in expenses
         ],
-        "total": round(sum(e.amount for e in expenses), 2),
+        "total": round(total, 2),                                    # FULL charges landing in the period
+        "monthly_total": round(sum(e.amount for e in expenses if (e.recurring if getattr(e, "recurring", None) is not None else True)), 2),
+        "period": period, "month": month or None, "label": label,
     }
 
 
@@ -5482,15 +5642,14 @@ async def create_expense(
         amount=body.amount,
         category=body.category,
         expense_date=expense_date,
+        recurring=bool(body.recurring),
     )
     db.add(e)
     await db.commit()
     await db.refresh(e)
     return {
-        "id": e.id,
-        "description": e.description,
-        "amount": e.amount,
-        "category": e.category,
+        "id": e.id, "description": e.description, "amount": e.amount,
+        "category": e.category, "recurring": e.recurring,
         "expense_date": e.expense_date.isoformat(),
     }
 

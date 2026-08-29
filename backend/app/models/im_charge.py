@@ -26,7 +26,7 @@ WHY order_id IS UNIQUE:
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, Index, CheckConstraint,
+    Column, Integer, Numeric, String, DateTime, ForeignKey, Index, CheckConstraint,
 )
 
 from app.core.database import Base
@@ -51,7 +51,8 @@ class ImCharge(Base):
     # The Binance order this payout settled. UNIQUE: bill each payout once, ever.
     order_id = Column(String(64), nullable=False, unique=True, index=True)
 
-    rate = Column(Integer, nullable=False)          # KES charged for this payout
+    # NUMERIC, not Integer: rates may be fractional (Silver = KES 3.5 per payout).
+    rate = Column(Numeric(6, 2), nullable=False)     # KES charged for this payout
     payout_amount = Column(Integer, nullable=False)  # KES that left the bank
     # The plan in force AT THE TIME, or NULL if unsubscribed. Explains the rate
     # to a merchant disputing a line ("you were Bronze on the 4th").
@@ -70,10 +71,11 @@ class ImCharge(Base):
             name="ck_im_charges_one_owner",
         ),
         # A charge with a rate we do not offer is a bug that must not reach the
-        # ledger. 5/7/8/9/10/12 are the per-payout rates; 0 is a payout on the
+        # ledger. 3.5/4/5/7/10/12 are the per-payout rates (Silver is 3.5; 8/9 are
+        # legacy Silver/Bronze rows still on the ledger); 0 is a payout on the
         # weekly unlimited plan (covered by the flat weekly fee, so no per-payout
         # charge) — it still lands on the ledger so payouts/volume keep counting.
-        CheckConstraint("rate IN (0, 5, 7, 8, 9, 10, 12)", name="ck_im_charges_known_rate"),
+        CheckConstraint("rate IN (0, 3.5, 4, 5, 7, 8, 9, 10, 12)", name="ck_im_charges_known_rate"),
         CheckConstraint("payout_amount > 0", name="ck_im_charges_positive_payout"),
     )
 

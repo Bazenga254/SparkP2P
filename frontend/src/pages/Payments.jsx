@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import StandingOrders from '../components/StandingOrders';
+import SmeOnboardWizard from '../components/SmeOnboardWizard';
 import {
+  choiceListAccounts, choiceSwitchAccount,
   choiceGetBalance,
   cbSendMoneyQuote, cbSendMoneyInitiate, cbSendMoneyConfirm, cbSendMoneyConfirmSms, cbSendMoneyResendEmail,
   cbEmailVerifyStatus, cbEmailVerifyStart, cbEmailVerifyConfirm,
@@ -124,9 +127,11 @@ export default function Payments() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [balance, setBalance] = useState(null);
-  const [tab, setTab] = useState('mobile');
-  const [active, setActive] = useState(null);
+  const [active, setActive] = useState('send');   // rail layout opens on Send to M-Pesa
   const [toast, setToast] = useState('');
+  const [accounts, setAccounts] = useState([]);   // multiple Choice accounts
+  const [acctMenu, setAcctMenu] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
 
   const loadBalance = () => {
     if (!user?.id) return;
@@ -134,79 +139,178 @@ export default function Payments() {
       .then((r) => { const d = r.data || {}; setBalance(d.balance ?? d.available ?? d.kes ?? d.availableBalance ?? null); })
       .catch(() => {});
   };
-  useEffect(() => { loadBalance(); }, [user?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const loadAccounts = () => {
+    choiceListAccounts().then((r) => setAccounts(r.data?.accounts || [])).catch(() => {});
+  };
+  useEffect(() => { loadBalance(); loadAccounts(); }, [user?.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const switchTo = async (row) => {
+    setAcctMenu(false);
+    if (row.is_active) return;
+    try {
+      await choiceSwitchAccount(row.id);
+      setBalance(null);
+      loadAccounts();
+      loadBalance();
+      setToast(`Switched to ${row.label || row.account_number}`);
+      setTimeout(() => setToast(''), 2200);
+    } catch (e) {
+      setToast(e.response?.data?.detail || 'Could not switch account');
+      setTimeout(() => setToast(''), 2600);
+    }
+  };
+  const activeAcct = accounts.find((a) => a.is_active);
 
   const onItem = (it) => {
     if (!it.ready) { setToast(`${it.label} — coming soon`); setTimeout(() => setToast(''), 2200); return; }
     setActive(it.key);
   };
 
-  const done = () => { setActive(null); loadBalance(); };
-  const cancel = () => setActive(null);
+  const done = () => { loadBalance(); };
+  const cancel = () => setActive('send');
+
+  // ── Rail-based layout (SparkP2P Payments redesign) ──────────────────────────
+  const C = { ink:'#0D1620', ink2:'#131F2B', ink3:'#1A2836', ink4:'#22323F', line:'#22333F', lineSoft:'#1B2A36', paper:'#E9F2F8', muted:'#93AABA', dim:'#64798A', spark:'#F8A81C', sparkSoft:'#FBD07A', ok:'#3FD07A' };
+  const RAIL = [
+    { group: 'Mobile money', items: [
+      { key:'send', label:'Send to M-Pesa', icon:'send', ready:true },
+      { key:'airtel', label:'Send to Airtel', icon:'mpesa', ready:true },
+      { key:'paybill', label:'M-PESA Paybill', icon:'paybill', ready:true },
+      { key:'buygoods', label:'M-PESA Buy Goods', icon:'buygoods', ready:true },
+      { key:'airtime', label:'Buy Airtime', icon:'airtime', ready:false },
+    ]},
+    { group: 'Utility bills', items: [
+      { key:'kplc_tok', label:'KPLC Tokens', icon:'bulb', ready:true },
+      { key:'kplc_post', label:'KPLC Post Paid', icon:'bulb', ready:true },
+      { key:'dstv', label:'DSTV', icon:'tv', ready:true },
+      { key:'gotv', label:'GOtv', icon:'tv', ready:true },
+      { key:'startimes', label:'StarTimes', icon:'tv', ready:true },
+      { key:'zuku', label:'Zuku', icon:'tv', ready:true },
+      { key:'water', label:'Nairobi Water', icon:'water', ready:true },
+    ]},
+    { group: 'Bank', items: [
+      { key:'own', label:'To own account', icon:'person', ready:true },
+      { key:'other', label:'To other accounts', icon:'people', ready:true },
+      { key:'pesalink', label:'PesaLink', icon:'pesalink', ready:true },
+      { key:'mp2bank', label:'M-Pesa to bank', icon:'deposit', ready:true },
+      { key:'rtgs', label:'RTGS', icon:'globe', ready:true },
+    ]},
+    { group: 'Automation', items: [
+      { key:'standing', label:'Standing orders', icon:'globe', ready:true },
+    ]},
+  ];
+  const allItems = RAIL.flatMap((g) => g.items);
+  const crumb = (allItems.find((i) => i.key === active) || {}).label || (UTILITY_SERVICES[active] ? 'Utility bill' : '');
+  const navBtn = (on, ready) => ({
+    display:'flex', alignItems:'center', gap:11, padding:'10px 11px', borderRadius:8, width:'100%', textAlign:'left',
+    fontSize:14.5, fontWeight:on?700:550, cursor:ready?'pointer':'default', border:'none',
+    background: on ? C.ink4 : 'transparent', color: on ? '#fff' : (ready ? '#DCE6ED' : C.muted), opacity: ready?1:0.7,
+  });
+
+  const flow =
+    active === 'send' ? <SendMoney network="mpesa" balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'airtel' ? <SendMoney network="airtel" balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'paybill' ? <Paybill balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'buygoods' ? <Paybill defaultTill balance={balance} onDone={done} onCancel={cancel} />
+    : UTILITY_SERVICES[active] ? <UtilityBill service={active} onDone={done} onCancel={cancel} />
+    : active === 'own' ? <BankTransfer type="own" title="To Own Account" balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'other' ? <BankTransfer type="other" title="To Other Accounts" balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'pesalink' ? <BankTransfer type="pesalink" title="PesaLink Transfer" balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'mp2bank' ? <MpesaToBank balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'rtgs' ? <RTGSTransfer balance={balance} onDone={done} onCancel={cancel} />
+    : active === 'standing' ? <StandingOrders onCancel={cancel} />
+    : <div style={{ color:C.muted, padding:'40px 0' }}>Select a payment from the left.</div>;
 
   return (
-    <div className="pm">
-      <div className="pm-head">
-        <button className="pm-back" onClick={() => (active ? setActive(null) : navigate(-1))} aria-label="Back">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+    <div style={{ minHeight:'100vh', background:C.ink, color:C.paper, display:'flex', flexDirection:'column' }}>
+      {/* topbar */}
+      <div style={{ display:'flex', alignItems:'center', gap:16, padding:'13px 26px', borderBottom:`1px solid ${C.lineSoft}`, flexWrap:'wrap' }}>
+        <button onClick={() => navigate(-1)} style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'8px 13px 8px 10px', borderRadius:8, border:`1px solid ${C.line}`, background:C.ink2, fontSize:14, color:C.muted, cursor:'pointer' }} aria-label="Back">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg> Back
         </button>
-        <div className="pm-logo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#10131a" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1" /><path d="M3 7v10a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2H6" /><circle cx="16" cy="13" r="1.4" fill="#10131a" stroke="none" /></svg>
+        <div style={{ display:'flex', alignItems:'baseline', gap:10, minWidth:0 }}>
+          <h1 style={{ margin:0, fontSize:18, fontWeight:700, letterSpacing:'-.01em' }}>Payments</h1>
+          <span style={{ color:C.ink4 }}>/</span>
+          <span style={{ fontSize:13, color:C.dim }}>{crumb}</span>
         </div>
-        <h1>Payments</h1>
-        <div className="pm-bal">{balance == null ? 'KES ••••••' : fmtKES(balance)}<span>Choice Bank balance</span></div>
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:10, position:'relative' }}>
+          <button onClick={() => setAcctMenu((v) => !v)}
+            style={{ display:'inline-flex', alignItems:'center', gap:9, padding:'8px 13px', borderRadius:99, border:`1px solid ${C.line}`, background:C.ink2, fontSize:13.5, color:C.paper, cursor:'pointer' }}>
+            <span style={{ width:8, height:8, borderRadius:99, background:C.ok, display:'block' }} />
+            <span style={{ maxWidth:170, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {activeAcct ? (activeAcct.label || activeAcct.account_number) : 'Choice Bank linked'}
+            </span>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+          </button>
+          {acctMenu && (
+            <div style={{ position:'absolute', top:'calc(100% + 8px)', right:0, width:300, background:C.ink2, border:`1px solid ${C.line}`, borderRadius:12, boxShadow:'0 18px 44px rgba(0,0,0,.5)', zIndex:60, overflow:'hidden' }}>
+              <div style={{ fontSize:11, letterSpacing:'.15em', textTransform:'uppercase', fontWeight:700, color:'#AEC0CE', padding:'12px 14px 6px' }}>Your Choice accounts</div>
+              {accounts.map((a) => (
+                <button key={a.id} onClick={() => switchTo(a)} style={{ display:'flex', alignItems:'center', gap:10, width:'100%', textAlign:'left', padding:'10px 14px', background: a.is_active ? C.ink4 : 'transparent', border:'none', cursor: a.is_active ? 'default' : 'pointer' }}>
+                  <span style={{ width:8, height:8, borderRadius:99, background: a.is_active ? C.ok : C.ink4, display:'block', flex:'0 0 auto' }} />
+                  <span style={{ flex:'1 1 auto', minWidth:0 }}>
+                    <span style={{ display:'block', fontSize:13.5, color:'#fff', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.label || 'Account'}</span>
+                    <span style={{ display:'block', fontSize:11.5, color:C.dim }}>{a.account_number} · {a.account_type === 'sme' ? 'SME' : 'Personal'}</span>
+                  </span>
+                  {a.is_active && <span style={{ fontSize:10.5, letterSpacing:'.08em', textTransform:'uppercase', fontWeight:700, color:C.ok }}>Active</span>}
+                </button>
+              ))}
+              <button onClick={() => { setAcctMenu(false); setShowWizard(true); }}
+                style={{ display:'flex', alignItems:'center', gap:9, width:'100%', textAlign:'left', padding:'12px 14px', borderTop:`1px solid ${C.line}`, background:'transparent', border:'none', color:C.spark, fontSize:13.5, fontWeight:700, cursor:'pointer' }}>
+                <span style={{ fontSize:17, lineHeight:1 }}>+</span> Add SME account
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="pm-sheet">
-        {active === 'send' ? (
-          <SendMoney network="mpesa" balance={balance} onDone={done} onCancel={cancel} />
-        ) : active === 'airtel' ? (
-          <SendMoney network="airtel" balance={balance} onDone={done} onCancel={cancel} />
-        ) : active === 'paybill' ? (
-          <Paybill onDone={done} onCancel={cancel} />
-        ) : active === 'buygoods' ? (
-          <Paybill defaultTill onDone={done} onCancel={cancel} />
-        ) : UTILITY_SERVICES[active] ? (
-          <UtilityBill service={active} onDone={done} onCancel={cancel} />
-        ) : active === 'own' ? (
-          <BankTransfer type="own" title="To Own Account" onDone={done} onCancel={cancel} />
-        ) : active === 'other' ? (
-          <BankTransfer type="other" title="To Other Accounts" onDone={done} onCancel={cancel} />
-        ) : active === 'pesalink' ? (
-          <BankTransfer type="pesalink" title="PesaLink Transfer" onDone={done} onCancel={cancel} />
-        ) : active === 'mp2bank' ? (
-          <MpesaToBank onDone={done} onCancel={cancel} />
-        ) : active === 'rtgs' ? (
-          <RTGSTransfer onDone={done} onCancel={cancel} />
-        ) : (
-          <>
-            <div className="pm-tabs">
-              {[['mobile', 'Mobile'], ['bank', 'Bank']].map(([k, lbl]) => (
-                <button key={k} className={`pm-tab ${tab === k ? 'on' : ''}`} onClick={() => setTab(k)}>{lbl}</button>
+      {/* body: rail + content */}
+      <div style={{ display:'flex', flex:'1 1 auto', minHeight:0, flexWrap:'wrap' }}>
+        <aside style={{ width:270, flex:'0 0 270px', borderRight:`1px solid ${C.lineSoft}`, background:C.ink2, padding:'18px 14px 24px', display:'flex', flexDirection:'column', gap:20, overflowY:'auto' }}>
+          {/* balance card */}
+          <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:'15px 16px', background:`linear-gradient(155deg,#2A2110 0%,${C.ink3} 65%)` }}>
+            <div style={{ fontSize:12, color:C.sparkSoft, fontWeight:600, marginBottom:9 }}>Choice Bank balance</div>
+            <div style={{ fontFamily:'ui-monospace,monospace', fontSize:29, fontWeight:600, letterSpacing:'-.025em', lineHeight:1, color:'#fff' }}>
+              <span style={{ fontSize:'.5em', fontWeight:400, color:C.muted, marginRight:7 }}>KES</span>{balance == null ? '••••' : Number(balance).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2})}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:13 }}>
+              <button onClick={() => { setToast('Deposit to your Choice Bank Paybill to add funds.'); setTimeout(() => setToast(''), 2600); }}
+                style={{ flex:'1 1 auto', textAlign:'center', padding:8, borderRadius:7, background:C.spark, color:'#2A1C02', fontSize:13, fontWeight:700, border:'none', cursor:'pointer' }}>Top up</button>
+              <button onClick={loadBalance} aria-label="Refresh balance" style={{ padding:'8px 10px', borderRadius:7, border:`1px solid ${C.line}`, color:C.muted, background:'transparent', cursor:'pointer' }}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5" /></svg>
+              </button>
+            </div>
+          </div>
+          {/* nav groups */}
+          {RAIL.map((g) => (
+            <div key={g.group} style={{ display:'flex', flexDirection:'column', gap:3 }}>
+              <div style={{ fontSize:11, letterSpacing:'.17em', textTransform:'uppercase', fontWeight:700, color:'#AEC0CE', padding:'0 10px 7px' }}>{g.group}</div>
+              {g.items.map((it) => (
+                <button key={it.key} onClick={() => onItem(it)} style={navBtn(active === it.key, it.ready)}>
+                  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke={active === it.key ? C.spark : 'currentColor'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{ICON[it.icon]}</svg>
+                  <span style={{ flex:'1 1 auto' }}>{it.label}</span>
+                  {!it.ready && <span style={{ fontSize:10.5, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:700, padding:'3px 7px', borderRadius:5, background:C.ink4, color:C.dim }}>Soon</span>}
+                </button>
               ))}
             </div>
-            {SECTIONS[tab].map((sec) => (
-              <div className="pm-section" key={sec.title}>
-                <div className="pm-section-title">{sec.title}</div>
-                <div className="pm-cards">
-                  {sec.items.map((it) => (
-                    <button key={it.key} className="pm-card" onClick={() => onItem(it)}>
-                      <span className="pm-chip" style={{ background: it.bg }}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">{ICON[it.icon]}</svg>
-                      </span>
-                      <span className="pm-card-lbl">{it.label}</span>
-                      {!it.ready && <span className="pm-soon">Soon</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <EmailOtpBackup />
-          </>
-        )}
+          ))}
+        </aside>
+
+        <main style={{ flex:'1 1 420px', minWidth:0, overflowY:'auto', padding:'26px 32px 40px' }}>
+          <div style={{ maxWidth:1180 }}>
+            {flow}
+            {(active === 'send' || active === 'pesalink' || active === 'other') && <EmailOtpBackup />}
+          </div>
+        </main>
       </div>
 
       {toast && <div className="pm-toast">{toast}</div>}
+      {showWizard && (
+        <SmeOnboardWizard
+          onClose={() => { setShowWizard(false); loadAccounts(); }}
+          onDone={() => { loadAccounts(); loadBalance(); }}
+        />
+      )}
     </div>
   );
 }
@@ -374,7 +478,7 @@ function BankSelector({ value, onChange }) {
 
 // ── BankTransfer (own / other / pesalink) ─────────────────────────────────────
 
-function BankTransfer({ type, title, onDone, onCancel }) {
+function BankTransfer({ type, title, onDone, onCancel, balance = null }) {
   const isInternal = type === 'own';
   const [step, setStep] = useState('form');
   const [bank, setBank] = useState(null);
@@ -442,6 +546,11 @@ function BankTransfer({ type, title, onDone, onCancel }) {
     finally { setBusy(false); }
   };
 
+  const amtNum = Number(amount) || 0;
+  const n2 = (v) => Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const afterBal = balance != null ? balance - amtNum : null;
+  const short = afterBal != null && afterBal < 0;
+
   if (step === 'done') return (
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>✅</div>
@@ -451,47 +560,68 @@ function BankTransfer({ type, title, onDone, onCancel }) {
     </div>
   );
 
+  if (step === 'form') return (
+    <div>
+      <div className="px-vh"><h2>{title}</h2><p>{isInternal ? 'Move money between the accounts you hold at Choice Bank.' : 'Send to any Kenyan bank account in seconds. The name is checked before the money moves.'}</p></div>
+      <div className="px-cols">
+        <div>
+          <div className="px-card">
+            <div className="px-card-head"><h3>Transfer details</h3>{!isInternal && <span className="r">Max KES 999,999 per transfer</span>}</div>
+            <div className="px-card-body">
+              {!isInternal && (
+                <div className="px-field"><label>Beneficiary bank</label><BankSelector value={bank} onChange={setBank} /></div>
+              )}
+              <div className="px-field">
+                <label>Account number</label>
+                <input className="px-in" placeholder={isInternal ? 'Choice Bank account number' : 'Bank account number'} value={account} onChange={(e) => setAccount(e.target.value.trim())} />
+                {payee.status === 'checking' && <span className="hint">Verifying account…</span>}
+                {payee.status === 'ok' && (
+                  <div className="px-verified"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#3FD07A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5 9.5 17 19 7" /></svg> Account belongs to <b>{payee.name}</b></div>
+                )}
+                {payee.status === 'fail' && <span className="hint" style={{ color: '#E4C58A' }}>{payee.name} — you can still enter the name manually.</span>}
+                {!isInternal && <span className="hint">Always check the name before you send — a bank transfer can't be reversed.</span>}
+              </div>
+              <div className="px-field"><label>Beneficiary name</label>
+                <input className="px-in" placeholder="Account holder name" value={beneficiaryName} onChange={(e) => setBeneficiaryName(e.target.value)} /></div>
+              <div className="px-field"><label>Amount</label>
+                <div className="px-amt"><span className="cur">KES</span><input className="px-in amount" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></div>
+              </div>
+              <div className="px-field"><label>Reference <span className="opt">Optional</span></label>
+                <input className="px-in" placeholder="Shows on the recipient's statement" value={remark} onChange={(e) => setRemark(e.target.value)} /></div>
+            </div>
+          </div>
+        </div>
+
+        <aside className="px-review">
+          <div className="px-review-head"><h3>Before you send</h3></div>
+          <div className="px-review-body">
+            <dl>
+              <div className="px-rrow"><dt>Method</dt><dd>{isInternal ? 'Choice transfer' : (type === 'pesalink' ? 'PesaLink' : title)}</dd></div>
+              {!isInternal && <div className="px-rrow"><dt>Bank</dt><dd className={bank ? '' : 'empty'}>{bank ? bank.name : 'Select a bank'}</dd></div>}
+              <div className="px-rrow"><dt>Account</dt><dd className={account ? '' : 'empty'}>{account || 'Add a number'}</dd></div>
+              <div className="px-rrow"><dt>Name</dt><dd className={beneficiaryName ? '' : 'empty'}>{beneficiaryName || '—'}</dd></div>
+              <div className="px-rrow big"><dt>Amount</dt><dd className={amtNum === 0 ? 'empty' : ''}><span className="u">KES</span>{n2(amtNum)}</dd></div>
+              <div className="px-rrow"><dt>Arrives</dt><dd>{isInternal ? 'Instantly' : 'In seconds'}</dd></div>
+              <div className="px-rrow after"><dt>Balance after</dt><dd className={short ? 'short' : ''}>{afterBal == null ? '—' : short ? ('Short by KES ' + n2(Math.abs(afterBal))) : ('KES ' + n2(afterBal))}</dd></div>
+            </dl>
+          </div>
+          <div className="px-review-foot">
+            {short && <div className="px-note bad"><span>Not enough in your balance to send this amount.</span></div>}
+            {error && <div className="px-note bad"><span>{error}</span></div>}
+            <button className="px-btn spark block" disabled={!validForm || busy || short} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+            <span className="px-sms"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.2" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /></svg> You'll confirm with a code sent by SMS.</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+
   return (
     <div className="pm-flow">
       <div className="pm-flow-head">
         <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
         <h2>{title}</h2>
       </div>
-      {step === 'form' && (
-        <>
-          {!isInternal && (
-            <div className="pm-field"><label>Destination bank</label>
-              <BankSelector value={bank} onChange={setBank} />
-            </div>
-          )}
-          <div className="pm-field"><label>Account number</label>
-            <input className="pm-inp" placeholder={isInternal ? 'Choice Bank account number' : 'Bank account number'} value={account}
-              onChange={(e) => setAccount(e.target.value.trim())} />
-            {payee.status === 'checking' && <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying account…</div>}
-            {payee.status === 'ok' && (
-              <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
-                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Account holder</span>
-                <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
-              </div>
-            )}
-            {payee.status === 'fail' && <div style={{ marginTop: 6, fontSize: 12.5, color: '#d97706' }}>⚠️ {payee.name} — you can still enter the name manually</div>}
-          </div>
-          <div className="pm-field"><label>Beneficiary name</label>
-            <input className="pm-inp" placeholder="Account holder name" value={beneficiaryName}
-              onChange={(e) => setBeneficiaryName(e.target.value)} />
-          </div>
-          <div className="pm-field"><label>Amount (KES)</label>
-            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
-            {!isInternal && <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max KES 999,999 via PesaLink. Use RTGS for larger amounts.</div>}
-          </div>
-          <div className="pm-field"><label>Remark <span style={{ color: '#6b7280' }}>(optional)</span></label>
-            <input className="pm-inp" placeholder="e.g. Rent payment" value={remark} onChange={(e) => setRemark(e.target.value)} />
-          </div>
-          {error && <div className="pm-error">{error}</div>}
-          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
-        </>
-      )}
       {step === 'waiting' && (
         <div style={{ textAlign: 'center', padding: '32px 0' }}>
           <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
@@ -516,7 +646,7 @@ function BankTransfer({ type, title, onDone, onCancel }) {
 
 // ── RTGSTransfer ──────────────────────────────────────────────────────────────
 
-function RTGSTransfer({ onDone, onCancel }) {
+function RTGSTransfer({ onDone, onCancel, balance = null }) {
   const [step, setStep] = useState('form');
   const [bank, setBank] = useState(null);
   const [account, setAccount] = useState('');
@@ -563,6 +693,11 @@ function RTGSTransfer({ onDone, onCancel }) {
     finally { setBusy(false); }
   };
 
+  const amtNum = Number(amount) || 0;
+  const n2 = (v) => Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const afterBal = balance != null ? balance - amtNum : null;
+  const short = afterBal != null && afterBal < 0;
+
   if (step === 'done') return (
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>✅</div>
@@ -572,43 +707,66 @@ function RTGSTransfer({ onDone, onCancel }) {
     </div>
   );
 
+  if (step === 'form') return (
+    <div>
+      <div className="px-vh"><h2>RTGS</h2><p>For large transfers. Real-time interbank settlement with no upper limit, processed during bank working hours.</p></div>
+      <div className="px-cols">
+        <div>
+          <div className="px-card">
+            <div className="px-card-head"><h3>Transfer details</h3><span className="r">No amount limit</span></div>
+            <div className="px-card-body">
+              <div className="px-note warn" style={{ marginBottom: 18 }}>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><circle cx="12" cy="12" r="9" /><path d="M12 11v5.5M12 7.6v.6" /></svg>
+                <span><b>Real-Time Gross Settlement.</b> Best for large amounts. Processed immediately during banking hours only.</span>
+              </div>
+              <div className="px-field"><label>Beneficiary bank</label><BankSelector value={bank} onChange={setBank} /></div>
+              <div className="px-field"><label>Account number</label>
+                <input className="px-in" placeholder="Beneficiary bank account number" value={account} onChange={(e) => setAccount(e.target.value.trim())} /></div>
+              <div className="px-field"><label>Beneficiary name</label>
+                <input className="px-in" placeholder="Full name on the account" value={beneficiaryName} onChange={(e) => setBeneficiaryName(e.target.value)} /></div>
+              <div className="px-field"><label>Amount</label>
+                <div className="px-amt"><span className="cur">KES</span><input className="px-in amount" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></div>
+              </div>
+              <div className="px-row2">
+                <div className="px-field"><label>Payment purpose <span className="opt">Optional</span></label>
+                  <input className="px-in" placeholder="e.g. Invoice payment" value={purpose} onChange={(e) => setPurpose(e.target.value)} /></div>
+                <div className="px-field"><label>Message <span className="opt">Optional</span></label>
+                  <input className="px-in" placeholder="Note for the recipient" value={remark} onChange={(e) => setRemark(e.target.value)} /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside className="px-review">
+          <div className="px-review-head"><h3>Before you send</h3></div>
+          <div className="px-review-body">
+            <dl>
+              <div className="px-rrow"><dt>Method</dt><dd>RTGS</dd></div>
+              <div className="px-rrow"><dt>Bank</dt><dd className={bank ? '' : 'empty'}>{bank ? bank.name : 'Select a bank'}</dd></div>
+              <div className="px-rrow"><dt>Account</dt><dd className={account ? '' : 'empty'}>{account || 'Add a number'}</dd></div>
+              <div className="px-rrow"><dt>Name</dt><dd className={beneficiaryName ? '' : 'empty'}>{beneficiaryName || '—'}</dd></div>
+              <div className="px-rrow big"><dt>Amount</dt><dd className={amtNum === 0 ? 'empty' : ''}><span className="u">KES</span>{n2(amtNum)}</dd></div>
+              <div className="px-rrow"><dt>Arrives</dt><dd>Same working day</dd></div>
+              <div className="px-rrow after"><dt>Balance after</dt><dd className={short ? 'short' : ''}>{afterBal == null ? '—' : short ? ('Short by KES ' + n2(Math.abs(afterBal))) : ('KES ' + n2(afterBal))}</dd></div>
+            </dl>
+          </div>
+          <div className="px-review-foot">
+            {short && <div className="px-note bad"><span>Not enough in your balance to send this amount.</span></div>}
+            {error && <div className="px-note bad"><span>{error}</span></div>}
+            <button className="px-btn spark block" disabled={!validForm || busy || short} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+            <span className="px-sms"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.2" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /></svg> You'll confirm with a code sent by SMS.</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+
   return (
     <div className="pm-flow">
       <div className="pm-flow-head">
         <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
         <h2>RTGS Transfer</h2>
       </div>
-      {step === 'form' && (
-        <>
-          <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', marginBottom: 18 }}>
-            <div style={{ color: '#f59e0b', fontWeight: 700, fontSize: 13 }}>Real-Time Gross Settlement</div>
-            <div style={{ color: '#9aa4b2', fontSize: 12.5, marginTop: 3 }}>Instant interbank transfers — no amount limit. Processed immediately during banking hours.</div>
-          </div>
-          <div className="pm-field"><label>Destination bank</label>
-            <BankSelector value={bank} onChange={setBank} />
-          </div>
-          <div className="pm-field"><label>Account number</label>
-            <input className="pm-inp" placeholder="Beneficiary bank account number" value={account}
-              onChange={(e) => setAccount(e.target.value.trim())} />
-          </div>
-          <div className="pm-field"><label>Beneficiary name</label>
-            <input className="pm-inp" placeholder="Full name on the account" value={beneficiaryName}
-              onChange={(e) => setBeneficiaryName(e.target.value)} />
-          </div>
-          <div className="pm-field"><label>Amount (KES)</label>
-            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
-          </div>
-          <div className="pm-field"><label>Payment purpose <span style={{ color: '#6b7280' }}>(optional)</span></label>
-            <input className="pm-inp" placeholder="e.g. Invoice payment" value={purpose} onChange={(e) => setPurpose(e.target.value)} />
-          </div>
-          <div className="pm-field"><label>Message to beneficiary <span style={{ color: '#6b7280' }}>(optional)</span></label>
-            <input className="pm-inp" placeholder="Note for the recipient" value={remark} onChange={(e) => setRemark(e.target.value)} />
-          </div>
-          {error && <div className="pm-error">{error}</div>}
-          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
-        </>
-      )}
       {step === 'waiting' && (
         <div style={{ textAlign: 'center', padding: '32px 0' }}>
           <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
@@ -633,7 +791,7 @@ function RTGSTransfer({ onDone, onCancel }) {
 
 // ── MpesaToBank ───────────────────────────────────────────────────────────────
 
-function MpesaToBank({ onDone, onCancel }) {
+function MpesaToBank({ onDone, onCancel, balance = null }) {
   const [step, setStep] = useState('form');
   const [phone, setPhone] = useState('');
   const [amount, setAmount] = useState('');
@@ -653,6 +811,10 @@ function MpesaToBank({ onDone, onCancel }) {
     finally { setBusy(false); }
   };
 
+  const amtNum = Number(amount) || 0;
+  const n2 = (v) => Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const afterBal = balance != null ? balance + amtNum : null;   // a deposit — balance goes UP
+
   if (step === 'pending') return (
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>📱</div>
@@ -666,28 +828,40 @@ function MpesaToBank({ onDone, onCancel }) {
   );
 
   return (
-    <div className="pm-flow">
-      <div className="pm-flow-head">
-        <button className="pm-flow-back" onClick={onCancel}>← Back</button>
-        <h2>M-Pesa to Bank</h2>
+    <div>
+      <div className="px-vh"><h2>M-Pesa to bank</h2><p>Pull money from your M-Pesa and land it in your Choice Bank account. We'll send a prompt to your phone to approve.</p></div>
+      <div className="px-cols">
+        <div>
+          <div className="px-card">
+            <div className="px-card-head"><h3>Deposit details</h3><span className="r">Max KES 150,000 per transaction</span></div>
+            <div className="px-card-body">
+              <div className="px-field"><label>M-Pesa number to pull from</label>
+                <input className="px-in" inputMode="tel" placeholder="07XX XXX XXX" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+              <div className="px-field"><label>Amount</label>
+                <div className="px-amt"><span className="cur">KES</span><input className="px-in amount" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ''))} /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside className="px-review">
+          <div className="px-review-head"><h3>Before you deposit</h3></div>
+          <div className="px-review-body">
+            <dl>
+              <div className="px-rrow"><dt>From</dt><dd className={phone ? '' : 'empty'}>{phone || 'Add a number'}</dd></div>
+              <div className="px-rrow"><dt>Into</dt><dd>Choice Bank</dd></div>
+              <div className="px-rrow big"><dt>Amount</dt><dd className={amtNum === 0 ? 'empty' : ''}><span className="u">KES</span>{n2(amtNum)}</dd></div>
+              <div className="px-rrow"><dt>Arrives</dt><dd>Up to 2 minutes</dd></div>
+              <div className="px-rrow after"><dt>Balance after</dt><dd style={{ color: '#3FD07A' }}>{afterBal == null ? '—' : 'KES ' + n2(afterBal)}</dd></div>
+            </dl>
+          </div>
+          <div className="px-review-foot">
+            {error && <div className="px-note bad"><span>{error}</span></div>}
+            <button className="px-btn spark block" disabled={!validForm || busy} onClick={submit}>{busy ? 'Sending prompt…' : 'Deposit via M-Pesa'}</button>
+            <span className="px-sms"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="7" y="2" width="10" height="20" rx="2.2" /><path d="M11 18.4h2" /></svg> Approve the M-Pesa prompt on your phone.</span>
+          </div>
+        </aside>
       </div>
-      <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.25)', marginBottom: 18 }}>
-        <div style={{ color: '#16a34a', fontWeight: 700, fontSize: 13 }}>Deposit from M-Pesa</div>
-        <div style={{ color: '#9aa4b2', fontSize: 12.5, marginTop: 3 }}>We'll send an M-Pesa prompt to your phone. Approve it to deposit funds into your Choice Bank account.</div>
-      </div>
-      <div className="pm-field"><label>M-Pesa phone number</label>
-        <input className="pm-inp" inputMode="tel" placeholder="07XX XXX XXX" value={phone}
-          onChange={(e) => setPhone(e.target.value)} />
-      </div>
-      <div className="pm-field"><label>Amount (KES)</label>
-        <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
-          onChange={(e) => setAmount(e.target.value.replace(/[^\d]/g, ''))} />
-        <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max KES 150,000 per transaction.</div>
-      </div>
-      {error && <div className="pm-error">{error}</div>}
-      <button className="pm-btn" disabled={!validForm || busy} onClick={submit}>
-        {busy ? 'Sending prompt…' : 'Deposit via M-Pesa'}
-      </button>
     </div>
   );
 }
@@ -802,6 +976,9 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
     } finally { setBusy(false); }
   };
 
+  const n2 = (v) => Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const afterBal = balance != null ? balance - (quote ? quote.total : amtNum) : null;
+
   if (step === 'done') return (
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>✅</div>
@@ -811,73 +988,85 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
     </div>
   );
 
+  // ── FORM: two-column (form + live review slip), matching the SparkP2P mockup ──
+  if (step === 'form') return (
+    <div>
+      <div className="px-vh">
+        <h2>{title}</h2>
+        <p>Money leaves your Choice Bank balance and arrives on the recipient's {isMpesa ? 'M-Pesa' : 'Airtel'} in a few seconds.</p>
+      </div>
+      <div className="px-cols">
+        <div>
+          <div className="px-card">
+            <div className="px-card-head"><h3>Recipient</h3><span className="r">Max {fmtKES(limit)} per transaction</span></div>
+            <div className="px-card-body">
+              <div className="px-field">
+                <label>Phone number</label>
+                <input className="px-in" inputMode="tel" placeholder="07XX XXX XXX" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                {isMpesa && payee.status === 'checking' && <span className="hint">Verifying name…</span>}
+                {isMpesa && payee.status === 'ok' && payee.name && (
+                  <div className="px-verified">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#3FD07A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5 9.5 17 19 7" /></svg>
+                    Registered to <b>{payee.name}</b>
+                  </div>
+                )}
+                {isMpesa && payee.status === 'fail' && <span className="hint" style={{ color: '#E4C58A' }}>Could not verify the name — check the number.</span>}
+              </div>
+              <div className="px-field">
+                <label>Amount
+                  {quote && quote.max_net >= 10 && (
+                    <button type="button" onClick={() => setAmount(String(quote.max_net))} style={{ marginLeft: 'auto', background: 'rgba(248,168,28,0.12)', border: '1px solid rgba(248,168,28,0.35)', color: '#F8A81C', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', padding: '4px 10px', borderRadius: 999 }}>Withdraw everything</button>
+                  )}
+                </label>
+                <div className="px-amt"><span className="cur">KES</span>
+                  <input className="px-in amount" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
+                </div>
+              </div>
+              <div className="px-field">
+                <label>Note <span className="opt">Optional</span></label>
+                <input className="px-in" placeholder="e.g. Trade payment" disabled title="Notes aren't sent on M-Pesa transfers" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside className="px-review">
+          <div className="px-review-head"><h3>Before you send</h3></div>
+          <div className="px-review-body">
+            <dl>
+              <div className="px-rrow"><dt>To</dt><dd className={(payee.name || phone) ? '' : 'empty'}>{payee.name || phone || 'Add a number'}</dd></div>
+              <div className="px-rrow"><dt>Method</dt><dd>{isMpesa ? 'M-Pesa' : 'Airtel Money'}</dd></div>
+              <div className="px-rrow big"><dt>Amount</dt><dd className={amtNum === 0 ? 'empty' : ''}><span className="u">KES</span>{n2(amtNum)}</dd></div>
+              <div className="px-rrow"><dt>Fee</dt><dd>{quote && amtNum >= 10 ? ('+ KES ' + n2(quote.fee)) : 'Shown at confirm'}</dd></div>
+              <div className="px-rrow after"><dt>Balance after</dt><dd className={insufficient ? 'short' : ''}>{afterBal == null ? '—' : insufficient ? ('Short by KES ' + n2(Math.abs(afterBal))) : ('KES ' + n2(afterBal))}</dd></div>
+            </dl>
+          </div>
+          <div className="px-review-foot">
+            {insufficient && (
+              <div className="px-note bad">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 3.5 22 20H2z" /><path d="M12 10v4.2M12 17.2v.4" /></svg>
+                <span>Not enough balance — you need <b>KES {n2(quote.total)}</b> ({fmtKES(amtNum)} + {fmtKES(quote.fee)} fee).{quote.max_net >= 10 && <> Tap <b>Withdraw everything</b> to send {fmtKES(quote.max_net)}.</>}</span>
+              </div>
+            )}
+            {error && <div className="px-note bad"><span>{error}</span></div>}
+            <button className="px-btn spark block" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+            <span className="px-sms">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.2" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /></svg>
+              You'll confirm with a code sent by SMS.
+            </span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+
+  // ── WAITING / OTP steps (unchanged logic) ──
   return (
     <div className="pm-flow">
       <div className="pm-flow-head">
         <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
         <h2>{title}</h2>
       </div>
-      {step === 'form' && (
-        <>
-          <div className="pm-field">
-            <label>Recipient phone ({isMpesa ? 'M-Pesa' : 'Airtel Money'})</label>
-            <input className="pm-inp" inputMode="tel" placeholder="07XX XXX XXX" value={phone}
-              onChange={(e) => setPhone(e.target.value)} />
-            {/* Hakikisha name lookup */}
-            {isMpesa && payee.status === 'checking' && (
-              <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying name…</div>
-            )}
-            {isMpesa && payee.status === 'ok' && payee.name && (
-              <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
-                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Name verified</span>
-                <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
-              </div>
-            )}
-            {isMpesa && payee.status === 'fail' && (
-              <div style={{ marginTop: 6, fontSize: 12.5, color: '#d97706' }}>⚠️ Could not verify name — check the number is correct</div>
-            )}
-          </div>
-          <div className="pm-field">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-              <label style={{ margin: 0 }}>Amount (KES)</label>
-              {quote && quote.max_net >= 10 && (
-                <button type="button" onClick={() => setAmount(String(quote.max_net))}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', color: '#f59e0b', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', padding: '4px 10px', borderRadius: 999, letterSpacing: 0.2, lineHeight: 1 }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
-                  Withdraw everything
-                </button>
-              )}
-            </div>
-            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} />
-            <div style={{ marginTop: 5, fontSize: 12, color: '#6b7280' }}>Max {fmtKES(limit)} per transaction.</div>
-
-            {/* Live fee + deduction breakdown so the sender sees exactly what leaves
-                their balance and what the recipient receives. */}
-            {quote && amtNum >= 10 && !insufficient && (
-              <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', fontSize: 13 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1' }}>
-                  <span>Recipient receives</span><span style={{ fontWeight: 800, color: '#10b981' }}>{fmtKES(amtNum)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#9aa4b2', marginTop: 5 }}>
-                  <span>Transaction fee</span><span>+ {fmtKES(quote.fee)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#e5e7eb', marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--border)', fontWeight: 700 }}>
-                  <span>Deducted from balance</span><span>{fmtKES(quote.total)}</span>
-                </div>
-              </div>
-            )}
-          </div>
-          {insufficient && (
-            <div className="pm-error">
-              Not enough balance: {fmtKES(quote.total)} needed ({fmtKES(amtNum)} + {fmtKES(quote.fee)} fee), you have {fmtKES(quote.balance)}.
-              {quote.max_net >= 10 && <> Tap <b>Withdraw everything</b> to send {fmtKES(quote.max_net)} to the recipient and empty your account.</>}
-            </div>
-          )}
-          {error && <div className="pm-error">{error}</div>}
-          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
-        </>
-      )}
       {step === 'waiting' && (
         <div style={{ textAlign: 'center', padding: '32px 0' }}>
           <div style={{ fontSize: 40, marginBottom: 16 }}>📲</div>
@@ -916,7 +1105,7 @@ function SendMoney({ network = 'mpesa', balance = null, onDone, onCancel }) {
 
 // ── Paybill ───────────────────────────────────────────────────────────────────
 
-function Paybill({ onDone, onCancel, defaultTill = false }) {
+function Paybill({ onDone, onCancel, defaultTill = false, balance = null }) {
   const [step, setStep] = useState('form');
   const [isPaybill, setIsPaybill] = useState(!defaultTill);
   const [biz, setBiz] = useState('');
@@ -963,6 +1152,10 @@ function Paybill({ onDone, onCancel, defaultTill = false }) {
     finally { setBusy(false); }
   };
 
+  const amtNum = Number(amount) || 0;
+  const n2 = (v) => Number(v || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const afterBal = balance != null ? balance - amtNum : null;
+
   if (step === 'done') return (
     <div className="pm-flow pm-success">
       <div style={{ fontSize: 56 }}>⏳</div>
@@ -972,59 +1165,77 @@ function Paybill({ onDone, onCancel, defaultTill = false }) {
     </div>
   );
 
+  if (step === 'form') return (
+    <div>
+      <div className="px-vh"><h2>Pay Paybill or Till</h2><p>Pay a business from your Choice Bank balance through M-Pesa.</p></div>
+      <div className="px-cols">
+        <div>
+          <div className="px-card">
+            <div className="px-card-head"><h3>Payment details</h3></div>
+            <div className="px-card-body">
+              <div className="px-field">
+                <label>Payment type</label>
+                <div className="px-seg">
+                  <button aria-pressed={isPaybill} onClick={() => setIsPaybill(true)}>Paybill</button>
+                  <button aria-pressed={!isPaybill} onClick={() => setIsPaybill(false)}>Till / Buy Goods</button>
+                </div>
+              </div>
+              {isPaybill && (
+                <div className="px-note warn" style={{ marginBottom: 18 }}>
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 2 }}><path d="M12 3.5 22 20H2z" /><path d="M12 10v4.2M12 17.2v.4" /></svg>
+                  <span><b>Paying a bank paybill?</b> Choice can't verify a bank account number before the money goes, so a wrong number can leave your account and never arrive. Use <b>PesaLink</b> for Equity (247247), KCB, Co-op and similar.</span>
+                </div>
+              )}
+              <div className="px-row2">
+                <div className="px-field">
+                  <label>{isPaybill ? 'Paybill number' : 'Till / Buy Goods number'}</label>
+                  <input className="px-in" inputMode="numeric" placeholder="e.g. 247247" value={biz} onChange={(e) => setBiz(e.target.value.replace(/\D/g, ''))} />
+                  {payee.status === 'checking' && <span className="hint">Verifying name…</span>}
+                  {payee.status === 'ok' && (
+                    <div className="px-verified"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#3FD07A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5 9.5 17 19 7" /></svg> Paying to <b>{payee.name}</b></div>
+                  )}
+                  {payee.status === 'fail' && <span className="hint" style={{ color: isPaybill ? '#FF6E5C' : '#E4C58A' }}>{payee.name}{!isPaybill && ' — you can still proceed for Till.'}</span>}
+                </div>
+                {isPaybill && (
+                  <div className="px-field"><label>Account number</label>
+                    <input className="px-in" placeholder="Your account or phone" value={acct} onChange={(e) => setAcct(e.target.value)} /></div>
+                )}
+              </div>
+              <div className="px-field"><label>Amount</label>
+                <div className="px-amt"><span className="cur">KES</span><input className="px-in amount" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside className="px-review">
+          <div className="px-review-head"><h3>Before you pay</h3></div>
+          <div className="px-review-body">
+            <dl>
+              <div className="px-rrow"><dt>Type</dt><dd>{isPaybill ? 'Paybill' : 'Till / Buy Goods'}</dd></div>
+              <div className="px-rrow"><dt>Business</dt><dd className={biz ? '' : 'empty'}>{biz || 'Add a number'}</dd></div>
+              {isPaybill && <div className="px-rrow"><dt>Account</dt><dd className={acct ? '' : 'empty'}>{acct || 'Add account'}</dd></div>}
+              {payee.status === 'ok' && <div className="px-rrow"><dt>Paying</dt><dd>{payee.name}</dd></div>}
+              <div className="px-rrow big"><dt>Amount</dt><dd className={amtNum === 0 ? 'empty' : ''}><span className="u">KES</span>{n2(amtNum)}</dd></div>
+              <div className="px-rrow after"><dt>Balance after</dt><dd>{afterBal == null ? '—' : 'KES ' + n2(afterBal)}</dd></div>
+            </dl>
+          </div>
+          <div className="px-review-foot">
+            {error && <div className="px-note bad"><span>{error}</span></div>}
+            <button className="px-btn spark block" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
+            <span className="px-sms"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4.5" y="10" width="15" height="10.5" rx="2.2" /><path d="M8 10V7.5a4 4 0 0 1 8 0V10" /></svg> You'll confirm with a code sent by SMS.</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+
   return (
     <div className="pm-flow">
       <div className="pm-flow-head">
         <button className="pm-flow-back" onClick={step === 'otp' ? () => setStep('form') : onCancel}>← Back</button>
         <h2>Pay Paybill / Till</h2>
       </div>
-      {step === 'form' && (
-        <>
-          <div style={{ marginBottom: 16, padding: '12px 14px', borderRadius: 11, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.28)' }}>
-            <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 16, lineHeight: 1.3 }}>ℹ️</span>
-              <div style={{ fontSize: 12.5, color: '#e2c893', lineHeight: 1.55 }}>
-                <strong style={{ color: '#f59e0b' }}>Paying a bank paybill?</strong> For bank paybills (e.g. Equity <b>247247</b>, KCB, Co-op and similar), we recommend using <b>PesaLink</b>, or sending the funds to your <b>M-Pesa</b> and completing the payment from there. Choice Microfinance Bank cannot verify a bank account number before it is sent, so a mismatched account can be debited without reaching the recipient.
-              </div>
-            </div>
-          </div>
-          <div className="pm-field">
-            <label>Payment type</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {[[true, 'Paybill'], [false, 'Till / Buy Goods']].map(([v, l]) => (
-                <button key={l} type="button" onClick={() => setIsPaybill(v)}
-                  style={{ flex: 1, height: 46, borderRadius: 11, cursor: 'pointer', fontWeight: 700, fontSize: 13.5,
-                    border: isPaybill === v ? '1px solid #f59e0b' : '1px solid #20262f',
-                    background: isPaybill === v ? 'rgba(245,158,11,.12)' : '#0a0d12',
-                    color: isPaybill === v ? '#f59e0b' : '#9aa4b2' }}>{l}</button>
-              ))}
-            </div>
-          </div>
-          <div className="pm-field"><label>{isPaybill ? 'Paybill number' : 'Till / Buy Goods number'}</label>
-            <input className="pm-inp" inputMode="numeric" placeholder="e.g. 247247" value={biz} onChange={(e) => setBiz(e.target.value.replace(/\D/g, ''))} />
-            {payee.status === 'checking' && <div style={{ marginTop: 6, fontSize: 12.5, color: '#9aa4b2' }}>⏳ Verifying name…</div>}
-            {payee.status === 'ok' && (
-              <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.3)' }}>
-                <span style={{ color: '#9aa4b2', fontSize: 11.5 }}>Paying to</span>
-                <div style={{ color: '#10b981', fontWeight: 800, fontSize: 14.5 }}>✓ {payee.name}</div>
-              </div>
-            )}
-            {payee.status === 'fail' && (
-              <div style={{ marginTop: 6, fontSize: 12.5, color: isPaybill ? '#ef4444' : '#d97706' }}>
-                ⚠️ {payee.name}{!isPaybill && ' — you can still proceed for Till payments.'}
-              </div>
-            )}
-          </div>
-          {isPaybill && (
-            <div className="pm-field"><label>Account number</label>
-              <input className="pm-inp" placeholder="e.g. your account / phone" value={acct} onChange={(e) => setAcct(e.target.value)} /></div>
-          )}
-          <div className="pm-field"><label>Amount (KES)</label>
-            <input className="pm-inp" inputMode="numeric" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.]/g, ''))} /></div>
-          {error && <div className="pm-error">{error}</div>}
-          <button className="pm-btn" disabled={!validForm || busy} onClick={initiate}>{busy ? 'Starting…' : 'Continue'}</button>
-        </>
-      )}
       {step === 'otp' && (
         <>
           <p className="pm-otpinfo">{info}</p>

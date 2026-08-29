@@ -9,8 +9,13 @@ Three tiers. Daily limits reset at the trading-day boundary
 
 All tiers now have unlimited trades + Telegram alerts; the tiers differ by price,
 price-tracker data visibility (Bronze: bronze only; Silver: +silver; Gold: all)
-and Gold's priority support. The plan is auto-assigned from the merchant's live
-Binance P2P tier (see traders.apply_tier_plan), not chosen manually.
+and Gold's priority support.
+
+The subscription plan reflects what the merchant PAID / was granted — it is NOT
+auto-assigned from their Binance medal (apply_tier_plan is now a no-op; see it for why).
+The Gold/Silver/Bronze CAPABILITIES still follow the live Binance medal via
+binance_merchant_tier (price-tracker visibility, the 0.25 fee, counterparty filters),
+so a Block merchant keeps every Gold power even on a Silver plan.
 """
 from datetime import datetime, timezone
 from sqlalchemy import select
@@ -36,34 +41,22 @@ def plan_for_tier(tier):
 
 
 async def apply_tier_plan(trader, db) -> bool:
-    """Move the trader's ACTIVE subscription to the plan matching their Binance P2P tier
-    (trader.binance_merchant_tier). BILLING = from next renewal: keep the paid period + expiry, just
-    switch the plan so features/price-tracker visibility follow immediately and the NEXT renewal
-    charges the new plan's price.
+    """DISABLED (Aug 20 2026) — a no-op that never changes the plan.
 
-    Safety rails: unknown/missing tier -> no change (never demote on a bad/offline read); billing-
-    exempt traders and the admin-only B2C/ADVANCED plan are left alone; no active subscription ->
-    nothing to move (a new merchant simply pays for the plan their tier maps to). Returns True if
-    the plan actually changed."""
-    target = plan_for_tier(getattr(trader, "binance_merchant_tier", None))
-    if not target or getattr(trader, "billing_exempt", False):
-        return False
-    r = await db.execute(select(Subscription).where(
-        Subscription.trader_id == trader.id,
-        Subscription.status == SubscriptionStatus.ACTIVE,
-    ).order_by(Subscription.expires_at.desc()))
-    # A trader can have MORE THAN ONE active row (stacked payments); take the newest by
-    # expiry. scalar_one_or_none() would raise MultipleResultsFound and silently break the
-    # hourly tier sync for that trader.
-    sub = r.scalars().first()
-    if not sub or not sub.is_active or sub.plan == SubscriptionPlan.ADVANCED or sub.plan == target:
-        return False
-    old = sub.plan.value
-    sub.plan = target
-    await db.commit()
-    logger.info("apply_tier_plan: trader %s plan %s -> %s (Binance tier=%s)",
-                trader.id, old, target.value, trader.binance_merchant_tier)
-    return True
+    The subscription plan now reflects what the merchant PAID / was granted, NOT their
+    live Binance medal. Auto-upgrading the plan off the medal (Block/Gold → PRO_MAX)
+    silently put Silver-paying merchants on a Gold plan: their subscription card read
+    "Gold" while their tier, badge, I&M plan and billing all said Silver — a persistent
+    confusion (three Block merchants ended up PRO_MAX on the 7,500 Silver price).
+
+    Nothing is left for it to do: billing already follows the paid amount
+    (im_pricing.rate_for_trader → plan_for_price), and the Gold/Silver/Bronze CAPABILITIES
+    (price-tracker data visibility, the 0.25 KES fee, counterparty filters) key off
+    binance_merchant_tier, never the plan — so a Block merchant keeps every Gold power
+    with a Silver plan. Kept as a no-op so its callers (tier_poller, connect-Binance) need
+    no change; the tier poller still records binance_p2p_tier / binance_merchant_tier for
+    the badges and those capabilities. Returns False (the plan is never touched here)."""
+    return False
 
 
 PLAN_CONFIG = {
@@ -105,8 +98,13 @@ def plan_daily_tg(plan):
     return PLAN_CONFIG.get(plan, {}).get("daily_tg", UNLIMITED)
 
 
-async def active_plan(db, trader_id):
-    """Return the trader's current active SubscriptionPlan, or None (free / no subscription)."""
+async def active_subscription(db, trader_id):
+    """The trader's current active, unexpired Subscription ROW (or None).
+
+    Same selection as active_plan(), but returns the row so callers can read the
+    PAID AMOUNT — I&M/credit billing charges by what the merchant actually paid,
+    not by a plan the hourly tier-poller may have auto-upgraded from their Binance
+    medal (see plan_for_price + im_pricing.rate_for_trader)."""
     sub = (await db.execute(
         select(Subscription).where(
             Subscription.trader_id == trader_id,
@@ -117,4 +115,26 @@ async def active_plan(db, trader_id):
         return None
     if sub.expires_at and datetime.now(timezone.utc) > sub.expires_at:
         return None
-    return sub.plan
+    return sub
+
+
+async def active_plan(db, trader_id):
+    """Return the trader's current active SubscriptionPlan, or None (free / no subscription)."""
+    sub = await active_subscription(db, trader_id)
+    return sub.plan if sub else None
+
+
+def plan_for_price(amount):
+    """Reverse-map a PAID subscription amount to the plan whose CURRENT price equals it.
+
+    Returns None when the amount matches no current plan price (a subscription bought
+    under old pricing, or a nominal admin grant) — callers then fall back to the stored
+    plan. Prices are all distinct (5000/7500/10000/15000), so the map is unambiguous."""
+    try:
+        amt = int(amount)
+    except (TypeError, ValueError):
+        return None
+    for plan, cfg in PLAN_CONFIG.items():
+        if cfg.get("price") == amt:
+            return plan
+    return None

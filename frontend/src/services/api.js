@@ -198,10 +198,11 @@ export const adminRejectKycSubmission = (id, notes) => api.post(`/admin/kyc/subm
 export const adminConfirmKycOtp = (id, otp) => api.post(`/admin/kyc-submissions/${id}/confirm-otp`, { otp });
 export const adminResendKycOtp = (id) => api.post(`/admin/kyc-submissions/${id}/resend-otp`);
 export const adminGetTraderChoiceBalance = (traderId) => api.get(`/admin/traders/${traderId}/choice-balance`);
+export const adminBackfillChoiceAccount = (traderId) => api.post(`/admin/traders/${traderId}/choice-backfill`);
 export const adminVerifyTraderContact = (traderId, verify_type) => api.post(`/admin/kyc/traders/${traderId}/verify-contact`, { verify_type });
 export const adminConfirmTraderContactVerify = (traderId, application_id, otp) => api.post(`/admin/kyc/traders/${traderId}/confirm-contact-verify`, { application_id, otp });
 export const adminGetChoicePlatformFloat = () => api.get('/admin/choice/platform-float');
-export const adminGetExpenses = () => api.get('/admin/expenses');
+export const adminGetExpenses = (params = {}) => api.get('/admin/expenses', { params });
 export const adminPostExpense = (body) => api.post('/admin/expenses', body);
 export const adminDeleteExpense = (id) => api.delete(`/admin/expenses/${id}`);
 
@@ -214,6 +215,32 @@ export const choiceGetBalance = (traderId) => api.get(`/choice/balance/${traderI
 export const choiceDeposit = (body) => api.post('/choice/deposit', body);
 // Live STK deposit status — lets the UI watch the money land (pending | success | failed)
 export const choiceDepositStatus = (tx_id) => api.get('/choice/deposit/status', { params: { tx_id } });
+// Admin dashboard mailbox (Zoho IMAP inbox + Brevo send)
+export const mailboxList = (params = {}) => api.get('/admin/mailbox/messages', { params });
+export const mailboxGet = (id) => api.get(`/admin/mailbox/messages/${id}`);
+export const mailboxThread = (id) => api.get(`/admin/mailbox/thread/${id}`);
+export const mailboxCounts = () => api.get('/admin/mailbox/counts');
+export const mailboxSend = (body) => api.post('/admin/mailbox/send', body);
+export const mailboxReply = (body) => api.post('/admin/mailbox/reply', body);
+export const mailboxAttachment = (id) => api.get(`/admin/mailbox/attachments/${id}`, { responseType: 'blob' });
+export const mailboxMarkAllRead = () => api.post('/admin/mailbox/mark-all-read');
+// Multi Choice account registry + switch active account
+export const choiceListAccounts = () => api.get('/choice/accounts');
+export const choiceSwitchAccount = (account_row_id) => api.post('/choice/accounts/switch', { account_row_id });
+// SME onboarding wizard (5 business types)
+export const smeApply = (body) => api.post('/choice/sme/onboard/apply', body);
+export const smeOtpSend = (body) => api.post('/choice/sme/onboard/otp/send', body);
+export const smeOtpConfirm = (body) => api.post('/choice/sme/onboard/otp/confirm', body);
+export const smeBasicInfo = (body) => api.post('/choice/sme/onboard/basic-info', body);
+export const smeUploadMedia = (body) => api.post('/choice/sme/onboard/upload-media', body);
+export const smeRemoveMedia = (body) => api.post('/choice/sme/onboard/remove-media', body);
+export const smeAddMemberIndividual = (body) => api.post('/choice/sme/onboard/member/add-individual', body);
+export const smeAddMemberOrganisation = (body) => api.post('/choice/sme/onboard/member/add-organisation', body);
+export const smeRemoveMember = (body) => api.post('/choice/sme/onboard/member/remove', body);
+export const smeSubmit = (body) => api.post('/choice/sme/onboard/submit', body);
+export const smeCancel = (body) => api.post('/choice/sme/onboard/cancel', body);
+export const smeStatus = (oid) => api.get(`/choice/sme/onboard/status/${oid}`);
+export const smeInfo = (oid, business_type) => api.get(`/choice/sme/onboard/info/${oid}`, { params: { business_type } });
 export const getMyTransactions = (limit = 100) => api.get(`/traders/my-transactions?limit=${limit}`);
 export const reverseChoiceTransaction = (transaction_id, reason) => api.post('/choice/reverse', { transaction_id, reason });
 export const getCbWithdrawalBank = () => api.get('/traders/cb-withdrawal-bank');
@@ -272,5 +299,11 @@ export const cbRtgsConfirm = (otp) => api.post('/choice/pay/rtgs/confirm', { otp
 export const cbRtgsConfirmSms = () => api.post('/choice/pay/rtgs/confirm-sms', {}, { timeout: 240000 });
 export const cbMpesaToBank = (body) => api.post('/choice/pay/mpesa-to-bank', body);
 export const cbResendOtp = (flow) => api.post('/choice/pay/resend-otp', { flow });
+// Standing orders — merchant-scheduled recurring Choice Bank transfers
+export const soList = () => api.get('/standing-orders');
+export const soValidatePayee = (account, bank_code) => api.post('/standing-orders/validate-payee', { account, bank_code });
+export const soCreate = (body) => api.post('/standing-orders', body);
+export const soUpdate = (id, body) => api.patch(`/standing-orders/${id}`, body);
+export const soDelete = (id) => api.delete(`/standing-orders/${id}`);
 export const kycCreateSession = () => api.post('/kyc/session');
 export default api;

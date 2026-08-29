@@ -235,6 +235,28 @@ const emailOtpCooldownUntil = new Map();  // order -> ts; after a 015002, don't 
 const emailOtpActiveCode = new Map();     // order -> { code, at }: last fresh code read. Reused across re-entries so we do NOT re-click "Get Code" (the 015002 cause) while it's still valid (~10 min).
 const emailOtpSubmitCount = new Map();    // order -> times the current active code has been submitted; after a few rejects we discard it and request one fresh code.
 
+// Binance's "Release P2P Payment" OTP email carries NO order id — only a 6-digit code —
+// so two releases running back-to-back cannot be told apart by content. Two fixes make
+// each order read its OWN code, exactly once:
+//   1) consumedOtpUids: once an order has read a code from an email, its IMAP UID is
+//      claimed here so a DIFFERENT order can never grab the same email.
+//   2) withEmailOtpLock: serialize the whole baseline→Get Code→read window across orders,
+//      so order A's email lands and is consumed BEFORE order B even requests. Without this,
+//      if both capture their baseline before either email arrives, the earlier order grabs
+//      the newest email (the LATER order's code) and then resubmits it until 015002.
+const consumedOtpUids = new Set();        // IMAP UIDs already claimed by an order (cross-order isolation)
+// Secondary time guard: an OTP email is generated AFTER "Get Code", so its server-receive time
+// must be at/after the request. We compare internalDate against the request time MINUS this
+// generous margin, so a genuinely fresh code is never rejected on clock skew while a stray email
+// that clearly predates the request still is. (UID>baseline is the primary guard; this backs it.)
+const OTP_TIME_SKEW_MS = 120 * 1000;
+let _emailOtpChain = Promise.resolve();
+function withEmailOtpLock(fn) {
+  const run = _emailOtpChain.then(fn, fn);           // run after the previous holder (success OR failure)
+  _emailOtpChain = run.then(() => {}, () => {});     // a rejection must never break the chain
+  return run;
+}
+
 let mainWindow = null;
 let tray = null;
 let token = null;
@@ -2383,10 +2405,17 @@ async function getChromeBounds() {
 
 function createOverlayWindow() {
   if (overlayWindow && !overlayWindow.isDestroyed()) return;
+  // IMPORTANT: the body must have a NON-ZERO alpha background. We disable hardware acceleration
+  // (app.disableHardwareAcceleration at the top of this file) for stability on weak machines, and
+  // without GPU/DWM compositing a *fully transparent* Electron window no longer hit-tests its
+  // transparent pixels on Windows — clicks fall straight through to Chrome, so the overlay stops
+  // protecting the page (only the badge showed). A faint tint (~12% black) makes every pixel solid
+  // for hit-testing so ALL clicks are absorbed, while staying subtle. This does NOT affect the bot:
+  // Puppeteer drives Chrome over CDP (a WebSocket), which bypasses this OS-level window entirely.
   const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;background:transparent;overflow:hidden;cursor:not-allowed;user-select:none;-webkit-app-region:no-drag}
+html,body{width:100%;height:100%;background:rgba(0,0,0,0.12);overflow:hidden;cursor:not-allowed;user-select:none;-webkit-app-region:no-drag}
 #badge{position:fixed;bottom:20px;right:20px;display:flex;align-items:center;gap:8px;padding:8px 16px;background:rgba(0,0,0,0.85);border:1px solid rgba(245,158,11,0.6);border-radius:20px;backdrop-filter:blur(8px);pointer-events:none}
 .icon{font-size:15px}.label{color:#f59e0b;font-size:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,sans-serif;white-space:nowrap}
 </style></head><body>
@@ -7196,6 +7225,17 @@ async function _imapDecodedText(client, uid) {
   }
 }
 
+// The server-receive time (INTERNALDATE) of one message, as epoch ms, or null. Used as the
+// secondary "email is newer than the request" guard alongside the UID watermark.
+async function _imapInternalDate(client, uid) {
+  try {
+    for await (const msg of client.fetch(String(uid), { internalDate: true }, { uid: true })) {
+      if (msg && msg.internalDate) return new Date(msg.internalDate).getTime();
+    }
+  } catch (_) {}
+  return null;
+}
+
 // Extract a 6-digit OTP from an email body — anchored on "verification code" first. Skips
 // all-same-digit runs (000000/111111…) which are almost always HTML/CSS noise, not real codes.
 function _extractOtpFromText(text) {
@@ -7243,7 +7283,7 @@ async function imapBaselineBinanceUid() {
 // monotonic, so this is immune to clock skew; any email that came before is automatically
 // invalid). Waits ~15s first (Binance OTP emails take that long to land) so it never reads a
 // stale code, then polls until the fresh, untried code appears. Returns the code or null.
-async function readFreshBinanceOtpViaImap(baselineUid, triedSet, timeoutMs = 55000) {
+async function readFreshBinanceOtpViaImap({ baselineUid = 0, triedSet, requestedAt = 0, timeoutMs = 55000, order = '' } = {}) {
   const creds = loadGmailCredentials();
   if (!creds || !creds.email || !creds.appPassword) return null;
   let client = null;
@@ -7254,19 +7294,36 @@ async function readFreshBinanceOtpViaImap(baselineUid, triedSet, timeoutMs = 550
     await _openGmailAllMail(client);
     const sinceDate = new Date(Date.now() - 24 * 3600 * 1000);  // IMAP SINCE is date-granular
 
-    // Look for a "Release P2P Payment" email with UID > baseline (i.e. it arrived AFTER Send
-    // Code) whose code we haven't tried. No fixed wait — the UID>baseline gate already makes a
-    // stale read impossible, so we can check instantly and grab it the moment it lands.
+    // Accept ONLY a "Release P2P Payment" email that: (1) arrived after this order's baseline
+    // (UID > baseline), (2) was received at/after this order's Get Code click (internalDate ≥
+    // requestedAt − skew — a 2nd, independent guard), (3) no other order has already claimed, and
+    // (4) carries a code we haven't tried. OLDEST-first = the FIRST email after THIS request = this
+    // order's own code; a NEWER one would belong to a later, back-to-back order.
     let found = null;
     const check = async () => {
       if (found) return;
       let uids = [];
       try { uids = await client.search({ from: 'binance', subject: 'Release P2P Payment', since: sinceDate }, { uid: true }); } catch (_) { uids = []; }
-      const fresh = (uids || []).filter((u) => u > baselineUid).sort((a, b) => b - a);   // newest first
+      const fresh = (uids || []).filter((u) => u > baselineUid && !consumedOtpUids.has(u)).sort((a, b) => a - b);
       for (const uid of fresh) {
+        // Secondary time guard: reject an email whose server-receive time predates this request
+        // (beyond the skew margin). A genuinely fresh OTP lands AFTER the click, so it always passes.
+        if (requestedAt) {
+          const idate = await _imapInternalDate(client, uid);
+          if (idate && idate < requestedAt - OTP_TIME_SKEW_MS) {
+            console.log('[OTP candidate]', JSON.stringify({ order, uid, skipped: 'predates request', idate, requestedAt }));
+            continue;
+          }
+        }
         const text = await _imapDecodedText(client, uid);
         const code = _extractOtpFromText(text);
-        if (code && !triedSet.has(code)) { found = code; console.log(`[Email OTP][IMAP] fresh code = ${code} (uid ${uid} > baseline ${baselineUid})`); return; }
+        console.log('[OTP candidate]', JSON.stringify({ order, uid, parsed: !!code }));   // never logs the code
+        if (code && !triedSet.has(code)) {
+          found = { uid, code };
+          consumedOtpUids.add(uid);   // claim it so a back-to-back order can't grab the same email
+          console.log('[OTP claimed]', JSON.stringify({ order, uid, baselineUid, codeFound: true }));
+          return;
+        }
       }
     };
 
@@ -10398,61 +10455,79 @@ Write-Host "done"`;
         const OTP_LIFETIME_MS     = 9 * 60 * 1000; // re-request only after the sent code is ~expired
         const RL_COOLDOWN_MS      = 5 * 60 * 1000; // after 015002, don't touch Get Code for 5 min
 
-        let _st = await _emailState();
+        // Acquire the email OTP UNDER A GLOBAL LOCK, so two back-to-back releases never overlap
+        // their baseline→Get Code→read windows. Serialized, order A's email lands and is claimed
+        // before order B even requests — so each order reads its OWN code exactly once, instead of
+        // the earlier order grabbing the later order's code and resubmitting it into 015002.
+        let emailCode = await withEmailOtpLock(async () => {
+          let _st = await _emailState();
 
-        // A code already read for THIS order and still within its ~10-min life — reuse verbatim.
-        const _cached = emailOtpActiveCode.get(orderNumber);
-        const _cachedUsable = _cached && (Date.now() - _cached.at) < OTP_LIFETIME_MS;
+          // A code already read for THIS order and still within its ~10-min life — reuse verbatim.
+          const _cached = emailOtpActiveCode.get(orderNumber);
+          const _cachedUsable = _cached && (Date.now() - _cached.at) < OTP_LIFETIME_MS;
 
-        // Any 015002 → (re)start the cooldown. We do NOT abandon: a code was almost certainly
-        // already sent, so we fall straight through to reading/reusing it — never re-requesting.
-        if (_st.rateLimited) {
-          emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);
-          sendBotLog('warning', `Binance "Get Code" rate-limited (015002) — reusing the code already sent, not re-requesting (order ...${orderNumber.slice(-8)})`);
-        }
-
-        const _inCooldown        = Date.now() < (emailOtpCooldownUntil.get(orderNumber) || 0);
-        const _recentlyRequested = (Date.now() - (emailOtpLastSentAt.get(orderNumber) || 0)) < REQ_MIN_INTERVAL_MS;
-        let baselineUid = emailOtpBaselineUid.get(orderNumber);
-
-        // REQUEST a code only when we genuinely have none usable — never merely because a
-        // countdown label vanished. And only if not gated (cooldown / min-interval / live 015002),
-        // so "Get Code" can never be spammed into a rate-limit again.
-        const _needFreshRequest = !_cachedUsable && (baselineUid == null || _st.needCode);
-        const _mayRequest = !_inCooldown && !_recentlyRequested && !_st.rateLimited;
-
-        if (_needFreshRequest && _mayRequest) {
-          baselineUid = await imapBaselineBinanceUid();   // capture UID baseline right before the send
-          emailOtpBaselineUid.set(orderNumber, baselineUid);
-          emailOtpActiveCode.delete(orderNumber);
-          emailOtpSubmitCount.delete(orderNumber);
-          const clicked = await _clickGetCode();
-          emailOtpLastSentAt.set(orderNumber, Date.now());
-          await new Promise(r => setTimeout(r, 2500));
-          console.log(`[Email OTP] Get Code clicked=${clicked} (baseline ${baselineUid}) — ONE request; will reuse this code on re-entry`);
-          _st = await _emailState();
-          if (_st.rateLimited) emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);
-        } else if (_needFreshRequest) {
-          console.log(`[Email OTP] a fresh code is needed but gated (cooldown=${_inCooldown} recent=${_recentlyRequested} rl=${_st.rateLimited}) — reading/waiting, NOT re-requesting`);
-        } else {
-          console.log(`[Email OTP] ${_cachedUsable ? 'reusing cached code' : 'code already requested'} for this order — not re-requesting`);
-        }
-        if (baselineUid == null) baselineUid = 0;
-
-        // Obtain the code: reuse the cached fresh one, else read the fresh (UID > baseline) email.
-        let emailCode = _cachedUsable ? _cached.code : null;
-        if (!emailCode) {
-          const _emDeadline = Date.now() + 90000;
-          while (!emailCode && Date.now() < _emDeadline && !pauseNavigation) {
-            emailCode = await readFreshBinanceOtpViaImap(baselineUid, tried, 25000);
-            if (emailCode) break;
-            const sMid = await _emailState();
-            if (sMid.rateLimited) emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);  // note, don't re-request
-            console.log('[Email OTP] fresh code not in inbox yet — waiting (no re-request)…');
-            await new Promise(r => setTimeout(r, 2000));
+          // Any 015002 → (re)start the cooldown. We do NOT abandon: a code was almost certainly
+          // already sent, so we fall straight through to reading/reusing it — never re-requesting.
+          if (_st.rateLimited) {
+            emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);
+            sendBotLog('warning', `Binance "Get Code" rate-limited (015002) — reusing the code already sent, not re-requesting (order ...${orderNumber.slice(-8)})`);
           }
-          if (emailCode) { emailOtpActiveCode.set(orderNumber, { code: emailCode, at: Date.now() }); emailOtpSubmitCount.set(orderNumber, 0); }
-        }
+
+          const _inCooldown        = Date.now() < (emailOtpCooldownUntil.get(orderNumber) || 0);
+          const _recentlyRequested = (Date.now() - (emailOtpLastSentAt.get(orderNumber) || 0)) < REQ_MIN_INTERVAL_MS;
+          let baselineUid = emailOtpBaselineUid.get(orderNumber);
+
+          // REQUEST a code only when we genuinely have none usable — never merely because a
+          // countdown label vanished. And only if not gated (cooldown / min-interval / live 015002),
+          // so "Get Code" can never be spammed into a rate-limit again.
+          const _needFreshRequest = !_cachedUsable && (baselineUid == null || _st.needCode);
+          const _mayRequest = !_inCooldown && !_recentlyRequested && !_st.rateLimited;
+
+          if (_needFreshRequest && _mayRequest) {
+            baselineUid = await imapBaselineBinanceUid();   // capture UID baseline right before the send
+            emailOtpBaselineUid.set(orderNumber, baselineUid);
+            emailOtpActiveCode.delete(orderNumber);
+            emailOtpSubmitCount.delete(orderNumber);
+            const clicked = await _clickGetCode();
+            emailOtpLastSentAt.set(orderNumber, Date.now());
+            await new Promise(r => setTimeout(r, 2500));
+            console.log(`[Email OTP] Get Code clicked=${clicked} (baseline ${baselineUid}) — ONE request; will reuse this code on re-entry`);
+            _st = await _emailState();
+            if (_st.rateLimited) emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);
+          } else if (_needFreshRequest) {
+            console.log(`[Email OTP] a fresh code is needed but gated (cooldown=${_inCooldown} recent=${_recentlyRequested} rl=${_st.rateLimited}) — reading/waiting, NOT re-requesting`);
+          } else {
+            console.log(`[Email OTP] ${_cachedUsable ? 'reusing cached code' : 'code already requested'} for this order — not re-requesting`);
+          }
+          if (baselineUid == null) baselineUid = 0;
+
+          // Obtain the code: reuse the cached fresh one (SAME order only — the cache is keyed by
+          // orderNumber, never a global reusable code, so an OTP can't leak to another order), else
+          // read THIS order's own fresh email (oldest UID > baseline, unclaimed, newer than the
+          // request). WAIT for it to land — never re-request while waiting.
+          let code = _cachedUsable ? _cached.code : null;
+          let selectedUid = _cachedUsable ? (_cached.uid || null) : null;
+          const requestedAt = emailOtpLastSentAt.get(orderNumber) || 0;   // when THIS order clicked Get Code
+          if (!code) {
+            const _emDeadline = Date.now() + 90000;
+            while (!code && Date.now() < _emDeadline && !pauseNavigation) {
+              const res = await readFreshBinanceOtpViaImap({ baselineUid, triedSet: tried, requestedAt, timeoutMs: 25000, order: orderNumber });
+              if (res) { code = res.code; selectedUid = res.uid; break; }
+              const sMid = await _emailState();
+              if (sMid.rateLimited) emailOtpCooldownUntil.set(orderNumber, Date.now() + RL_COOLDOWN_MS);  // note, don't re-request
+              console.log('[Email OTP] fresh code not in inbox yet — waiting (no re-request)…');
+              await new Promise(r => setTimeout(r, 2000));
+            }
+            if (code) { emailOtpActiveCode.set(orderNumber, { code, uid: selectedUid, at: Date.now() }); emailOtpSubmitCount.set(orderNumber, 0); }
+          }
+          // ONE structured line per OTP session so a future wrong-OTP can be traced end-to-end
+          // (which UID went to which order). The code itself is NEVER logged.
+          console.log('[OTP session]', JSON.stringify({
+            order: orderNumber, baselineUid, requestedAt, selectedUid,
+            receivedAt: code ? Date.now() : null, reused: !!_cachedUsable, codeFound: !!code,
+          }));
+          return code;
+        });
         if (!emailCode) {
           console.error('[Email OTP] no fresh code available yet — retry next cycle (no re-request spam)');
           return { success: false, error: 'fresh Email OTP not found' };

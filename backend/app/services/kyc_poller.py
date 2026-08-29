@@ -139,6 +139,62 @@ async def kyc_status_poller():
                             t.choice_account_number = aid
                             await db.commit()
                             logger.info("[KYC-poller] backfilled account for trader %s -> %s", tid, aid)
+
+            # Stale KYC-submission cleanup: when a trader has a LATER approved submission,
+            # any older non-terminal submissions (e.g. an abandoned 'otp_pending' first attempt)
+            # are auto-marked 'superseded' so they stop cluttering the admin pending-review list.
+            try:
+                from sqlalchemy import text
+                async with async_session() as db:
+                    res = await db.execute(text(
+                        "UPDATE kyc_submissions s SET status='superseded', updated_at=now(), "
+                        "admin_notes = COALESCE(s.admin_notes,'') || ' [auto-superseded by a later approved submission]' "
+                        "WHERE s.status NOT IN ('approved','rejected','superseded') "
+                        "AND EXISTS (SELECT 1 FROM kyc_submissions a "
+                        "WHERE a.trader_id = s.trader_id AND a.status='approved' AND a.id > s.id)"
+                    ))
+                    await db.commit()
+                    if res.rowcount:
+                        logger.info("[KYC-poller] auto-superseded %d stale KYC submission(s)", res.rowcount)
+            except Exception as e:
+                logger.error("[KYC-poller] stale-submission cleanup error: %s", e)
+
+            # SME onboarding reconciliation (multi-account): approve pending SME registry rows
+            # whose approval landed after the trader left the wizard (webhook backstop).
+            try:
+                from app.models.choice_account import ChoiceAccount
+                async with async_session() as db:
+                    sme_rows = (await db.execute(
+                        select(ChoiceAccount.id, ChoiceAccount.trader_id, ChoiceAccount.onboarding_request_id).where(
+                            ChoiceAccount.account_type == "sme",
+                            ChoiceAccount.onboarding_status.in_(("in_progress", "submitted")),
+                            ChoiceAccount.onboarding_request_id.isnot(None),
+                        )
+                    )).all()
+                for _rid, _tid, _oid in sme_rows:
+                    if not _oid:
+                        continue
+                    try:
+                        resp = await choice.get_business_onboarding_status(onboarding_request_id=_oid)
+                        d = resp.get("data") or {}
+                        s = d.get("onboardingStatus", d.get("status"))
+                    except Exception as e:
+                        logger.warning("[KYC-poller] SME check failed for trader %s: %s", _tid, e)
+                        continue
+                    if str(s) in ("3", "7") and d.get("accountId"):
+                        from app.api.routes.choice_bank import _complete_sme_onboarding
+                        async with async_session() as db:
+                            await _complete_sme_onboarding(db, _tid, _oid, d)
+                        logger.info("[KYC-poller] SME account approved for trader %s (oid=%s)", _tid, _oid)
+                    elif str(s) in ("4",):
+                        async with async_session() as db:
+                            r2 = await db.get(ChoiceAccount, _rid)
+                            if r2 and r2.onboarding_status != "rejected":
+                                r2.onboarding_status = "rejected"
+                                r2.kyc_status = "rejected"
+                                await db.commit()
+            except Exception as e:
+                logger.error("[KYC-poller] SME reconcile error: %s", e)
         except Exception as e:
             logger.error("[KYC-poller] loop error: %s", e)
         await asyncio.sleep(KYC_POLL_INTERVAL)

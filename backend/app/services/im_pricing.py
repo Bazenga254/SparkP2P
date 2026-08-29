@@ -3,7 +3,7 @@ What a merchant pays I&M Automation, per buy order it pays out.
 
     Gold   (pro_max,  active)  KES  7
     B2C    (advanced, active)  KES  5
-    Silver (pro,      active)  KES  5
+    Silver (pro,      active)  KES  3.5
     Bronze (starter,  active)  KES  4
     SparkP2P account, NO active subscription:
         first 100 payouts      KES 10   <- an allowance, not a rate (see below)
@@ -13,7 +13,7 @@ What a merchant pays I&M Automation, per buy order it pays out.
 THE 10 IS AN ALLOWANCE, NOT A RATE. A registered-but-unsubscribed trader gets
 100 payouts at 10 to try the bot; from the 101st they pay 12 — the same as
 someone who never signed up — because by then they are one. The moment they
-subscribe they move to their plan's rate (Bronze 4 / Silver 5 / Gold 7 / B2C 5) and the counter stops
+subscribe they move to their plan's rate (Bronze 4 / Silver 3.5 / Gold 7 / B2C 5) and the counter stops
 mattering. So "10" is a state a trader passes THROUGH, and any code that caches
 a trader's rate is wrong: it changes underneath you at payout 101.
 
@@ -64,12 +64,14 @@ RATE_BOT_ONLY = 12          # never a SparkP2P client
 # How many payouts an unsubscribed trader gets at RATE_INTRO, lifetime.
 INTRO_ALLOWANCE = 100
 
-# Only ACTIVE, unexpired plans appear here.
+# Only ACTIVE, unexpired plans appear here. Rates may be fractional (Silver 3.5):
+# the ledger column im_charges.rate is NUMERIC and credits.py prices in float, so a
+# non-integer rate flows through billing + credit purchase without truncation.
 RATE_BY_PLAN = {
-    SubscriptionPlan.ADVANCED: 5,   # B2C  (KES 15,000/mo)
-    SubscriptionPlan.PRO_MAX:  7,   # Gold (KES 13,000/mo)
-    SubscriptionPlan.PRO:      5,   # Silver (was 8)
-    SubscriptionPlan.STARTER:  4,   # Bronze (was 9)
+    SubscriptionPlan.ADVANCED: 5,     # B2C  (KES 15,000/mo)
+    SubscriptionPlan.PRO_MAX:  7,     # Gold (KES 13,000/mo)
+    SubscriptionPlan.PRO:      3.5,   # Silver (was 5)
+    SubscriptionPlan.STARTER:  4,     # Bronze (was 9)
 }
 
 # A payout is billed only if the money actually moved.
@@ -132,10 +134,10 @@ def label_for(account_type: str, plan=None, intro_used: int = 0) -> str:
 async def rate_for_trader(db, trader_id: int) -> dict:
     """Resolve a SparkP2P trader's rate from their REAL subscription state.
 
-    Deliberately calls active_plan(), never billing_active() — see the note at
-    the top of this file.
+    Resolves the ACTIVE subscription (never billing_active() — see the note at the
+    top of this file) and prices off what the merchant PAID for it, so an auto
+    tier-upgrade doesn't silently raise their I&M rate.
     """
-    from app.services.plans import active_plan
     # The B2C / Own-Paybill rail IS the B2C plan — always billed at the B2C rate (KES 5), regardless
     # of the subscription tier a trader also holds (e.g. a Gold subscriber on Own Paybill pays 5, not 7).
     from app.models.trader import Trader as _Trader
@@ -149,7 +151,20 @@ async def rate_for_trader(db, trader_id: int) -> dict:
             "intro_used": 0,
             "intro_remaining": 0,
         }
-    plan = await active_plan(db, trader_id)
+    # Bill by what the merchant ACTUALLY PAID, not by a plan the hourly tier-poller
+    # auto-upgraded from their Binance medal. A Block/Gold-medal merchant who paid the
+    # Silver price (7,500) is a Silver client on I&M (rate 5), not Gold (7). We take the
+    # active subscription, then reverse-map its PAID AMOUNT to the plan whose current
+    # price equals it. When the amount matches no current price (old pricing, nominal
+    # admin grant), we trust the stored plan. This is the one place I&M/credit rates are
+    # resolved, so display (admin I&M page) and the real per-payout charge stay in step.
+    from app.services.plans import active_subscription, plan_for_price
+    sub = await active_subscription(db, trader_id)
+    plan = sub.plan if sub else None
+    if sub is not None:
+        paid_plan = plan_for_price(getattr(sub, "amount", None))
+        if paid_plan is not None:
+            plan = paid_plan
     used = 0 if plan is not None else await intro_used_for_trader(db, trader_id)
     return {
         "rate": rate_for(ACCOUNT_SPARKP2P, plan, used),

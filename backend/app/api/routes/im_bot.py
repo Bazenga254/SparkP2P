@@ -47,11 +47,29 @@ from app.api.routes.traders import get_current_trader
 from app.core.database import get_db, async_session
 from app.models import Trader, Order
 from app.models.order import OrderSide, OrderStatus
+from app.models.trader import TraderStatus
 from app.services import api_keys as keysvc
 from app.services import im_bot_lease as lease
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# A SUSPENDED trader can still sign into the SparkP2P WEB dashboard (frozen, Choice
+# Bank only — see enforcement.account_frozen), but the I&M Bot must NOT run for them:
+# on launch it is logged out and any re-login shows this message. Every bot endpoint
+# that resolves the trader raises this, so the desktop app detects it uniformly.
+SUSPENDED_DETAIL = {
+    "code": "account_suspended",
+    "message": ("Your account has been suspended. Please contact customer support "
+                "via the SparkP2P web chat to find out more."),
+}
+
+
+def _raise_if_suspended(trader) -> None:
+    """403 with a recognisable code when the trader is suspended, so the I&M Bot can
+    log them out and show the suspension message (vs a plain bad-key 403)."""
+    if trader is not None and getattr(trader, "status", None) == TraderStatus.SUSPENDED:
+        raise HTTPException(status_code=403, detail=SUSPENDED_DETAIL)
 
 # A bot polls well inside this, so a longer gap means it is not running.
 ONLINE_WINDOW_S = 90
@@ -135,6 +153,8 @@ async def exchange_handoff(data: HandoffExchange, db: AsyncSession = Depends(get
     trader = await db.get(Trader, trader_id)
     if not trader:
         raise HTTPException(status_code=404, detail="Account not found.")
+    # Refuse the launch handoff for a suspended account (the desktop shows the message).
+    _raise_if_suspended(trader)
     plaintext, row = await keysvc.create_key(trader_id, name="I&M Automation (launched from SparkP2P)")
     logger.info("im-bot handoff: trader %s launched the app, minted key %s…", trader_id, row.key_prefix)
     return {
@@ -182,6 +202,10 @@ async def create_api_key(data: CreateKeyRequest, trader: Trader = Depends(get_cu
     The plaintext is returned HERE AND ONLY HERE — we store just its hash, so it
     can never be shown again. The UI must make the merchant copy it now.
     """
+    # A suspended trader can sign into the web (frozen), but must NOT be able to mint
+    # an I&M Bot key — this is where "Continue with SparkP2P" login is refused so the
+    # desktop app shows the suspension message.
+    _raise_if_suspended(trader)
     plaintext, row = await keysvc.create_key(trader.id, name=data.name)
     logger.info("im-bot: trader %s minted API key %s…", trader.id, row.key_prefix)
     return {
@@ -312,14 +336,22 @@ async def set_payout_method(
 # ═══════════════════════════════════════════════════════════
 
 @router.get("/ping")
-async def ping(trader_id: int = Depends(get_trader_id_from_api_key)):
-    """The bot's "Test connection". Proves the key resolves to exactly one
-    trader, and marks the bot as seen (resolve_key updates last_used_at).
+async def ping(
+    trader_id: int = Depends(get_trader_id_from_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """The bot's "Test connection" (also the desktop's link probe). Proves the key
+    resolves to exactly one trader, and marks the bot as seen (resolve_key updates
+    last_used_at).
 
     Returns the trader id so a merchant can confirm the key is linked to the
     account they expect — a key silently linked to the WRONG trader would pay
     another merchant's orders from this merchant's bank account.
+
+    A SUSPENDED trader gets a 403 account_suspended here (a single cheap db.get —
+    this is NOT the long-poll), so the desktop app's probe logs them out on launch.
     """
+    _raise_if_suspended(await db.get(Trader, trader_id))
     return {"ok": True, "trader_id": trader_id, "buy_orders_only": True}
 
 
@@ -407,6 +439,9 @@ async def poll(
     does not get the same order while a payment is in flight.
     """
     trader = await db.get(Trader, trader_id)
+    # SUSPENDED account: the bot must not run. 403 (checked before the opt-out short-
+    # circuit) so a suspended trader is logged out even if buy_payout_via_im is off.
+    _raise_if_suspended(trader)
     if not trader or not trader.buy_payout_via_im:
         # Opted out (or unknown): nothing to do. Not an error — the bot just idles.
         return {"jobs": [], "enabled": False}
