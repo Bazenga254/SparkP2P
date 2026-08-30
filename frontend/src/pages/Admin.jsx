@@ -3044,17 +3044,33 @@ export default function Admin() {
                         </div>
                         <div className="field">
                           <label>Price Tracker</label>
-                          <select
-                            value={t.price_tracker_enabled ? 'on' : 'off'}
-                            onChange={async (e) => {
-                              const on = e.target.value === 'on';
-                              setViewingTrader(prev => ({ ...prev, price_tracker_enabled: on }));
-                              try { await api.put(`/admin/traders/${t.id}/price-tracker?enabled=${on}`); } catch (_) {}
-                              await refreshTraderDetail(t.id);
-                            }}>
-                            <option value="off">Off</option>
-                            <option value="on">On</option>
-                          </select>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, height: 40 }}>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={!!t.price_tracker_enabled}
+                              title={t.price_tracker_enabled ? 'Price tracker ON — click to turn off' : 'Price tracker OFF — click to turn on. Auto-turns on when the merchant pays.'}
+                              onClick={async () => {
+                                const on = !t.price_tracker_enabled;
+                                setViewingTrader(prev => ({ ...prev, price_tracker_enabled: on }));
+                                try { await api.put(`/admin/traders/${t.id}/price-tracker?enabled=${on}`); } catch (_) {}
+                                await refreshTraderDetail(t.id);
+                              }}
+                              style={{
+                                position: 'relative', width: 48, height: 27, borderRadius: 999, border: 'none',
+                                cursor: 'pointer', padding: 0, flex: '0 0 auto', transition: 'background .2s',
+                                background: t.price_tracker_enabled ? 'var(--accent, #f59e0b)' : '#3a3f4b',
+                              }}>
+                              <span style={{
+                                position: 'absolute', top: 3, left: t.price_tracker_enabled ? 24 : 3,
+                                width: 21, height: 21, borderRadius: '50%', background: '#fff',
+                                transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.45)',
+                              }} />
+                            </button>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: t.price_tracker_enabled ? 'var(--accent, #f59e0b)' : 'var(--text-dim, #8a8f9c)' }}>
+                              {t.price_tracker_enabled ? 'On' : 'Off'}
+                            </span>
+                          </div>
                         </div>
                         {/* ONE buy-order payout rail — three mutually-exclusive values.
                             Replaces the old B2C Route + Buy Payout pair, which could be set

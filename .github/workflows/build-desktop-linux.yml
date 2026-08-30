@@ -1,0 +1,40 @@
+name: Build SparkP2P Desktop (Linux)
+
+# Builds the Linux AppImage for the SparkP2P desktop app and publishes it to the
+# Bazenga254/SparkP2P-releases repo (via electron-builder). Run it manually from the
+# Actions tab. Requires a repo secret GH_TOKEN = a Personal Access Token with access
+# to the SparkP2P-releases repo (electron-builder uses it to create/upload the release).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build Linux AppImage & publish
+        run: npx electron-builder --linux --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Upload AppImage as a workflow artifact (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SparkP2P-Linux-AppImage
+          path: desktop/dist/*.AppImage
+          if-no-files-found: ignore
