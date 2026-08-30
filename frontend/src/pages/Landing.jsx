@@ -727,7 +727,7 @@ sudo apt install ./sparkp2p_*.deb</pre>
                 <li>Your bank credentials stay on your machine</li>
               </ul>
               <a href="/api/download/im-bot" className="land-download-btn">Download for Windows</a>
-              <a href="/api/download/im-bot-linux?format=deb" className="land-download-alt" style={{ display:'block', marginTop:10, fontSize:12.5, color:'#8B94A7', textDecoration:'none' }}>Linux — download .deb →</a>
+              <a href="/api/download/im-bot-linux?format=deb" className="land-download-btn" style={{ marginTop:10, background:'transparent', border:'1.5px solid var(--accent)', color:'var(--accent)', width:'100%', justifyContent:'center', boxSizing:'border-box' }}>Download for Linux (.deb)</a>
               <p className="land-product-note">Windows 10 / 11 or Ubuntu / Debian · 64-bit · Requires a SparkP2P account</p>
             </div>
 
