@@ -26,10 +26,17 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
-      - name: Build Linux AppImage & publish
-        run: npx electron-builder --linux --publish always
+      - name: Build Linux AppImage
+        run: npx electron-builder --linux --publish never
+
+      - name: Attach AppImage to the release (bypasses electron-builder's 2-hour guard)
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          gh release view "v$VER" --repo Bazenga254/SparkP2P-releases >/dev/null 2>&1 || \
+            gh release create "v$VER" --repo Bazenga254/SparkP2P-releases --title "v$VER" --notes "Linux build"
+          gh release upload "v$VER" dist/*.AppImage dist/latest-linux.yml --repo Bazenga254/SparkP2P-releases --clobber
 
       - name: Upload AppImage as a workflow artifact (backup)
         if: always()
