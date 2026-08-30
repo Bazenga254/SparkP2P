@@ -36,7 +36,7 @@ jobs:
           VER=$(node -p "require('./package.json').version")
           gh release view "v$VER" --repo Bazenga254/SparkP2P-releases >/dev/null 2>&1 || \
             gh release create "v$VER" --repo Bazenga254/SparkP2P-releases --title "v$VER" --notes "Linux build"
-          gh release upload "v$VER" dist/*.AppImage dist/latest-linux.yml --repo Bazenga254/SparkP2P-releases --clobber
+          gh release upload "v$VER" dist/*.AppImage dist/*.deb dist/latest-linux.yml --repo Bazenga254/SparkP2P-releases --clobber
 
       - name: Upload AppImage as a workflow artifact (backup)
         if: always()

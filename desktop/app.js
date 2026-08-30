@@ -14,6 +14,13 @@ const aiScanner = require('./ai-scanner');
 try { app.disableHardwareAcceleration(); } catch (_) {}
 try { app.commandLine.appendSwitch('disable-gpu-compositing'); } catch (_) {}
 
+// On Linux, Chromium's SUID sandbox helper needs a root-owned setuid binary that a portable
+// AppImage / user-installed .deb can't provide, so the app aborts on launch (setuid_sandbox_host
+// FATAL) unless started with --no-sandbox. Bake the flag in on Linux so the app just runs on a
+// double-click, with no terminal flags — matching the Windows one-click experience. (No effect on
+// Windows/macOS, where the sandbox works normally.)
+try { if (process.platform === 'linux') app.commandLine.appendSwitch('no-sandbox'); } catch (_) {}
+
 // Prefer IPv4 for ALL outbound connections (IMAP, fetch, etc.). Many client machines have
 // broken/blocked IPv6, and Node's happy-eyeballs then throws an opaque "AggregateError"
 // (all addresses failed) when connecting to e.g. imap.gmail.com. Forcing IPv4-first fixes it.

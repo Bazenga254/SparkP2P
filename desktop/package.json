@@ -47,9 +47,12 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "category": "Office",
+      "maintainer": "SparkP2P <support@sparkp2p.com>"
     },
     "nsis": {
       "oneClick": true,
