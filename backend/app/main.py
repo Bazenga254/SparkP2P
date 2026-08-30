@@ -692,6 +692,64 @@ async def download_b2c_bot():
         raise HTTPException(status_code=502, detail="Could not fetch the latest Mpesa B2C release.")
 
 
+# ── Linux downloads (.deb / .AppImage) ────────────────────────────────────────
+# The Linux builds ship the same two products as separate release assets. The
+# .deb is the primary, Windows-like install (menu entry, apt deps, no FUSE); the
+# .AppImage is the portable, auto-updating alternative. Redirect to the latest
+# release asset by extension, version-independent like the .exe endpoints above.
+_linux_cache: dict = {}
+
+
+async def _linux_asset_url(repo: str, fmt: str) -> str | None:
+    fmt = (fmt or "deb").lower()
+    suffix = ".appimage" if fmt in ("appimage", "app") else ".deb"
+    key = f"{repo}:{suffix}"
+    now = _time.time()
+    hit = _linux_cache.get(key)
+    if hit and now - hit["cached_at"] < _CACHE_TTL:
+        return hit["url"]
+    async with _httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://api.github.com/repos/{repo}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    asset = next((a for a in data.get("assets", []) if a["name"].lower().endswith(suffix)), None)
+    url = asset["browser_download_url"] if asset else None
+    _linux_cache[key] = {"url": url, "cached_at": now}
+    return url
+
+
+@app.get("/api/download/latest-linux")
+async def download_latest_linux(format: str = "deb"):
+    from fastapi import HTTPException
+    try:
+        url = await _linux_asset_url(_GITHUB_REPO, format)
+        if not url:
+            raise HTTPException(status_code=404, detail=f"No Linux {format} asset in the latest release yet.")
+        return RedirectResponse(url, status_code=302)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not fetch the latest Linux release.")
+
+
+@app.get("/api/download/im-bot-linux")
+async def download_im_bot_linux(format: str = "deb"):
+    from fastapi import HTTPException
+    try:
+        url = await _linux_asset_url(_IM_GITHUB_REPO, format)
+        if not url:
+            raise HTTPException(status_code=404, detail=f"No Linux {format} asset in the latest I&M Automation release yet.")
+        return RedirectResponse(url, status_code=302)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not fetch the latest I&M Automation Linux release.")
+
+
 # Serve uploaded support attachments
 _uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
 os.makedirs(os.path.join(_uploads_dir, "support"), exist_ok=True)

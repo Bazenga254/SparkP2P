@@ -30,7 +30,7 @@ const FAQS = [
       },
       {
         q: 'Which operating systems are supported?',
-        a: 'Windows 10 and Windows 11 are fully supported. macOS and Linux versions are in development and coming soon.',
+        a: 'Windows 10 / 11 and Linux (Ubuntu / Debian — .deb installer or portable AppImage) are fully supported. A macOS version is in development.',
       },
       {
         q: 'Does SparkP2P work with any account?',
@@ -598,7 +598,7 @@ export default function Landing() {
           <div className="land-section-header">
             <span className="land-section-tag">Download</span>
             <h2>Get <span className="land-highlight">SparkP2P</span></h2>
-            <p className="land-section-desc">Install once on Windows and automate forever. Auto-updates keep you on the latest version.</p>
+            <p className="land-section-desc">Install once on Windows or Linux and automate forever. Auto-updates keep you on the latest version.</p>
           </div>
           <div className="land-download-grid">
             <div className="land-download-card featured-dl">
@@ -644,15 +644,21 @@ export default function Landing() {
               <p>Intel &amp; Apple Silicon</p>
               <span className="land-download-soon">Coming Soon</span>
             </div>
-            <div className="land-download-card">
-              <div className="land-download-icon muted">
+            <div className="land-download-card featured-dl">
+              <div className="land-download-icon">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
                 </svg>
               </div>
               <h3>Linux</h3>
-              <p>Ubuntu / Debian</p>
-              <span className="land-download-soon">Coming Soon</span>
+              <p>Ubuntu / Debian &nbsp;·&nbsp; 64-bit</p>
+              <a href="/api/download/latest-linux?format=deb" className="land-download-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Download .deb
+              </a>
+              <a href="/api/download/latest-linux?format=appimage" className="land-download-alt" style={{ display:'block', marginTop:10, fontSize:12.5, color:'#8B94A7', textDecoration:'none' }}>or portable .AppImage →</a>
             </div>
           </div>
           <div className="land-download-meta">
@@ -665,6 +671,23 @@ export default function Landing() {
                 Need help installing? View step-by-step guide →
               </Link>
             </p>
+            <details style={{ maxWidth: 720, margin: '22px auto 0', textAlign: 'left', background: '#121722', border: '1px solid #232B3A', borderRadius: 14, padding: '4px 18px' }}>
+              <summary style={{ cursor: 'pointer', padding: '14px 0', fontWeight: 700, color: '#E9EDF4', listStyle: 'none' }}>
+                🐧 Installing on Linux (Ubuntu / Debian) — read this
+              </summary>
+              <div style={{ paddingBottom: 18, color: '#B8C0CE', fontSize: 14, lineHeight: 1.65 }}>
+                <p style={{ margin: '0 0 12px' }}>
+                  <strong style={{ color: '#FFA51F' }}>Double-clicking the <code>.deb</code> won't install it on Ubuntu 24.04</strong> — the App Center only installs Store apps, not local files. Install it from a terminal instead (one command):
+                </p>
+                <pre style={{ background: '#0A0D13', border: '1px solid #232B3A', borderRadius: 10, padding: '12px 14px', overflowX: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: 13, color: '#E9EDF4', margin: '0 0 8px' }}>cd ~/Downloads
+sudo apt install ./sparkp2p_*.deb</pre>
+                <p style={{ margin: '0 0 16px' }}>Enter your password when asked, then launch <strong>SparkP2P</strong> from your applications menu.</p>
+                <p style={{ margin: '0 0 8px', fontWeight: 700, color: '#E9EDF4' }}>Prefer the portable AppImage?</p>
+                <pre style={{ background: '#0A0D13', border: '1px solid #232B3A', borderRadius: 10, padding: '12px 14px', overflowX: 'auto', fontFamily: 'ui-monospace, monospace', fontSize: 13, color: '#E9EDF4', margin: '0 0 8px' }}>chmod +x SparkP2P-*.AppImage
+./SparkP2P-*.AppImage</pre>
+                <p style={{ margin: 0, fontSize: 13, color: '#8B94A7' }}>On Ubuntu 24.04, the AppImage needs FUSE once: <code>sudo apt install libfuse2t64</code> (or run it with <code>--appimage-extract-and-run</code>). The <strong>I&amp;M Automation</strong> companion installs the same way — just use its own <code>.deb</code> filename.</p>
+              </div>
+            </details>
           </div>
         </div>
       </section>
@@ -704,7 +727,8 @@ export default function Landing() {
                 <li>Your bank credentials stay on your machine</li>
               </ul>
               <a href="/api/download/im-bot" className="land-download-btn">Download for Windows</a>
-              <p className="land-product-note">Windows 10 / 11 · 64-bit · Requires a SparkP2P account</p>
+              <a href="/api/download/im-bot-linux?format=deb" className="land-download-alt" style={{ display:'block', marginTop:10, fontSize:12.5, color:'#8B94A7', textDecoration:'none' }}>Linux — download .deb →</a>
+              <p className="land-product-note">Windows 10 / 11 or Ubuntu / Debian · 64-bit · Requires a SparkP2P account</p>
             </div>
 
             {/* Mpesa B2C — pays buys + collects sells on the merchant's own Paybill via Daraja */}
