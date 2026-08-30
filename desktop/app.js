@@ -19,7 +19,11 @@ try { app.commandLine.appendSwitch('disable-gpu-compositing'); } catch (_) {}
 // FATAL) unless started with --no-sandbox. Bake the flag in on Linux so the app just runs on a
 // double-click, with no terminal flags — matching the Windows one-click experience. (No effect on
 // Windows/macOS, where the sandbox works normally.)
-try { if (process.platform === 'linux') app.commandLine.appendSwitch('no-sandbox'); } catch (_) {}
+// --disable-dev-shm-usage makes Chromium use /tmp instead of /dev/shm for its renderer
+// shared memory. On VMs, containers, and minimal Linux setups /dev/shm is often too small or
+// mis-mounted, which crashes the renderer with a FATAL shared-memory error and leaves a BLANK
+// (black) window even though the app itself is fine. This flag hardens the Linux build against it.
+try { if (process.platform === 'linux') { app.commandLine.appendSwitch('no-sandbox'); app.commandLine.appendSwitch('disable-dev-shm-usage'); } } catch (_) {}
 
 // Prefer IPv4 for ALL outbound connections (IMAP, fetch, etc.). Many client machines have
 // broken/blocked IPv6, and Node's happy-eyeballs then throws an opaque "AggregateError"
