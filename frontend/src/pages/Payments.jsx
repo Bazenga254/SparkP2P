@@ -132,6 +132,7 @@ export default function Payments() {
   const [accounts, setAccounts] = useState([]);   // multiple Choice accounts
   const [acctMenu, setAcctMenu] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
+  const [mobileDetail, setMobileDetail] = useState(false);  // mobile only: hub (list) vs detail (form)
 
   const loadBalance = () => {
     if (!user?.id) return;
@@ -164,10 +165,12 @@ export default function Payments() {
   const onItem = (it) => {
     if (!it.ready) { setToast(`${it.label} — coming soon`); setTimeout(() => setToast(''), 2200); return; }
     setActive(it.key);
+    setMobileDetail(true);   // on mobile, open the form full-screen
+    setAcctMenu(false);
   };
 
   const done = () => { loadBalance(); };
-  const cancel = () => setActive('send');
+  const cancel = () => { setActive('send'); setMobileDetail(false); };
 
   // ── Rail-based layout (SparkP2P Payments redesign) ──────────────────────────
   const C = { ink:'#0D1620', ink2:'#131F2B', ink3:'#1A2836', ink4:'#22323F', line:'#22333F', lineSoft:'#1B2A36', paper:'#E9F2F8', muted:'#93AABA', dim:'#64798A', spark:'#F8A81C', sparkSoft:'#FBD07A', ok:'#3FD07A' };
@@ -201,12 +204,6 @@ export default function Payments() {
   ];
   const allItems = RAIL.flatMap((g) => g.items);
   const crumb = (allItems.find((i) => i.key === active) || {}).label || (UTILITY_SERVICES[active] ? 'Utility bill' : '');
-  const navBtn = (on, ready) => ({
-    display:'flex', alignItems:'center', gap:11, padding:'10px 11px', borderRadius:8, width:'100%', textAlign:'left',
-    fontSize:14.5, fontWeight:on?700:550, cursor:ready?'pointer':'default', border:'none',
-    background: on ? C.ink4 : 'transparent', color: on ? '#fff' : (ready ? '#DCE6ED' : C.muted), opacity: ready?1:0.7,
-  });
-
   const flow =
     active === 'send' ? <SendMoney network="mpesa" balance={balance} onDone={done} onCancel={cancel} />
     : active === 'airtel' ? <SendMoney network="airtel" balance={balance} onDone={done} onCancel={cancel} />
@@ -221,83 +218,94 @@ export default function Payments() {
     : active === 'standing' ? <StandingOrders onCancel={cancel} />
     : <div style={{ color:C.muted, padding:'40px 0' }}>Select a payment from the left.</div>;
 
+  const glClass = (group) => group === 'Utility bills' ? 'b' : group === 'Bank' ? 'g' : group === 'Automation' ? 'p' : '';
+
   return (
-    <div style={{ minHeight:'100vh', background:C.ink, color:C.paper, display:'flex', flexDirection:'column' }}>
-      {/* topbar */}
-      <div style={{ display:'flex', alignItems:'center', gap:16, padding:'13px 26px', borderBottom:`1px solid ${C.lineSoft}`, flexWrap:'wrap' }}>
-        <button onClick={() => navigate(-1)} style={{ display:'inline-flex', alignItems:'center', gap:8, padding:'8px 13px 8px 10px', borderRadius:8, border:`1px solid ${C.line}`, background:C.ink2, fontSize:14, color:C.muted, cursor:'pointer' }} aria-label="Back">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg> Back
-        </button>
-        <div style={{ display:'flex', alignItems:'baseline', gap:10, minWidth:0 }}>
-          <h1 style={{ margin:0, fontSize:18, fontWeight:700, letterSpacing:'-.01em' }}>Payments</h1>
-          <span style={{ color:C.ink4 }}>/</span>
-          <span style={{ fontSize:13, color:C.dim }}>{crumb}</span>
-        </div>
-        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:10, position:'relative' }}>
-          <button onClick={() => setAcctMenu((v) => !v)}
-            style={{ display:'inline-flex', alignItems:'center', gap:9, padding:'8px 13px', borderRadius:99, border:`1px solid ${C.line}`, background:C.ink2, fontSize:13.5, color:C.paper, cursor:'pointer' }}>
-            <span style={{ width:8, height:8, borderRadius:99, background:C.ok, display:'block' }} />
-            <span style={{ maxWidth:170, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-              {activeAcct ? (activeAcct.label || activeAcct.account_number) : 'Choice Bank linked'}
-            </span>
+    <div className={'pmx-app' + (mobileDetail ? ' pmx-inDetail' : '')}>
+      <style>{PMX_CSS}</style>
+
+      {/* ── sticky top: title + account switcher ── */}
+      <header className="pmx-top">
+        <div className="pmx-toprow">
+          <button className="pmx-back" aria-label="Back"
+            onClick={() => { if (mobileDetail) setMobileDetail(false); else navigate(-1); }}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <div className="pmx-mid">
+            <div className="pmx-title">{mobileDetail ? (crumb || 'Payment') : 'Payments'}</div>
+            <div className="pmx-sub">Choice Bank</div>
+          </div>
+          <button className="pmx-acct" onClick={() => setAcctMenu((v) => !v)}>
+            <i className="dot" />
+            <span className="nm">{activeAcct ? (activeAcct.label || activeAcct.account_number) : 'Primary'}</span>
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
           </button>
-          {acctMenu && (
-            <div style={{ position:'absolute', top:'calc(100% + 8px)', right:0, width:300, background:C.ink2, border:`1px solid ${C.line}`, borderRadius:12, boxShadow:'0 18px 44px rgba(0,0,0,.5)', zIndex:60, overflow:'hidden' }}>
-              <div style={{ fontSize:11, letterSpacing:'.15em', textTransform:'uppercase', fontWeight:700, color:'#AEC0CE', padding:'12px 14px 6px' }}>Your Choice accounts</div>
-              {accounts.map((a) => (
-                <button key={a.id} onClick={() => switchTo(a)} style={{ display:'flex', alignItems:'center', gap:10, width:'100%', textAlign:'left', padding:'10px 14px', background: a.is_active ? C.ink4 : 'transparent', border:'none', cursor: a.is_active ? 'default' : 'pointer' }}>
-                  <span style={{ width:8, height:8, borderRadius:99, background: a.is_active ? C.ok : C.ink4, display:'block', flex:'0 0 auto' }} />
-                  <span style={{ flex:'1 1 auto', minWidth:0 }}>
-                    <span style={{ display:'block', fontSize:13.5, color:'#fff', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.label || 'Account'}</span>
-                    <span style={{ display:'block', fontSize:11.5, color:C.dim }}>{a.account_number} · {a.account_type === 'sme' ? 'SME' : 'Personal'}</span>
-                  </span>
-                  {a.is_active && <span style={{ fontSize:10.5, letterSpacing:'.08em', textTransform:'uppercase', fontWeight:700, color:C.ok }}>Active</span>}
-                </button>
-              ))}
-              <button onClick={() => { setAcctMenu(false); setShowWizard(true); }}
-                style={{ display:'flex', alignItems:'center', gap:9, width:'100%', textAlign:'left', padding:'12px 14px', borderTop:`1px solid ${C.line}`, background:'transparent', border:'none', color:C.spark, fontSize:13.5, fontWeight:700, cursor:'pointer' }}>
-                <span style={{ fontSize:17, lineHeight:1 }}>+</span> Add SME account
-              </button>
-            </div>
-          )}
         </div>
-      </div>
-
-      {/* body: rail + content */}
-      <div style={{ display:'flex', flex:'1 1 auto', minHeight:0, flexWrap:'wrap' }}>
-        <aside style={{ width:270, flex:'0 0 270px', borderRight:`1px solid ${C.lineSoft}`, background:C.ink2, padding:'18px 14px 24px', display:'flex', flexDirection:'column', gap:20, overflowY:'auto' }}>
-          {/* balance card */}
-          <div style={{ border:`1px solid ${C.line}`, borderRadius:11, padding:'15px 16px', background:`linear-gradient(155deg,#2A2110 0%,${C.ink3} 65%)` }}>
-            <div style={{ fontSize:12, color:C.sparkSoft, fontWeight:600, marginBottom:9 }}>Choice Bank balance</div>
-            <div style={{ fontFamily:'ui-monospace,monospace', fontSize:29, fontWeight:600, letterSpacing:'-.025em', lineHeight:1, color:'#fff' }}>
-              <span style={{ fontSize:'.5em', fontWeight:400, color:C.muted, marginRight:7 }}>KES</span>{balance == null ? '••••' : Number(balance).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2})}
-            </div>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginTop:13 }}>
-              <button onClick={() => { setToast('Deposit to your Choice Bank Paybill to add funds.'); setTimeout(() => setToast(''), 2600); }}
-                style={{ flex:'1 1 auto', textAlign:'center', padding:8, borderRadius:7, background:C.spark, color:'#2A1C02', fontSize:13, fontWeight:700, border:'none', cursor:'pointer' }}>Top up</button>
-              <button onClick={loadBalance} aria-label="Refresh balance" style={{ padding:'8px 10px', borderRadius:7, border:`1px solid ${C.line}`, color:C.muted, background:'transparent', cursor:'pointer' }}>
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5" /></svg>
-              </button>
-            </div>
+        {/* balance bar */}
+        <div className="pmx-balbar">
+          <div className="pmx-balwrap">
+            <div className="pmx-ballab">Choice Bank balance</div>
+            <div className="pmx-balval"><small>KES</small> {balance == null ? '••••••' : Number(balance).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
           </div>
-          {/* nav groups */}
+          <div className="pmx-balbtns">
+            <button className="pmx-refresh" aria-label="Refresh balance" onClick={loadBalance}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5" /></svg>
+            </button>
+            <button className="pmx-topup" onClick={() => { setToast('Deposit to your Choice Bank Paybill to add funds.'); setTimeout(() => setToast(''), 2600); }}>Top up</button>
+          </div>
+        </div>
+      </header>
+
+      {/* account switch menu */}
+      {acctMenu && (
+        <>
+          <div className="pmx-scrim" onClick={() => setAcctMenu(false)} />
+          <div className="pmx-acctmenu">
+            <div className="pmx-amlab">Your Choice accounts</div>
+            {accounts.length === 0 && <div className="pmx-amempty">No accounts linked yet.</div>}
+            {accounts.map((a) => (
+              <button key={a.id} className={'pmx-amitem' + (a.is_active ? ' on' : '')} onClick={() => switchTo(a)} disabled={a.is_active}>
+                <span className="dot" style={{ background: a.is_active ? '#3ECF8E' : '#22323F' }} />
+                <span className="tx">
+                  <b>{a.label || 'Account'}</b>
+                  <span>{a.account_number} · {a.account_type === 'sme' ? 'SME' : 'Personal'}</span>
+                </span>
+                {a.is_active && <span className="act">Active</span>}
+              </button>
+            ))}
+            <button className="pmx-amadd" onClick={() => { setAcctMenu(false); setShowWizard(true); }}>
+              <span className="pl">+</span> Add SME account
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* ── body: hub list (mobile) / sidebar (desktop) + detail ── */}
+      <div className="pmx-body">
+        <aside className="pmx-side">
           {RAIL.map((g) => (
-            <div key={g.group} style={{ display:'flex', flexDirection:'column', gap:3 }}>
-              <div style={{ fontSize:11, letterSpacing:'.17em', textTransform:'uppercase', fontWeight:700, color:'#AEC0CE', padding:'0 10px 7px' }}>{g.group}</div>
-              {g.items.map((it) => (
-                <button key={it.key} onClick={() => onItem(it)} style={navBtn(active === it.key, it.ready)}>
-                  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke={active === it.key ? C.spark : 'currentColor'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{ICON[it.icon]}</svg>
-                  <span style={{ flex:'1 1 auto' }}>{it.label}</span>
-                  {!it.ready && <span style={{ fontSize:10.5, letterSpacing:'.1em', textTransform:'uppercase', fontWeight:700, padding:'3px 7px', borderRadius:5, background:C.ink4, color:C.dim }}>Soon</span>}
-                </button>
-              ))}
+            <div className="pmx-group" key={g.group}>
+              <div className="pmx-grouplab">{g.group}</div>
+              <div className="pmx-list">
+                {g.items.map((it) => (
+                  <button key={it.key}
+                    className={'pmx-item' + (active === it.key ? ' active' : '') + (it.ready ? '' : ' soon')}
+                    onClick={() => onItem(it)}>
+                    <span className={'gl ' + glClass(g.group)}>
+                      <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{ICON[it.icon]}</svg>
+                    </span>
+                    <span className="tx"><b>{it.label}</b></span>
+                    {it.ready ? <span className="ch" aria-hidden="true">›</span> : <span className="pmx-soon">SOON</span>}
+                  </button>
+                ))}
+              </div>
             </div>
           ))}
+          <div className="pmx-sidefoot">Payments run on your linked Choice Bank account. Codes are sent to your registered phone.</div>
         </aside>
 
-        <main style={{ flex:'1 1 420px', minWidth:0, overflowY:'auto', padding:'26px 32px 40px' }}>
-          <div style={{ maxWidth:1180 }}>
+        <main className="pmx-main">
+          <div className="pmx-mainwrap">
             {flow}
             {(active === 'send' || active === 'pesalink' || active === 'other') && <EmailOtpBackup />}
           </div>
@@ -314,6 +322,115 @@ export default function Payments() {
     </div>
   );
 }
+
+// Mobile-first shell styling for the Payments page. Mobile: hub (method list) and
+// detail (the selected form) are swapped full-screen via the .pmx-inDetail class.
+// Desktop (≥900px): sidebar list + content shown side-by-side, .pmx-inDetail is a no-op.
+const PMX_CSS = `
+.pmx-app{min-height:100vh;background:#0A0D13;color:#E9EDF4;display:flex;flex-direction:column;
+  font-family:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;-webkit-tap-highlight-color:transparent}
+.pmx-app *{box-sizing:border-box}
+.pmx-top{position:sticky;top:0;z-index:40;background:rgba(10,13,19,.94);backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);border-bottom:1px solid #212938}
+.pmx-toprow{display:flex;align-items:center;gap:10px;height:58px;padding:0 12px}
+.pmx-back{width:40px;height:40px;flex:0 0 auto;border:0;background:transparent;color:#E9EDF4;border-radius:12px;
+  cursor:pointer;display:none;align-items:center;justify-content:center}
+.pmx-back:active{background:#171E2B}
+.pmx-app.pmx-inDetail .pmx-back{display:flex}
+.pmx-mid{flex:1 1 auto;min-width:0}
+.pmx-title{font-weight:800;font-size:17px;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmx-sub{font-size:12px;color:#8B94A7;margin-top:1px}
+.pmx-acct{flex:0 0 auto;display:inline-flex;align-items:center;gap:8px;height:38px;max-width:190px;padding:0 13px;
+  border-radius:999px;border:1px solid #232B3A;background:#121722;color:#E9EDF4;font-size:13px;cursor:pointer}
+.pmx-acct .dot{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#3ECF8E;display:block}
+.pmx-acct .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmx-balbar{display:flex;align-items:center;gap:12px;padding:11px 16px;
+  background:linear-gradient(90deg,rgba(255,165,31,.10),rgba(255,165,31,.02));border-top:1px solid #171E2B}
+.pmx-balwrap{min-width:0}
+.pmx-ballab{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:10.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:#FFA51F}
+.pmx-balval{font-family:'IBM Plex Mono',ui-monospace,monospace;font-weight:600;font-size:22px;letter-spacing:-.02em;
+  line-height:1.15;color:#fff;margin-top:2px}
+.pmx-balval small{font-size:12px;color:#8B94A7;font-weight:400;margin-right:2px}
+.pmx-balbtns{margin-left:auto;display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.pmx-refresh{width:40px;height:40px;border-radius:11px;border:1px solid #232B3A;background:#121722;color:#8B94A7;
+  cursor:pointer;display:flex;align-items:center;justify-content:center}
+.pmx-refresh:active{background:#171E2B}
+.pmx-topup{height:40px;padding:0 18px;border-radius:11px;border:0;background:#FFA51F;color:#160F00;font-size:14px;
+  font-weight:700;cursor:pointer}
+.pmx-topup:active{filter:brightness(.94)}
+
+.pmx-scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:55}
+.pmx-acctmenu{position:absolute;top:64px;right:12px;width:320px;max-width:calc(100vw - 24px);background:#121722;
+  border:1px solid #232B3A;border-radius:14px;box-shadow:0 22px 54px rgba(0,0,0,.55);z-index:60;overflow:hidden;
+  animation:pmxpop .12s ease}
+@keyframes pmxpop{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.pmx-amlab{font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:#8B94A7;padding:13px 16px 7px}
+.pmx-amempty{padding:4px 16px 14px;color:#8B94A7;font-size:13px}
+.pmx-amitem{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:11px 16px;border:0;
+  background:transparent;cursor:pointer;color:#E9EDF4}
+.pmx-amitem.on{cursor:default}
+.pmx-amitem:not(.on):active{background:#171E2B}
+.pmx-amitem .dot{width:8px;height:8px;flex:0 0 auto;border-radius:50%;display:block}
+.pmx-amitem .tx{flex:1 1 auto;min-width:0}
+.pmx-amitem .tx b{display:block;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmx-amitem .tx span{display:block;font-size:12px;color:#8B94A7;margin-top:1px}
+.pmx-amitem .act{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  font-weight:700;color:#3ECF8E;flex:0 0 auto}
+.pmx-amadd{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:13px 16px;
+  border:0;border-top:1px solid #232B3A;background:transparent;color:#FFA51F;font-size:14px;font-weight:700;cursor:pointer}
+.pmx-amadd .pl{font-size:18px;line-height:1}
+
+.pmx-body{display:flex;flex:1 1 auto;min-height:0}
+.pmx-side{width:100%;padding:8px 14px 40px;overflow-y:auto}
+.pmx-main{display:none;flex:1 1 auto;min-width:0;overflow-y:auto;padding:16px 14px 72px}
+.pmx-app.pmx-inDetail .pmx-side{display:none}
+.pmx-app.pmx-inDetail .pmx-main{display:block}
+.pmx-mainwrap{max-width:1120px;margin:0 auto}
+.pmx-grouplab{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:#8B94A7;margin:20px 4px 10px}
+.pmx-group:first-child .pmx-grouplab{margin-top:12px}
+.pmx-list{background:#121722;border:1px solid #232B3A;border-radius:16px;overflow:hidden}
+.pmx-item{display:flex;align-items:center;gap:14px;width:100%;min-height:60px;padding:11px 15px;background:transparent;
+  border:0;border-bottom:1px solid #1B2230;text-align:left;cursor:pointer;color:#E9EDF4}
+.pmx-item:last-child{border-bottom:0}
+.pmx-item:not(.soon):active{background:#171E2B}
+.pmx-item .gl{width:40px;height:40px;flex:0 0 auto;border-radius:12px;display:flex;align-items:center;
+  justify-content:center;background:rgba(255,165,31,.13);color:#FFA51F}
+.pmx-item .gl.b{background:rgba(91,141,239,.14);color:#5B8DEF}
+.pmx-item .gl.g{background:rgba(62,207,142,.14);color:#3ECF8E}
+.pmx-item .gl.p{background:rgba(168,127,239,.14);color:#A87FEF}
+.pmx-item .tx{flex:1 1 auto;min-width:0}
+.pmx-item .tx b{display:block;font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pmx-item .ch{color:#5B6577;font-size:20px;flex:0 0 auto;line-height:1}
+.pmx-item.soon{opacity:.5}
+.pmx-soon{font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;padding:4px 8px;border-radius:7px;
+  background:#171E2B;color:#8B94A7;flex:0 0 auto}
+.pmx-sidefoot{color:#5B6577;font-size:12px;line-height:1.5;margin:22px 6px 0}
+
+@media (min-width:900px){
+  .pmx-back{display:none !important}
+  .pmx-app.pmx-inDetail .pmx-back{display:none !important}
+  .pmx-title{font-size:18px}
+  .pmx-balbar{padding:11px 26px}
+  .pmx-toprow{padding:0 20px}
+  .pmx-body{display:grid;grid-template-columns:300px 1fr;align-items:start}
+  .pmx-side{border-right:1px solid #171E2B;padding:10px 16px 40px;position:sticky;top:114px;
+    max-height:calc(100vh - 114px);align-self:start}
+  .pmx-main,.pmx-app.pmx-inDetail .pmx-main{display:block}
+  .pmx-app.pmx-inDetail .pmx-side{display:block}
+  .pmx-main{padding:26px 30px 60px}
+  .pmx-list{background:transparent;border:0;border-radius:0}
+  .pmx-item{min-height:44px;padding:8px 11px;border-bottom:0;border-radius:10px;gap:11px}
+  .pmx-item.active{background:#171E2B}
+  .pmx-item .gl{width:32px;height:32px;border-radius:9px}
+  .pmx-item .tx b{font-size:14px}
+  .pmx-item .ch{display:none}
+  .pmx-grouplab{margin:16px 6px 6px}
+  .pmx-group:first-child .pmx-grouplab{margin-top:4px}
+}
+`;
 
 // ── Email-OTP backup: verify the account email so email codes can be used ─────
 // SMS OTPs sometimes don't arrive; once the email is verified, transfers offer a

@@ -7701,6 +7701,34 @@ body {
   .pm-cards{grid-template-columns:repeat(4,1fr)}
 }
 
+/* ── Payments forms: harmonize with the mobile-first shell palette (pmx-*) ── */
+.pm-flow{max-width:480px}
+.pm-flow-head h2{letter-spacing:-.01em}
+.pm-flow-back{color:#8B94A7}
+.pm-tab.on{color:#FFA51F}
+.pm-tab.on:after{background:#FFA51F}
+.pm-card{background:#121722;border-color:#232B3A;border-radius:14px}
+.pm-card:hover{border-color:#FFA51F;background:#161d29}
+.pm-card-lbl{color:#E9EDF4}
+.pm-chip{border-radius:12px}
+.pm-soon{color:#FFA51F;background:rgba(255,165,31,.14)}
+.pm-toast{background:#121722;border-color:#232B3A;color:#E9EDF4;border-radius:12px}
+.pm-eo{background:#121722;border-color:#232B3A;border-radius:14px}
+.pm-eo b,.pm-eo-body b{color:#E9EDF4}
+.pm-eo-btn{background:#FFA51F;color:#160F00;border-radius:10px}
+.pm-field label{color:#C6CEDA;font-weight:600}
+.pm-inp{background:#0A0D13;border-color:#232B3A;color:#E9EDF4;border-radius:12px;height:52px}
+.pm-inp:focus{border-color:#FFA51F;box-shadow:0 0 0 3px rgba(255,165,31,.16)}
+.pm-btn{background:#FFA51F;border-radius:12px;color:#160F00;box-shadow:0 10px 26px -10px rgba(255,165,31,.55)}
+.pm-btn:disabled{background:#1B2230;color:#5B6577;box-shadow:none}
+.pm-otpinfo{background:#0A0D13;border-left-color:#FFA51F;color:#C6CEDA}
+.pm-error{background:rgba(242,99,92,.10);border-color:rgba(242,99,92,.4);color:#F2B5B2}
+.pm-success h2{letter-spacing:-.01em}
+@media (max-width:640px){
+  .pm-flow{max-width:none;padding-top:4px}
+  .pm-flow-head{margin-bottom:16px}
+}
+
 /* ── Financials page redesign (fin-*) ─────────────────────────────────────── */
 .fin-page{--fin-surface2:#0e1420;--fin-border-soft:#182131;--fin-muted:#8b95a5;--fin-dim:#5b6472;
   --fin-green:#22c55e;--fin-green-soft:rgba(34,197,94,.10);--fin-red:#ef4444;--fin-red-soft:rgba(239,68,68,.10);
