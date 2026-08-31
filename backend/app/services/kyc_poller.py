@@ -36,6 +36,21 @@ def _onboarding_id(ks: str) -> str:
     return ""
 
 
+def _extract_choice_name(resp: dict) -> str:
+    """Pull the KYC-verified account holder name out of a Choice onboarding/account response,
+    trying the several field shapes Choice uses (getOnboardingStatus / getAccountDetails)."""
+    if not resp:
+        return ""
+    d = resp.get("data") or resp
+    if not isinstance(d, dict):
+        return ""
+    name = (d.get("accountName") or d.get("customerName") or d.get("accountTitle") or d.get("name") or "")
+    if not name:
+        parts = [d.get("firstName"), d.get("middleName"), d.get("lastName")]
+        name = " ".join(p for p in parts if p)
+    return " ".join(str(name).split()).strip()
+
+
 async def _notify_approved(trader, aid):
     paybill = getattr(settings, "CHOICE_BANK_PAYBILL", "") or ""
     try:
@@ -88,11 +103,21 @@ async def kyc_status_poller():
                 profile_check = int(kd.get("profileCheck") or 0)
 
                 if status == 3:  # Passed
+                    st = {}
                     try:
                         st = await choice.get_onboarding_status(oid)
                         aid = ((st.get("data") or st).get("accountId")) or ""
                     except Exception:
                         aid = ""
+                    # The Choice KYC-verified legal name is authoritative — always adopt it,
+                    # replacing a Google/self-entered display name. Try the onboarding response
+                    # first, then the account details.
+                    official = _extract_choice_name(st)
+                    if not official and aid:
+                        try:
+                            official = _extract_choice_name(await choice.get_account_details(aid))
+                        except Exception:
+                            official = ""
                     # 3) short write session
                     async with async_session() as db:
                         t = await db.get(Trader, tid)
@@ -100,6 +125,10 @@ async def kyc_status_poller():
                             t.choice_account_id = aid or oid
                             t.choice_account_number = aid
                             t.choice_kyc_status = "approved"
+                            if official and official.upper() != (t.full_name or "").strip().upper():
+                                logger.info("[KYC-poller] trader %s name '%s' -> '%s' (Choice KYC)",
+                                            tid, t.full_name, official.upper())
+                                t.full_name = official.upper()
                             await db.commit()
                             logger.info("[KYC-poller] trader %s APPROVED -> account %s", tid, aid)
                             await _notify_approved(t, aid)

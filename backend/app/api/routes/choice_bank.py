@@ -1023,6 +1023,18 @@ async def check_onboarding_status(onboarding_request_id: str, trader_id: int, db
                     trader.choice_account_id     = account_id
                     trader.choice_account_number = account_number
                     trader.choice_kyc_status     = "approved"
+                    # The Choice KYC-verified legal name is authoritative — adopt it over a
+                    # Google/self-entered display name on approval.
+                    try:
+                        from app.services.kyc_poller import _extract_choice_name
+                        official = _extract_choice_name(data)
+                        if not official and account_id:
+                            official = _extract_choice_name(await choice.get_account_details(account_id))
+                        if official and official.upper() != (trader.full_name or "").strip().upper():
+                            logger.info(f"[ChoiceBank] Trader {trader_id} name '{trader.full_name}' -> '{official.upper()}' (Choice KYC)")
+                            trader.full_name = official.upper()
+                    except Exception as _name_err:
+                        logger.warning(f"[ChoiceBank] name adopt failed for {trader_id}: {_name_err}")
                     await db.commit()
                     logger.info(
                         f"[ChoiceBank] Trader {trader_id} account activated: "

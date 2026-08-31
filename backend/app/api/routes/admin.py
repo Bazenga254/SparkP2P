@@ -948,6 +948,42 @@ async def admin_send_test_email(
     return {"ok": ok, "email": trader.email}
 
 
+@router.post("/choice-names/backfill")
+async def backfill_choice_names(
+    dry_run: bool = False,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-off: adopt the Choice-Bank KYC-verified legal name for every already-approved trader,
+    replacing Google/self-entered display names. Pass ?dry_run=true to preview without saving.
+    (New approvals adopt the name automatically in the KYC poller / onboard-status path.)"""
+    from app.services.choice_bank import client as choice
+    from app.services.kyc_poller import _extract_choice_name
+    rows = (await db.execute(select(Trader).where(
+        Trader.choice_kyc_status == "approved",
+        Trader.choice_account_id.isnot(None),
+    ))).scalars().all()
+    updated, checked, skipped = [], 0, 0
+    for t in rows:
+        acc = (t.choice_account_id or "")
+        if not acc or acc.startswith("ONBRD") or acc.startswith("SOBIS"):
+            skipped += 1
+            continue
+        checked += 1
+        try:
+            official = _extract_choice_name(await choice.get_account_details(acc))
+        except Exception:
+            official = ""
+        if official and official.upper() != (t.full_name or "").strip().upper():
+            updated.append({"id": t.id, "old": t.full_name, "new": official.upper()})
+            if not dry_run:
+                t.full_name = official.upper()
+    if not dry_run:
+        await db.commit()
+    return {"dry_run": dry_run, "checked": checked, "skipped": skipped,
+            "updated_count": len(updated), "updated": updated}
+
+
 @router.post("/traders/{trader_id}/backfill-today")
 async def backfill_trader_today(
     trader_id: int,
