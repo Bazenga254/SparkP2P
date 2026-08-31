@@ -3,9 +3,10 @@ import { useAuth } from '../context/AuthContext';
 import api, { getProfile, getWallet, getOrderStats, getOrders, exportOrders, requestWithdrawal, requestWithdrawalOtp, getWalletTransactions, getSessionHealth, getBinanceAccountData, getMarketPrices, getMyAdPrices, getTodayStats, postBotLog, getMyBotLogs, initiateDeposit, getDepositHistory, checkDepositStatus, internalTransfer, getSystemStatus, getMyAffiliate, getMyReferrals, getMyPayouts, applyForAffiliate, updateProfile, choiceGetBalance, choiceDeposit, choiceDepositStatus, getMyTransactions, reverseChoiceTransaction, getCbWithdrawalBank, saveCbWithdrawalBank, cbWithdrawToBank, cbWithdrawInitiate, cbWithdrawToMpesaInitiate, getCbBankAccounts, initiateSubscription, getSubscriptionStatus, getCredits, buyCredits, getRateLimit, getPaymentInfo, payChoiceInitiate, payChoiceConfirm, subscriptionDepositInitiate, generateChoiceStatement, choiceStatementStatus, checkChoiceTransaction } from '../services/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { isNative } from '../mobile/relayAgent';
-import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone, Lock } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle, ArrowDown, ArrowUp, RefreshCw, LogOut, Settings, Clock, Shield, Plus, X, Bell, Copy, CreditCard, Eye, EyeOff, MessageSquare, Activity, BarChart2, DollarSign, Repeat, SlidersHorizontal, Share2, Users, ChevronDown, ChevronUp, ChevronRight, LayoutDashboard, List, ArrowRightLeft, MoreHorizontal, Wifi, Megaphone, Lock, Link2 } from 'lucide-react';
 import SettingsPanel from '../components/SettingsPanel';
 import AdsPanel from '../components/AdsPanel';
+import ShareLinks from '../components/ShareLinks';
 import { kycCreateSession } from '../services/api';
 import SupportChat from '../components/SupportChat';
 import PriceTracker from '../components/PriceTracker';
@@ -2173,6 +2174,15 @@ export default function Dashboard() {
           >
             <CreditCard size={16} /><span>My Paybill</span>
           </button>
+          <button
+            className={`dsb-nav-item${activeTab === 'links' ? ' dsb-active' : ''}${tabLocked('links') ? ' dsb-locked' : ''}`}
+            onClick={() => { if (!tabLocked('links')) setActiveTab('links'); }}
+            aria-disabled={tabLocked('links')}
+            title={tabLocked('links') ? 'Frozen while your account is suspended' : undefined}
+          >
+            <Link2 size={16} /><span>Links</span>
+            {tabLocked('links') && <Lock size={12} style={{ marginLeft: 'auto' }} />}
+          </button>
 
           {/* Setup nav */}
           <div className="dsb-section-label">Setup</div>
@@ -2921,6 +2931,7 @@ export default function Dashboard() {
         {activeTab === 'settings' && <SettingsPanel profile={profile} onUpdate={loadData} initialSection={settingsInitialSection} />}
 
         {activeTab === 'ads' && <AdsPanel />}
+        {activeTab === 'links' && <ShareLinks profile={profile} />}
 
         {/* ── Profit Tab ── */}
         {activeTab === 'profit' && (rateLimit?.locked

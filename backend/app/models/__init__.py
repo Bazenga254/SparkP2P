@@ -22,6 +22,7 @@ from app.models.ad_automation import AdAutomation
 from app.models.platform_setting import PlatformSetting
 from app.models.standing_order import StandingOrder
 from app.models.choice_account import ChoiceAccount
+from app.models.account_share_link import AccountShareLink
 from app.models.email_message import EmailMessage
 from app.models.email_attachment import EmailAttachment
 
@@ -44,4 +45,5 @@ __all__ = [
     "MerchantApiKey",
     "StandingOrder",
     "ChoiceAccount",
+    "AccountShareLink",
 ]

@@ -15,6 +15,50 @@ import { getProfile, getSurveyResponses, sendSurveyInvite, getEmployees, updateE
 const isPlaceholderAcct = (id) => !!id && /^(ONBRD|SOBIS)/i.test(String(id));
 const acctLabel = (id) => (isPlaceholderAcct(id) ? 'Being created…' : id);
 
+// Admin-side management of a trader's shareable read-only account links. The admin can unlock
+// (after 4 failed passwords only an admin can), suspend, resume or delete — but NEVER sees a
+// password (only the bcrypt hash is stored, and it is never returned by the API).
+function AdminShareLinks({ traderId }) {
+  const [links, setLinks] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const load = () => api.get(`/admin/share-links/trader/${traderId}`).then(r => setLinks(r.data?.links || [])).catch(() => setLinks([]));
+  useEffect(() => { load(); }, [traderId]);
+  const run = async (id, fn) => { setBusy(id); try { await fn(); await load(); } catch { /* ignore */ } finally { setBusy(null); } };
+  if (links === null) return null;
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div className="tdx-sec-label" style={{ margin: '0 0 12px' }}>Shared account links ({links.length})</div>
+      <div className="card"><div className="card-b">
+        {links.length === 0 ? (
+          <div className="muted" style={{ padding: '4px 0' }}>No shared links. The merchant creates these under “Links” in their dashboard.</div>
+        ) : links.map(l => (
+          <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderTop: '1px solid var(--line)', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                {l.label}
+                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', padding: '2px 7px', borderRadius: 5,
+                  color: l.status === 'active' ? 'var(--pos)' : l.status === 'locked' ? 'var(--neg)' : 'var(--text-3)',
+                  background: l.status === 'active' ? 'rgba(62,207,142,.12)' : l.status === 'locked' ? 'rgba(242,99,92,.12)' : 'var(--line)' }}>{l.status}</span>
+              </div>
+              <div className="num" style={{ fontSize: 12, color: 'var(--text-3)', wordBreak: 'break-all' }}>{l.url}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 2 }}>
+                {l.show_transactions ? 'tx visible' : 'tx hidden'} · {l.allow_deposit ? 'deposits on' : 'deposits off'} · {l.view_count} views · {l.failed_attempts} failed
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {l.locked && <button className="ghost-btn" disabled={busy === l.id} onClick={() => run(l.id, () => api.post(`/admin/share-links/${l.id}/unlock`))}>Unlock</button>}
+              {l.status === 'active' && <button className="ghost-btn" disabled={busy === l.id} onClick={() => run(l.id, () => api.post(`/admin/share-links/${l.id}/status`, { status: 'suspended' }))}>Suspend</button>}
+              {l.status === 'suspended' && <button className="ghost-btn" disabled={busy === l.id} onClick={() => run(l.id, () => api.post(`/admin/share-links/${l.id}/status`, { status: 'active' }))}>Resume</button>}
+              <button className="ghost-btn" style={{ color: 'var(--neg)' }} disabled={busy === l.id} onClick={() => { if (window.confirm('Delete this link? Anyone using it loses access immediately.')) run(l.id, () => api.delete(`/admin/share-links/${l.id}`)); }}>Delete</button>
+            </div>
+          </div>
+        ))}
+        <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>🔒 Passwords are never shown — you can unlock, suspend or delete, but not view a password.</div>
+      </div></div>
+    </div>
+  );
+}
+
 // Admin-side Choice Bank account switcher (shown in a trader's Bank & payouts tab when the
 // trader holds more than one Choice account, e.g. personal + SME). Self-contained: loads its
 // own list and calls the admin switch endpoint. Switching repoints the trader's mirror fields,
@@ -3636,6 +3680,7 @@ export default function Admin() {
                         </div>
                         </div>
                         </div>
+                        <div style={{ gridColumn: '1 / -1' }}><AdminShareLinks traderId={t.id} /></div>
                       </div>
                     )}
 

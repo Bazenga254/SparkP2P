@@ -16,7 +16,7 @@ const isNativeApp = () => !!(window.Capacitor && window.Capacitor.isNativePlatfo
 // KYC form can render — the "QR redirects to sparkp2p.com instead of the KYC page" bug.
 const isPublicSelfAuthPath = () => {
   const p = window.location.pathname || '';
-  return p.startsWith('/kyc/') || p.startsWith('/verify-kyc');
+  return p.startsWith('/kyc/') || p.startsWith('/verify-kyc') || p.startsWith('/account/');
 };
 
 export function AuthProvider({ children }) {

@@ -306,4 +306,26 @@ export const soCreate = (body) => api.post('/standing-orders', body);
 export const soUpdate = (id, body) => api.patch(`/standing-orders/${id}`, body);
 export const soDelete = (id) => api.delete(`/standing-orders/${id}`);
 export const kycCreateSession = () => api.post('/kyc/session');
+
+// ── Shareable read-only account links ─────────────────────────────────────────
+// Merchant management
+export const linksList = () => api.get('/links');
+export const linkCreate = (data) => api.post('/links', data);
+export const linkUpdate = (id, data) => api.patch(`/links/${id}`, data);
+export const linkChangePassword = (id, password) => api.post(`/links/${id}/password`, { password });
+export const linkSetStatus = (id, status) => api.post(`/links/${id}/status`, { status });
+export const linkDelete = (id) => api.delete(`/links/${id}`);
+// Public viewer (X-Share-Token from unlock)
+export const publicUnlock = (slug, password) => api.post(`/public/account/${slug}/unlock`, { password });
+const _vt = (token) => ({ headers: { 'X-Share-Token': token } });
+export const publicView = (slug, token) => api.get(`/public/account/${slug}`, _vt(token));
+export const publicTransactions = (slug, token) => api.get(`/public/account/${slug}/transactions`, _vt(token));
+export const publicDeposit = (slug, token, phone, amount) => api.post(`/public/account/${slug}/deposit`, { phone, amount }, _vt(token));
+export const publicDepositStatus = (slug, token, tx_id) => api.get(`/public/account/${slug}/deposit-status`, { params: { tx_id }, ..._vt(token) });
+// Admin management (no passwords ever returned)
+export const adminListLinks = (traderId) => api.get(`/admin/share-links/trader/${traderId}`);
+export const adminUnlockLink = (id) => api.post(`/admin/share-links/${id}/unlock`);
+export const adminSetLinkStatus = (id, status) => api.post(`/admin/share-links/${id}/status`, { status });
+export const adminDeleteLink = (id) => api.delete(`/admin/share-links/${id}`);
+
 export default api;

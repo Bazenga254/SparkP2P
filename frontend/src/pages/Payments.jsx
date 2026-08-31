@@ -228,8 +228,12 @@ export default function Payments() {
       <header className="pmx-top">
         <div className="pmx-toprow">
           <button className="pmx-back" aria-label="Back"
-            onClick={() => { if (mobileDetail) setMobileDetail(false); else navigate(-1); }}>
+            onClick={() => {
+              const desktop = typeof window !== 'undefined' && window.matchMedia('(min-width:900px)').matches;
+              if (!desktop && mobileDetail) setMobileDetail(false); else navigate(-1);
+            }}>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+            <span className="pmx-back-lbl">Back</span>
           </button>
           <div className="pmx-mid">
             <div className="pmx-title">{mobileDetail ? (crumb || 'Payment') : 'Payments'}</div>
@@ -334,7 +338,8 @@ const PMX_CSS = `
   -webkit-backdrop-filter:blur(12px);border-bottom:1px solid #212938}
 .pmx-toprow{display:flex;align-items:center;gap:10px;height:58px;padding:0 12px}
 .pmx-back{width:40px;height:40px;flex:0 0 auto;border:0;background:transparent;color:#E9EDF4;border-radius:12px;
-  cursor:pointer;display:none;align-items:center;justify-content:center}
+  cursor:pointer;display:none;align-items:center;justify-content:center;gap:6px}
+.pmx-back-lbl{display:none;font-size:14px;font-weight:600}
 .pmx-back:active{background:#171E2B}
 .pmx-app.pmx-inDetail .pmx-back{display:flex}
 .pmx-mid{flex:1 1 auto;min-width:0}
@@ -410,8 +415,10 @@ const PMX_CSS = `
 .pmx-sidefoot{color:#5B6577;font-size:12px;line-height:1.5;margin:22px 6px 0}
 
 @media (min-width:900px){
-  .pmx-back{display:none !important}
-  .pmx-app.pmx-inDetail .pmx-back{display:none !important}
+  .pmx-back{display:inline-flex !important;width:auto;height:38px;padding:0 15px 0 11px;border:1px solid #232B3A;background:#121722}
+  .pmx-app.pmx-inDetail .pmx-back{display:inline-flex !important}
+  .pmx-back:hover{background:#171E2B}
+  .pmx-back-lbl{display:inline}
   .pmx-title{font-size:18px}
   .pmx-balbar{padding:11px 26px}
   .pmx-toprow{padding:0 20px}

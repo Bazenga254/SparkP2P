@@ -18,7 +18,7 @@ export default function BiometricGate({ children }) {
   // Don't lock during the in-app KYC flow: capturing ID/selfie photos backgrounds the app (camera),
   // and re-locking mid-verification would dump the user back to "sign in" and lose their progress.
   const onVerifyRoute = () => {
-    try { const p = window.location.pathname; return p.startsWith('/kyc/') || p.startsWith('/verify-kyc'); } catch (_) { return false; }
+    try { const p = window.location.pathname; return p.startsWith('/kyc/') || p.startsWith('/verify-kyc') || p.startsWith('/account/'); } catch (_) { return false; }
   };
   const skipLock = () => finishingOAuth() || onVerifyRoute();
   const [locked, setLocked] = useState(() => native && bioEnabled() && hasToken() && !skipLock());

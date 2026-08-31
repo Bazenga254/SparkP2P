@@ -22,6 +22,7 @@ import './App.css';
 
 import KycVerifyPage from './pages/KycVerifyPage';
 import KycMobilePage from './pages/KycMobilePage';
+import PublicAccount from './pages/PublicAccount';
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="loading">Loading...</div>;
@@ -75,6 +76,7 @@ function App() {
           <Route path="/survey" element={<Survey />} />
           <Route path="/verify-kyc" element={<KycVerifyPage />} />
       <Route path="/kyc/:token" element={<KycMobilePage />} />
+      <Route path="/account/:slug" element={<PublicAccount />} />
       <Route path="*" element={<Navigate to="/dashboard" />} />
         </Routes>
         </BiometricGate>
