@@ -5656,6 +5656,7 @@ export default function Dashboard() {
               { key: 'logs',         label: 'Bot Logs',    icon: Activity    },
               { key: 'configure',    label: 'Configure',   icon: SlidersHorizontal },
               { key: 'paybill',      label: 'My Paybill',  icon: CreditCard  },
+              { key: 'links',        label: 'Links',       icon: Link2       },
               ...(affiliateVisible ? [{ key: 'affiliates', label: 'Affiliates', icon: Share2 }] : []),
               { key: 'credits',      label: 'Subscriptions', icon: DollarSign  },
             ].map(({ key, label, icon: Icon }) => {
