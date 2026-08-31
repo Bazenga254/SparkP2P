@@ -312,11 +312,11 @@ export const kycCreateSession = () => api.post('/kyc/session');
 export const linksList = () => api.get('/links');
 export const linkCreate = (data) => api.post('/links', data);
 export const linkUpdate = (id, data) => api.patch(`/links/${id}`, data);
-export const linkChangePassword = (id, password) => api.post(`/links/${id}/password`, { password });
+export const linkChangePin = (id, pin, recipient_phone) => api.post(`/links/${id}/password`, { pin, recipient_phone });
 export const linkSetStatus = (id, status) => api.post(`/links/${id}/status`, { status });
 export const linkDelete = (id) => api.delete(`/links/${id}`);
 // Public viewer (X-Share-Token from unlock)
-export const publicUnlock = (slug, password) => api.post(`/public/account/${slug}/unlock`, { password });
+export const publicUnlock = (slug, pin) => api.post(`/public/account/${slug}/unlock`, { pin });
 const _vt = (token) => ({ headers: { 'X-Share-Token': token } });
 export const publicView = (slug, token) => api.get(`/public/account/${slug}`, _vt(token));
 export const publicTransactions = (slug, token) => api.get(`/public/account/${slug}/transactions`, _vt(token));

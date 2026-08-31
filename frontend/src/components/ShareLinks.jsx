@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link2, Copy, Trash2, Lock, Eye, EyeOff, Plus, KeyRound, PauseCircle, PlayCircle, Check } from 'lucide-react';
-import { linksList, linkCreate, linkUpdate, linkChangePassword, linkSetStatus, linkDelete } from '../services/api';
+import { linksList, linkCreate, linkUpdate, linkChangePin, linkSetStatus, linkDelete } from '../services/api';
 
 const C = { card: '#131722', line: '#232B3A', ink: '#0A0D13', text: '#E9EDF4', muted: '#8B94A7', amber: '#FFA51F', mint: '#3ECF8E', red: '#F2635C', blue: '#5B8DEF' };
 
@@ -50,7 +50,7 @@ export default function ShareLinks({ profile }) {
         </div>
       )}
 
-      {showCreate && <CreateModal onClose={() => setShowCreate(false)} onDone={() => { setShowCreate(false); load(); flash('Link created'); }} />}
+      {showCreate && <CreateModal onClose={() => setShowCreate(false)} onDone={(smsSent) => { setShowCreate(false); load(); flash(smsSent ? 'Link created & sent by SMS' : 'Link created'); }} />}
       {toast && <div style={{ position: 'fixed', left: '50%', bottom: 30, transform: 'translateX(-50%)', background: '#1a2029', color: '#fff', padding: '11px 20px', borderRadius: 10, zIndex: 90, boxShadow: '0 10px 30px rgba(0,0,0,.4)', fontSize: 14 }}>{toast}</div>}
     </div>
   );
@@ -64,6 +64,7 @@ function LinkRow({ link, onChanged, onCopy, flash }) {
   const [busy, setBusy] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
   const [pw, setPw] = useState('');
+  const [pwPhone, setPwPhone] = useState('');
 
   const toggle = async (field) => {
     setBusy(true);
@@ -79,9 +80,13 @@ function LinkRow({ link, onChanged, onCopy, flash }) {
     try { await linkDelete(link.id); onChanged(); flash('Link deleted'); } catch { flash('Could not delete'); } finally { setBusy(false); }
   };
   const changePw = async () => {
-    if (pw.length < 4) { flash('Password must be at least 4 characters'); return; }
+    if (!/^\d{4,6}$/.test(pw)) { flash('PIN must be 4 to 6 digits'); return; }
     setBusy(true);
-    try { await linkChangePassword(link.id, pw); setPw(''); setPwOpen(false); onChanged(); flash('Password changed'); } catch (e) { flash(e.response?.data?.detail || 'Could not change'); } finally { setBusy(false); }
+    try {
+      const r = await linkChangePin(link.id, pw, pwPhone.trim() || undefined);
+      setPw(''); setPwPhone(''); setPwOpen(false); onChanged();
+      flash(r.data?.sms_sent ? 'PIN changed & sent by SMS' : 'PIN changed');
+    } catch (e) { flash(e.response?.data?.detail || 'Could not change'); } finally { setBusy(false); }
   };
 
   const statusColor = link.status === 'active' ? C.mint : link.status === 'locked' ? C.red : C.muted;
@@ -94,6 +99,7 @@ function LinkRow({ link, onChanged, onCopy, flash }) {
         {link.locked && <span style={{ fontSize: 11.5, color: C.red, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Lock size={12} /> locked — ask an admin to unlock</span>}
         <span style={{ marginLeft: 'auto', fontSize: 12, color: C.muted }}>{link.view_count} view{link.view_count === 1 ? '' : 's'}</span>
       </div>
+      {link.recipient_phone && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>📱 sent by SMS to {link.recipient_phone}</div>}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: '9px 11px' }}>
         <span style={{ flex: 1, minWidth: 0, fontFamily: 'ui-monospace,monospace', fontSize: 12.5, color: C.blue, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{link.url}</span>
@@ -108,16 +114,18 @@ function LinkRow({ link, onChanged, onCopy, flash }) {
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
-        <button onClick={() => setPwOpen((v) => !v)} disabled={busy} style={actBtn}><KeyRound size={14} /> Change password</button>
+        <button onClick={() => setPwOpen((v) => !v)} disabled={busy} style={actBtn}><KeyRound size={14} /> Change PIN</button>
         {link.status === 'active' && <button onClick={() => setStatus('suspended')} disabled={busy} style={actBtn}><PauseCircle size={14} /> Suspend</button>}
         {link.status === 'suspended' && <button onClick={() => setStatus('active')} disabled={busy} style={actBtn}><PlayCircle size={14} /> Resume</button>}
         <button onClick={del} disabled={busy} style={{ ...actBtn, color: C.red, borderColor: '#3a2530' }}><Trash2 size={14} /> Delete</button>
       </div>
 
       {pwOpen && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <input type="text" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password (min 4 chars)"
-            style={{ flex: 1, background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: '10px 12px', color: C.text, fontSize: 14 }} />
+        <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+          <input type="text" inputMode="numeric" value={pw} maxLength={6} onChange={(e) => setPw(e.target.value.replace(/\D/g, ''))} placeholder="New PIN (4–6 digits)"
+            style={{ flex: '1 1 130px', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: '10px 12px', color: C.text, fontSize: 14 }} />
+          <input type="text" inputMode="numeric" value={pwPhone} onChange={(e) => setPwPhone(e.target.value)} placeholder="SMS to (optional, 07…)"
+            style={{ flex: '1 1 150px', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 9, padding: '10px 12px', color: C.text, fontSize: 14 }} />
           <button onClick={changePw} disabled={busy} style={{ ...actBtn, background: C.amber, color: '#160F00', border: 0 }}><Check size={14} /> Save</button>
         </div>
       )}
@@ -137,7 +145,8 @@ function Chip({ on, onClick, disabled, icon, label }) {
 
 function CreateModal({ onClose, onDone }) {
   const [label, setLabel] = useState('');
-  const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
   const [showTx, setShowTx] = useState(true);
   const [allowDep, setAllowDep] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -145,9 +154,12 @@ function CreateModal({ onClose, onDone }) {
 
   const submit = async () => {
     setErr('');
-    if (password.length < 4) { setErr('Password must be at least 4 characters.'); return; }
+    if (!/^\d{4,6}$/.test(pin)) { setErr('PIN must be 4 to 6 digits.'); return; }
     setBusy(true);
-    try { await linkCreate({ label, password, show_transactions: showTx, allow_deposit: allowDep }); onDone(); }
+    try {
+      const r = await linkCreate({ label, pin, show_transactions: showTx, allow_deposit: allowDep, recipient_phone: recipientPhone.trim() || undefined });
+      onDone(r.data?.sms_sent);
+    }
     catch (e) { setErr(e.response?.data?.detail || 'Could not create the link.'); }
     finally { setBusy(false); }
   };
@@ -161,8 +173,11 @@ function CreateModal({ onClose, onDone }) {
         <label style={lbl}>Name (only you see this)</label>
         <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Family, Suppliers" style={inp} />
 
-        <label style={lbl}>Password for viewers</label>
-        <input type="text" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Set a password to share" style={inp} />
+        <label style={lbl}>PIN for viewers (4–6 digits)</label>
+        <input type="text" inputMode="numeric" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 1234" style={{ ...inp, letterSpacing: '3px', fontFamily: 'ui-monospace,monospace' }} />
+
+        <label style={lbl}>Send by SMS to (optional)</label>
+        <input type="text" inputMode="numeric" value={recipientPhone} onChange={(e) => setRecipientPhone(e.target.value)} placeholder="07XX XXX XXX — texts the link + PIN" style={inp} />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '6px 0 16px' }}>
           <Toggle on={showTx} set={setShowTx} label="Let viewers see transactions & payer names" />

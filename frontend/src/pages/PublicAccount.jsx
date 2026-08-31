@@ -47,17 +47,18 @@ export default function PublicAccount() {
             <LockIcon />
           </div>
           <h1 style={{ fontSize: 21, fontWeight: 800, margin: '0 0 6px', color: C.text }}>Account view</h1>
-          <p style={{ color: C.muted, fontSize: 14, margin: '0 0 22px' }}>Enter the password you were given to see this account.</p>
+          <p style={{ color: C.muted, fontSize: 14, margin: '0 0 22px' }}>Enter the PIN you were given to see this account.</p>
           {locked ? (
             <div style={{ background: 'rgba(242,99,92,.1)', border: '1px solid #3a2530', borderRadius: 12, padding: 16, color: C.red, fontSize: 13.5 }}>
-              🔒 This link is locked after too many wrong passwords. Please contact the account owner to have it unlocked.
+              🔒 This link is locked after too many wrong PINs. Please contact the account owner to have it unlocked.
             </div>
           ) : (
             <>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              <input type="password" inputMode="numeric" maxLength={6} value={password}
+                onChange={(e) => setPassword(e.target.value.replace(/\D/g, ''))}
                 onKeyDown={(e) => e.key === 'Enter' && !busy && unlock()}
-                placeholder="Password" autoFocus
-                style={{ width: '100%', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 11, padding: '13px 14px', color: C.text, fontSize: 15, boxSizing: 'border-box', textAlign: 'center' }} />
+                placeholder="• • • •" autoFocus
+                style={{ width: '100%', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 11, padding: '13px 14px', color: C.text, fontSize: 22, letterSpacing: '8px', boxSizing: 'border-box', textAlign: 'center', fontFamily: 'ui-monospace,monospace' }} />
               {err && <div style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</div>}
               <button onClick={unlock} disabled={busy || !password}
                 style={{ width: '100%', marginTop: 14, background: C.amber, color: '#160F00', border: 0, borderRadius: 11, padding: 13, fontWeight: 700, fontSize: 15, cursor: 'pointer', opacity: busy || !password ? .6 : 1 }}>

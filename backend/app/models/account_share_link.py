@@ -24,7 +24,8 @@ class AccountShareLink(Base):
     choice_account_number = Column(String(50), nullable=True)
 
     label = Column(String(120), nullable=True)                # e.g. "Family view", "Suppliers"
-    password_hash = Column(String(255), nullable=False)       # bcrypt; NEVER exposed
+    password_hash = Column(String(255), nullable=False)       # bcrypt of the PIN; NEVER exposed
+    recipient_phone = Column(String(20), nullable=True)       # who the link was SMS'd to (for re-send)
 
     show_transactions = Column(Boolean, nullable=False, default=True)   # per-link viewer toggle
     allow_deposit = Column(Boolean, nullable=False, default=True)       # let viewers STK-deposit

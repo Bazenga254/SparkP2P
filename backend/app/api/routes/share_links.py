@@ -29,11 +29,27 @@ from app.models import Payment, PaymentDirection, PaymentStatus
 from app.models.trader import Trader
 from app.models.account_share_link import AccountShareLink
 from app.services.choice_bank import client as choice
+from app.services.sms import send_sms
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_FAILED = 4
+
+
+def _valid_pin(pin: str) -> bool:
+    return bool(pin) and pin.isdigit() and 4 <= len(pin) <= 6
+
+
+def _sms_link(phone: str | None, url: str, pin: str, label: str) -> None:
+    """Text the recipient the link + PIN. Best-effort — never blocks link creation."""
+    if not phone:
+        return
+    try:
+        send_sms(phone, f"You've been given access to a SparkP2P account ({label}). "
+                        f"View balance & deposit here: {url} PIN: {pin}. Keep your PIN private.")
+    except Exception as exc:
+        logger.warning("[ShareLink] SMS send failed: %s", exc)
 VIEW_TOKEN_MINUTES = 30
 CHOICE_TX_TYPES = ["CHOICE_DEPOSIT", "CHOICE_INBOUND", "CHOICE_OUTBOUND"]
 
@@ -56,6 +72,7 @@ def _link_out(l: AccountShareLink, include_url: bool = True) -> dict:
         "locked": l.status == "locked",
         "account_number": l.choice_account_number,
         "created_by": l.created_by,
+        "recipient_phone": ("•" * max(0, len(l.recipient_phone) - 4) + l.recipient_phone[-4:]) if l.recipient_phone else None,
         "view_count": l.view_count,
         "last_viewed_at": l.last_viewed_at.isoformat() if l.last_viewed_at else None,
         "created_at": l.created_at.isoformat() if l.created_at else None,
@@ -109,9 +126,10 @@ async def _get_link_owned(link_id: int, trader: Trader, db: AsyncSession) -> Acc
 # ══════════════════════════════════════════════════════════════════════════════
 class CreateLink(BaseModel):
     label: str | None = None
-    password: str
+    pin: str
     show_transactions: bool = True
     allow_deposit: bool = True
+    recipient_phone: str | None = None
 
 
 @router.post("/links")
@@ -119,24 +137,29 @@ async def create_link(body: CreateLink, trader: Trader = Depends(get_current_tra
                       db: AsyncSession = Depends(get_db)):
     if not trader.choice_account_id:
         raise HTTPException(status_code=400, detail="Link a Choice Bank account first.")
-    if not body.password or len(body.password) < 4:
-        raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
+    if not _valid_pin(body.pin):
+        raise HTTPException(status_code=400, detail="PIN must be 4 to 6 digits.")
     slug = secrets.token_urlsafe(8)[:12]
+    phone = (body.recipient_phone or "").strip() or None
     link = AccountShareLink(
         slug=slug,
         trader_id=trader.id,
         choice_account_id=trader.choice_account_id,
         choice_account_number=trader.choice_account_number,
         label=(body.label or "").strip()[:120] or "Account view",
-        password_hash=hash_password(body.password),
+        password_hash=hash_password(body.pin),
         show_transactions=bool(body.show_transactions),
         allow_deposit=bool(body.allow_deposit),
+        recipient_phone=phone,
         created_by="merchant",
     )
     db.add(link)
     await db.commit()
     await db.refresh(link)
-    return _link_out(link)
+    _sms_link(phone, _public_url(slug), body.pin, link.label)
+    out = _link_out(link)
+    out["sms_sent"] = bool(phone)
+    return out
 
 
 @router.get("/links")
@@ -169,22 +192,27 @@ async def update_link(link_id: int, body: UpdateLink,
     return _link_out(l)
 
 
-class ChangePassword(BaseModel):
-    password: str
+class ChangePin(BaseModel):
+    pin: str
+    recipient_phone: str | None = None   # optional: re-send the new PIN by SMS
 
 
 @router.post("/links/{link_id}/password")
-async def change_password(link_id: int, body: ChangePassword,
-                          trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
-    if not body.password or len(body.password) < 4:
-        raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
+async def change_pin(link_id: int, body: ChangePin,
+                     trader: Trader = Depends(get_current_trader), db: AsyncSession = Depends(get_db)):
+    if not _valid_pin(body.pin):
+        raise HTTPException(status_code=400, detail="PIN must be 4 to 6 digits.")
     l = await _get_link_owned(link_id, trader, db)
-    l.password_hash = hash_password(body.password)
+    l.password_hash = hash_password(body.pin)
     l.failed_attempts = 0
     if l.status == "locked":
-        l.status = "active"   # a fresh password clears an owner-side lock
+        l.status = "active"   # a fresh PIN clears an owner-side lock
+    phone = (body.recipient_phone or "").strip() or l.recipient_phone
+    if phone:
+        l.recipient_phone = phone
     await db.commit()
-    return {"ok": True}
+    _sms_link(phone, _public_url(l.slug), body.pin, l.label)
+    return {"ok": True, "sms_sent": bool(phone)}
 
 
 class SetStatus(BaseModel):
@@ -217,7 +245,7 @@ async def delete_link(link_id: int, trader: Trader = Depends(get_current_trader)
 # PUBLIC — password-gated read-only view + deposit (no auth)
 # ══════════════════════════════════════════════════════════════════════════════
 class Unlock(BaseModel):
-    password: str
+    pin: str
 
 
 @router.post("/public/account/{slug}/unlock")
@@ -228,9 +256,9 @@ async def unlock(slug: str, body: Unlock, db: AsyncSession = Depends(get_db)):
     if link.status == "suspended":
         raise HTTPException(status_code=403, detail="This link has been suspended by its owner.")
     if link.status == "locked":
-        raise HTTPException(status_code=423, detail="This link is locked after too many wrong passwords. Contact the owner.")
+        raise HTTPException(status_code=423, detail="This link is locked after too many wrong PINs. Contact the owner.")
 
-    if not verify_password(body.password or "", link.password_hash):
+    if not verify_password(body.pin or "", link.password_hash):
         link.failed_attempts = (link.failed_attempts or 0) + 1
         if link.failed_attempts >= MAX_FAILED:
             link.status = "locked"
@@ -238,7 +266,7 @@ async def unlock(slug: str, body: Unlock, db: AsyncSession = Depends(get_db)):
         if link.status == "locked":
             raise HTTPException(status_code=423, detail="Too many wrong attempts — the link is now locked.")
         left = MAX_FAILED - link.failed_attempts
-        raise HTTPException(status_code=401, detail=f"Wrong password. {left} attempt(s) left before the link locks.")
+        raise HTTPException(status_code=401, detail=f"Wrong PIN. {left} attempt(s) left before the link locks.")
 
     link.failed_attempts = 0
     link.view_count = (link.view_count or 0) + 1
