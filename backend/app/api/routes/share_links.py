@@ -85,8 +85,11 @@ def _link_out(l: AccountShareLink, include_url: bool = True) -> dict:
 async def _account_snapshot(link: AccountShareLink) -> dict:
     """Live balance + paybill/account numbers for the link's Choice account."""
     acct_id = link.choice_account_id
+    # Choice's account API rarely returns a per-account shortCode; the paybill is the shared
+    # Choice Bank paybill (444174) and the account NUMBER identifies the account — same as the
+    # merchant's own "My Paybill" screen, which falls back to this constant.
     out = {"balance": None, "currency": "KES", "account_number": link.choice_account_number,
-           "paybill": None, "status": None}
+           "paybill": "444174", "status": None}
     if not acct_id:
         return out
     try:
@@ -96,7 +99,7 @@ async def _account_snapshot(link: AccountShareLink) -> dict:
             "balance": data.get("balance"),
             "currency": data.get("currency", "KES"),
             "account_number": data.get("accountNumber") or link.choice_account_number,
-            "paybill": data.get("shortCode"),
+            "paybill": data.get("shortCode") or "444174",
             "status": data.get("accountStatus"),
         })
     except Exception as exc:
