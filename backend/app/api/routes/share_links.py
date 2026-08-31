@@ -360,6 +360,14 @@ async def public_deposit(slug: str, body: PublicDeposit, background_tasks: Backg
     result = await choice.deposit_from_mpesa(link.choice_account_id, mobile, body.amount)
     tx_id = result.get("data", {}).get("txId") or result.get("txId") or ""
 
+    # No tx id = Choice did NOT start an STK push (soft failure). Surface the real reason
+    # instead of falsely telling the viewer to "check your phone".
+    if not tx_id:
+        msg = (result.get("message") or (result.get("data") or {}).get("message")
+               or "M-Pesa could not start the deposit — please try again in a moment.")
+        logger.warning("[ShareLink] deposit no txId for %s: %s", link.slug, result)
+        raise HTTPException(status_code=502, detail=msg)
+
     payment_id = None
     try:
         p = Payment(
