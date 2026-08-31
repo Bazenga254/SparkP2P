@@ -130,21 +130,26 @@ export default function PublicAccount() {
 function DepositCard({ slug, token, onDone }) {
   const [phone, setPhone] = useState('');
   const [amount, setAmount] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null); // {type, text}
+  const [phase, setPhase] = useState('idle'); // idle | sending | waiting | done | failed
+  const [msg, setMsg] = useState(null);        // {type, text}
+  const waiting = phase === 'sending' || phase === 'waiting';
 
   const send = async () => {
     setMsg(null);
     const amt = parseInt(amount, 10);
+    if (!phone) { setMsg({ type: 'err', text: 'Enter your M-Pesa number.' }); return; }
     if (!amt || amt < 1) { setMsg({ type: 'err', text: 'Enter an amount of at least KES 1.' }); return; }
-    setBusy(true);
+    setPhase('sending');
     try {
       const r = await publicDeposit(slug, token, phone, amt);
       const txId = r.data?.txId;
-      setMsg({ type: 'ok', text: 'Check your phone and enter your M-Pesa PIN to complete the deposit.' });
-      if (txId) pollStatus(txId);
-    } catch (e) { setMsg({ type: 'err', text: e.response?.data?.detail || 'Could not start the deposit.' }); }
-    finally { setBusy(false); }
+      if (!txId) { setPhase('failed'); setMsg({ type: 'err', text: 'Could not start the deposit — please try again.' }); return; }
+      setPhase('waiting');
+      pollStatus(txId);
+    } catch (e) {
+      setPhase('failed');
+      setMsg({ type: 'err', text: e.response?.data?.detail || 'Could not start the deposit.' });
+    }
   };
 
   const pollStatus = (txId) => {
@@ -153,37 +158,68 @@ function DepositCard({ slug, token, onDone }) {
       tries++;
       try {
         const r = await publicDepositStatus(slug, token, txId);
-        if (r.data?.status === 'success') { clearInterval(iv); setMsg({ type: 'ok', text: `✅ Deposit of KES ${money(r.data.amount)} received.` }); setPhone(''); setAmount(''); onDone && onDone(); }
-        else if (r.data?.status === 'failed') { clearInterval(iv); setMsg({ type: 'err', text: 'The deposit was cancelled or failed.' }); }
+        if (r.data?.status === 'success') {
+          clearInterval(iv); setPhase('done');
+          setMsg({ type: 'ok', text: `Deposit of KES ${money(r.data.amount)} received. Thank you!` });
+          setPhone(''); setAmount(''); onDone && onDone();
+        } else if (r.data?.status === 'failed') {
+          clearInterval(iv); setPhase('failed');
+          setMsg({ type: 'err', text: 'The deposit was cancelled or failed. Please try again.' });
+        }
       } catch {}
-      if (tries > 20) clearInterval(iv);
+      if (tries > 25) {
+        clearInterval(iv); setPhase('idle');
+        setMsg({ type: 'err', text: 'Timed out waiting for the payment. If you entered your PIN it may still arrive shortly.' });
+      }
     }, 3000);
   };
+
+  const inp = { flex: '1 1 150px', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, padding: '11px 12px', color: C.text, fontSize: 14, boxSizing: 'border-box' };
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: '16px 18px' }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 4 }}>Deposit by M-Pesa</div>
-      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 12 }}>Money lands in this account in a few seconds. Your name will show on the account.</div>
+      <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 12 }}>An M-Pesa STK push is sent to the number below. Enter your PIN to complete — your name will show on the account.</div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Your M-Pesa number (07…)" inputMode="numeric"
-          style={{ flex: '1 1 180px', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, padding: '11px 12px', color: C.text, fontSize: 14, boxSizing: 'border-box' }} />
-        <input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Amount (KES)" inputMode="numeric"
-          style={{ flex: '1 1 120px', background: C.ink, border: `1px solid ${C.line}`, borderRadius: 10, padding: '11px 12px', color: C.text, fontSize: 14, boxSizing: 'border-box' }} />
+        <input value={phone} disabled={waiting} onChange={(e) => setPhone(e.target.value)} placeholder="Your M-Pesa number (07…)" inputMode="numeric" style={{ ...inp, opacity: waiting ? .6 : 1 }} />
+        <input value={amount} disabled={waiting} onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))} placeholder="Amount (KES)" inputMode="numeric" style={{ ...inp, flex: '1 1 110px', opacity: waiting ? .6 : 1 }} />
       </div>
-      <button onClick={send} disabled={busy || !phone || !amount}
-        style={{ width: '100%', marginTop: 12, background: C.mint, color: '#04140C', border: 0, borderRadius: 11, padding: 12, fontWeight: 700, fontSize: 14.5, cursor: 'pointer', opacity: busy || !phone || !amount ? .6 : 1 }}>
-        {busy ? 'Sending…' : 'Send STK push'}
+
+      {phase === 'waiting' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12, background: 'rgba(255,165,31,.10)', border: '1px solid rgba(255,165,31,.3)', borderRadius: 10, padding: '11px 13px', color: C.amber, fontSize: 13 }}>
+          <span className="pa-spin" style={{ width: 15, height: 15, borderRadius: '50%', border: '2px solid rgba(255,165,31,.35)', borderTopColor: C.amber, display: 'inline-block', flex: '0 0 auto' }} />
+          Sent to your phone. Enter your M-Pesa PIN — watching for the money…
+        </div>
+      )}
+
+      <button onClick={send} disabled={waiting || !phone || !amount}
+        style={{ width: '100%', marginTop: 12, background: waiting ? '#243244' : C.mint, color: waiting ? C.muted : '#04140C', border: 0, borderRadius: 11, padding: 12, fontWeight: 700, fontSize: 14.5, cursor: waiting ? 'default' : 'pointer', opacity: (!waiting && (!phone || !amount)) ? .6 : 1 }}>
+        {phase === 'sending' ? 'Sending…' : phase === 'waiting' ? 'Waiting for your PIN…' : 'Send STK push'}
       </button>
-      {msg && <div style={{ marginTop: 10, fontSize: 13, color: msg.type === 'ok' ? C.mint : C.red }}>{msg.text}</div>}
+
+      {msg && phase !== 'waiting' && <div style={{ marginTop: 10, fontSize: 13, color: msg.type === 'ok' ? C.mint : C.red }}>{msg.text}</div>}
+      <style>{`@keyframes pa-spin{to{transform:rotate(360deg)}} .pa-spin{animation:pa-spin .8s linear infinite}`}</style>
     </div>
   );
 }
 
 function Detail({ label, value }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (!value || value === '—') return;
+    try { navigator.clipboard?.writeText(String(value)); } catch {}
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  };
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: '12px 14px' }}>
-      <div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
-      <div style={{ fontFamily: 'ui-monospace,monospace', fontSize: 15, color: C.text, marginTop: 4 }}>{value}</div>
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
+        <div style={{ fontFamily: 'ui-monospace,monospace', fontSize: 15, color: C.text, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+      </div>
+      <button onClick={copy} disabled={!value || value === '—'}
+        style={{ flex: '0 0 auto', background: copied ? C.mint : C.ink, border: `1px solid ${copied ? C.mint : C.line}`, color: copied ? '#04140C' : C.muted, borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+        {copied ? 'Copied' : 'Copy'}
+      </button>
     </div>
   );
 }
