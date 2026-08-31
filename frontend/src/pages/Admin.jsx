@@ -4635,6 +4635,7 @@ export default function Admin() {
                           <th>Account Used</th>
                           <th>M-Pesa Code</th>
                           <th>Time</th>
+                          <th></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -4646,6 +4647,22 @@ export default function Admin() {
                             <td className="mono" style={{ color: p.bill_ref_number ? '#f59e0b' : '#ef4444' }}>{p.bill_ref_number || 'No account'}</td>
                             <td className="mono" style={{ fontSize: 11 }}>{p.mpesa_transaction_id || '—'}</td>
                             <td style={{ color: '#6b7280', fontSize: 12 }}>{fmtDateEAT(p.created_at)}</td>
+                            <td>
+                              <button
+                                onClick={async () => {
+                                  if (!window.confirm(`Clear this unmatched deposit of KES ${(p.amount || 0).toLocaleString()} from ${p.sender_name || 'unknown'}? It will be removed from the queue.`)) return;
+                                  try {
+                                    await resolveUnmatchedPayment(p.id);
+                                    const r = await getUnmatchedPayments();
+                                    setUnmatched(r.data || { deposits: [], withdrawals: [] });
+                                  } catch (e) {
+                                    alert(e?.response?.data?.detail || 'Failed to clear');
+                                  }
+                                }}
+                                style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #10b981', background: 'rgba(16,185,129,0.1)', color: '#10b981', fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                ✓ Clear
+                              </button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
