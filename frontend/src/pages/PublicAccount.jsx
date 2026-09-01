@@ -88,7 +88,7 @@ export default function PublicAccount() {
         </div>
 
         {/* account details */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, marginBottom: 14 }}>
           <Detail label="Paybill" value={data.paybill || '—'} />
           <Detail label="Account number" value={data.account_number || '—'} />
         </div>
@@ -211,13 +211,13 @@ function Detail({ label, value }) {
     setCopied(true); setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: '13px 16px', display: 'flex', alignItems: 'center', gap: 14 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
-        <div style={{ fontFamily: 'ui-monospace,monospace', fontSize: 15, color: C.text, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+        <div style={{ fontFamily: 'ui-monospace,monospace', fontSize: 16, color: C.text, marginTop: 5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div>
       </div>
       <button onClick={copy} disabled={!value || value === '—'}
-        style={{ flex: '0 0 auto', background: copied ? C.mint : C.ink, border: `1px solid ${copied ? C.mint : C.line}`, color: copied ? '#04140C' : C.muted, borderRadius: 8, padding: '6px 11px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+        style={{ flex: '0 0 auto', background: copied ? C.mint : C.ink, border: `1px solid ${copied ? C.mint : C.line}`, color: copied ? '#04140C' : C.muted, borderRadius: 8, padding: '8px 14px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>
         {copied ? 'Copied' : 'Copy'}
       </button>
     </div>
