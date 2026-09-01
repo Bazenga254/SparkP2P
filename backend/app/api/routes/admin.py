@@ -635,6 +635,8 @@ async def get_trader_detail(
         "subscription_balance": float(trader.subscription_balance or 0),
         "binance_api_key_saved": bool(trader.binance_api_key),
         "price_tracker_enabled": bool(getattr(trader, "price_tracker_enabled", False)),
+        # Merchant's Binance fee (KES per USDT) used in net-P&L. Admin can view/edit; syncs both ways.
+        "binance_fee_per_usdt": float(trader.binance_fee_per_usdt) if trader.binance_fee_per_usdt is not None else 0.25,
         "b2c_own_paybill_enabled": bool(getattr(trader, "b2c_own_paybill_enabled", False)),
         "buy_payout_via_im": bool(getattr(trader, "buy_payout_via_im", False)),
         # I&M billing: on_demand credits vs the weekly unlimited package (+ live status).
@@ -1241,6 +1243,29 @@ async def update_trader_price_tracker(
     await db.commit()
     await write_audit_log(db, admin, "toggle_price_tracker", target_trader_id=trader_id, detail=f"{trader.full_name}: price tracker {'enabled' if enabled else 'disabled'}")
     return {"status": "updated", "trader_id": trader_id, "price_tracker_enabled": bool(enabled)}
+
+
+@router.put("/traders/{trader_id}/binance-fee")
+async def update_trader_binance_fee(
+    trader_id: int,
+    fee: float,
+    admin: Trader = Depends(get_admin_trader),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set a merchant's Binance fee (KES per USDT) used in net-P&L. This is the SAME
+    field the merchant edits under Configure → Profit Calculation, so a change here
+    reflects on their dashboard and vice-versa."""
+    if fee is None or fee < 0 or fee > 100:
+        raise HTTPException(status_code=400, detail="fee must be between 0 and 100")
+    trader = (await db.execute(select(Trader).where(Trader.id == trader_id))).scalar_one_or_none()
+    if not trader:
+        raise HTTPException(status_code=404, detail="Trader not found")
+    old = trader.binance_fee_per_usdt if trader.binance_fee_per_usdt is not None else 0.25
+    trader.binance_fee_per_usdt = float(fee)
+    await db.commit()
+    await write_audit_log(db, admin, "set_binance_fee", target_trader_id=trader_id,
+                          detail=f"{trader.full_name}: Binance fee {old} -> {fee} KES/USDT")
+    return {"status": "updated", "trader_id": trader_id, "binance_fee_per_usdt": float(fee)}
 
 
 @router.put("/traders/{trader_id}/im-billing-mode")

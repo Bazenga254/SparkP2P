@@ -467,6 +467,9 @@ export default function Admin() {
   const [traderPnl, setTraderPnl] = useState(null);
   const [pnlPeriod, setPnlPeriod] = useState('today');
   const [pnlLoading, setPnlLoading] = useState(false);
+  // Profit Calculation — Binance fee (KES/USDT) the merchant set; admin can view + edit (syncs both ways).
+  const [binFeeInput, setBinFeeInput] = useState('');
+  const [binFeeSaving, setBinFeeSaving] = useState(false);
   // Outbound-fee revenue simulation (buy orders)
   const [traderRevSim, setTraderRevSim] = useState(null);
   const [revSimPeriod, setRevSimPeriod] = useState('today');
@@ -907,6 +910,30 @@ export default function Admin() {
     window.addEventListener('mpesa-portal-connected', onMpesa);
     return () => { window.removeEventListener('im-connected', onIm); window.removeEventListener('mpesa-portal-connected', onMpesa); };
   }, []);
+
+  // Seed the Binance-fee editor from the opened trader (shows what the merchant set).
+  useEffect(() => {
+    if (viewingTrader && viewingTrader.binance_fee_per_usdt != null) {
+      setBinFeeInput(String(viewingTrader.binance_fee_per_usdt));
+    }
+  }, [viewingTrader?.id, viewingTrader?.binance_fee_per_usdt]);
+
+  // Save the admin-edited Binance fee — writes the same trader field the merchant edits.
+  const saveBinanceFee = async () => {
+    const t = viewingTrader;
+    if (!t) return;
+    const fee = parseFloat(binFeeInput);
+    if (isNaN(fee) || fee < 0 || fee > 100) { alert('Enter a fee between 0 and 100 KES/USDT.'); return; }
+    setBinFeeSaving(true);
+    try {
+      await api.put(`/admin/traders/${t.id}/binance-fee?fee=${fee}`);
+      setViewingTrader(v => (v && v.id === t.id ? { ...v, binance_fee_per_usdt: fee } : v));
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'Could not save the Binance fee.');
+    } finally {
+      setBinFeeSaving(false);
+    }
+  };
 
   // Poll until I&M connected
   useEffect(() => {
@@ -3688,6 +3715,39 @@ export default function Admin() {
 
                     {/* ===== REVENUE SIMULATION (BUY ORDERS) ===== */}
                     {traderDetailTab === 'revenue' && (<>
+                    {/* ===== PROFIT CALCULATION (admin editable, syncs with merchant) ===== */}
+                    <div className="card" style={{ marginBottom: 16 }}>
+                      <div className="card-b">
+                        <div className="tdx-sec-label" style={{ margin: '0 0 4px' }}>Profit Calculation</div>
+                        <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                          Binance fee deducted from gross margin. This is the same value the merchant sets under
+                          Configure → Profit Calculation — changing it here updates their dashboard, and vice-versa.
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+                          <div style={{ flex: '1 1 200px', minWidth: 160 }}>
+                            <label className="muted" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Binance Fee (KES per USDT)</label>
+                            <input
+                              type="number" step="0.01" min="0" max="100"
+                              className="tdx-input"
+                              value={binFeeInput}
+                              onChange={e => setBinFeeInput(e.target.value)}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                          <button
+                            className="adm-btn-primary"
+                            disabled={binFeeSaving || binFeeInput === '' || parseFloat(binFeeInput) === (t.binance_fee_per_usdt ?? 0.25)}
+                            onClick={saveBinanceFee}
+                          >
+                            {binFeeSaving ? 'Saving…' : 'Save'}
+                          </button>
+                        </div>
+                        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                          Merchant currently has: <b>{(t.binance_fee_per_usdt ?? 0.25)}</b> KES/USDT · cumulative buy + sell (~0.1% per side). Default 0.25.
+                        </div>
+                      </div>
+                    </div>
+
                     {/* ===== PROFIT & LOSS (top) ===== */}
                     <div className="rev-head">
                       <div className="tdx-sec-label" style={{ margin: 0 }}>Profit &amp; Loss</div>
