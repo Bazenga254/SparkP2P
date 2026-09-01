@@ -195,3 +195,102 @@ async def inbound_email_webhook(request: Request):
     logger.info(f"[Email-OTP] OTP {otp} for account ****{account_last_4}")
     _resolve_otp(otp, account_last_4, "Email-OTP")
     return {"ok": True}
+
+
+# ── NCBA Paybill-Level Push Notification (IPN) — SparkPay collection reconciliation ──
+# NCBA POSTs a JSON alert to us the instant money lands on Paybill/Till 880100
+# (SPARK FREELANCE SOLUTIONS / 1011775848). We authenticate it three ways before trusting
+# it — the Username + Password NCBA embeds, and a SHA-256 Hash over the payload keyed with
+# our shared Secret Key — then record it (de-duplicated on the M-Pesa ref) and answer with
+# the exact {"ResultCode":"0",...} NCBA's spec requires. Wrong creds / bad hash → ResultCode 1.
+def _ncba_expected_hash(secret_key: str, p: dict) -> str:
+    """Reproduce NCBA's hash: SHA-256 of a fixed concatenation, then Base64 of the HEX digest
+    string (not the raw bytes) — matching their Java sample exactly."""
+    import hashlib as _hl, base64 as _b64
+    parts = [
+        secret_key,
+        str(p.get("TransType") or ""),
+        str(p.get("TransID") or ""),
+        str(p.get("TransTime") or ""),
+        str(p.get("TransAmount") or ""),
+        str(p.get("BusinessShortCode") or p.get("AccountNr") or ""),
+        str(p.get("BillRefNumber") or ""),
+        str(p.get("Mobile") or p.get("PhoneNr") or ""),
+        str(p.get("name") or p.get("CustomerName") or ""),
+        "1",
+    ]
+    hex_digest = _hl.sha256("".join(parts).encode("utf-8")).hexdigest()
+    return _b64.b64encode(hex_digest.encode("utf-8")).decode("utf-8")
+
+
+@router.post("/ncba/ipn")
+async def ncba_ipn(request: Request):
+    from app.core.config import settings
+    from app.core.database import async_session
+    from app.models.ncba_ipn_event import NcbaIpnEvent
+    from sqlalchemy import select
+    import json as _json
+
+    try:
+        payload = await request.json()
+    except Exception:
+        logger.warning("[NCBA-IPN] non-JSON body — rejected")
+        return {"ResultCode": "1", "ResultDesc": "Invalid payload"}
+
+    trans_id = str(payload.get("TransID") or "").strip()
+    logger.info("[NCBA-IPN] TransID=%s amount=%s shortcode=%s ref=%s",
+                trans_id, payload.get("TransAmount"), payload.get("BusinessShortCode"),
+                payload.get("BillRefNumber"))
+
+    # 1) credentials NCBA embeds in the payload
+    if (str(payload.get("Username") or "") != settings.NCBA_IPN_USERNAME
+            or str(payload.get("Password") or "") != settings.NCBA_IPN_PASSWORD):
+        logger.warning("[NCBA-IPN] bad username/password — rejected (TransID=%s)", trans_id)
+        return {"ResultCode": "1", "ResultDesc": "Authentication failed"}
+
+    # 2) SHA-256 hash over the payload, keyed with our shared secret
+    got = str(payload.get("Hash") or payload.get("HashVal") or payload.get("SecretKey") or "")
+    expected = _ncba_expected_hash(settings.NCBA_IPN_SECRET_KEY, payload)
+    if not got or got != expected:
+        logger.warning("[NCBA-IPN] hash mismatch — rejected (TransID=%s)", trans_id)
+        return {"ResultCode": "1", "ResultDesc": "Hash verification failed"}
+
+    if not trans_id:
+        return {"ResultCode": "1", "ResultDesc": "Missing TransID"}
+
+    # 3) record — idempotent on the M-Pesa reference (NCBA may retry the same notification)
+    try:
+        async with async_session() as db:
+            existing = (await db.execute(
+                select(NcbaIpnEvent).where(NcbaIpnEvent.trans_id == trans_id)
+            )).scalar_one_or_none()
+            if existing is None:
+                _amt = payload.get("TransAmount")
+                try:
+                    _amt = float(str(_amt)) if _amt not in (None, "") else None
+                except (TypeError, ValueError):
+                    _amt = None
+                db.add(NcbaIpnEvent(
+                    trans_id=trans_id,
+                    ft_ref=str(payload.get("FTRef") or "")[:40] or None,
+                    trans_type=str(payload.get("TransType") or "")[:32] or None,
+                    business_short_code=str(payload.get("BusinessShortCode") or "")[:16] or None,
+                    bill_ref_number=str(payload.get("BillRefNumber") or "")[:64] or None,
+                    narrative=str(payload.get("Narrative") or "")[:120] or None,
+                    amount=_amt,
+                    mobile=str(payload.get("Mobile") or "")[:64] or None,
+                    payer_name=str(payload.get("name") or payload.get("CustomerName") or "")[:120] or None,
+                    trans_time=str(payload.get("TransTime") or "")[:20] or None,
+                    verified=True,
+                    processed=False,
+                    raw=_json.dumps(payload)[:8000],
+                ))
+                await db.commit()
+                logger.info("[NCBA-IPN] recorded verified payment TransID=%s", trans_id)
+            else:
+                logger.info("[NCBA-IPN] duplicate TransID=%s — already recorded", trans_id)
+    except Exception as e:
+        # Never fail NCBA's delivery on our storage hiccup — we've authenticated it and logged it.
+        logger.error("[NCBA-IPN] store error for TransID=%s: %s", trans_id, e)
+
+    return {"ResultCode": "0", "ResultDesc": "Received"}

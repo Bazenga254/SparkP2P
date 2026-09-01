@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     MPESA_ENV: str = "sandbox"  # sandbox or production
     MPESA_CALLBACK_BASE_URL: str = "https://yourdomain.com"
 
+    # NCBA — Paybill-Level Push Notifications (IPN) receiver + Till STK Push (SparkPay rails)
+    # IPN: NCBA POSTs to us; it authenticates with these and a SHA-256 Hash over the payload.
+    NCBA_IPN_USERNAME: str = ""
+    NCBA_IPN_PASSWORD: str = ""
+    NCBA_IPN_SECRET_KEY: str = ""     # <= 50 chars; the shared secret in the Hash
+    # STK Push (collect): Basic-Auth creds we present to c2bapis.ncbagroup.com.
+    NCBA_STK_USERNAME: str = ""
+    NCBA_STK_SECRET_KEY: str = ""
+    NCBA_PAYBILL: str = "880100"      # NCBA Till-via-Paybill for SPARK FREELANCE SOLUTIONS
+
     # I&M Bank Payment Gateway
     IM_BANK_API_URL: str = ""  # e.g., https://api.imbank.com/KEPaymentGatewayService/1.0
     IM_BANK_TOKEN_URL: str = ""  # e.g., https://api.imbank.com/KEOAuthTokenService/1.0/GetToken

@@ -25,6 +25,7 @@ from app.models.choice_account import ChoiceAccount
 from app.models.account_share_link import AccountShareLink
 from app.models.email_message import EmailMessage
 from app.models.email_attachment import EmailAttachment
+from app.models.ncba_ipn_event import NcbaIpnEvent
 
 __all__ = [
     "Squad", "SquadMember",
@@ -46,4 +47,5 @@ __all__ = [
     "StandingOrder",
     "ChoiceAccount",
     "AccountShareLink",
+    "NcbaIpnEvent",
 ]
