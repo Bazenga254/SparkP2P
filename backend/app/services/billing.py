@@ -154,11 +154,21 @@ async def credit_subscription_payment(db, trader_id: int, amount: float, txn_id:
     price = float(PLAN_CONFIG[plan]["price"])
     now = datetime.now(timezone.utc)
     was_active = (await active_plan(db, trader_id)) is not None
+    # Stack onto the CURRENTLY-ACTIVE subscription with the furthest expiry — never merely
+    # the most-recently-created row. That row can be a cancelled/pending attempt from THIS
+    # very payment flow (the STK initiate creates a throwaway row seconds earlier), and
+    # picking it made an early renewal see status != ACTIVE, reset to now+30, and silently
+    # drop the days the trader had already paid for (e.g. a sub expiring Sep 4, renewed Sep 1,
+    # wrongly landed on Oct 1 instead of Oct 4).
     latest = (await db.execute(
-        select(Subscription).where(Subscription.trader_id == trader_id).order_by(Subscription.created_at.desc())
+        select(Subscription).where(
+            Subscription.trader_id == trader_id,
+            Subscription.status == SubscriptionStatus.ACTIVE,
+            Subscription.expires_at.isnot(None),
+            Subscription.expires_at > now,
+        ).order_by(Subscription.expires_at.desc())
     )).scalars().first()
-    still_active = bool(latest and latest.status == SubscriptionStatus.ACTIVE
-                        and latest.expires_at and latest.expires_at > now)
+    still_active = latest is not None
     base = latest.expires_at if still_active else now
     new_exp = base + timedelta(days=30)
 
