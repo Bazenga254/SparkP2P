@@ -6199,6 +6199,11 @@ Reply with ONLY the standard name from the list above. Nothing else.` },
           // full profile in Telegram before approving. Greeting is sent only after approval.
           let choiceBal = 0;
           try {
+            // Refresh cached credentials so the balance check reads the LATEST active Choice
+            // account (e.g. after a merchant switches to an SME account) — the buy DEBIT itself
+            // is server-side (extension.py pays from trader.choice_account_id), but a stale
+            // cached account id here would otherwise check the wrong account's balance.
+            await fetchAndApplyCredentials().catch(() => {});
             const balRes = await fetch(`${API_BASE}/choice/balance/${traderChoiceAccountId}`, { headers: { 'Authorization': 'Bearer ' + token } }).catch(() => null);
             if (balRes && balRes.ok) { const bd = await balRes.json(); choiceBal = bd.balance || 0; }
           } catch(_e) {}
