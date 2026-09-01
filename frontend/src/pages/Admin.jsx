@@ -1107,14 +1107,16 @@ export default function Admin() {
     const badge = { open: '#F5A524', awaiting_choice: '#3b82f6', awaiting_client: '#a78bfa', resolved: '#34D399', closed: '#8A94A6' }[t.status] || '#8A94A6';
     return (
       <div key={`ops-${t.id}`} className={`sup-ticket${unread ? ' sup-ticket--unread' : ''}`}>
-        <div onClick={() => { const willOpen = !open; setOpsOpen(willOpen ? t.id : null); if (willOpen && t.needs_attention) opsMarkRead(t.id); }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', cursor: 'pointer' }}>
-          <span style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: unread ? '#F5A524' : badge }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ color: 'var(--text)', fontWeight: 650, fontSize: 13.5, letterSpacing: '-0.1px' }}>{t.ticket_number} · {t.subject}</div>
-            <div style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 3 }}>Choice Bank case · {t.client_name || '—'} · {(t.messages || []).length} message{(t.messages || []).length === 1 ? '' : 's'}</div>
+        <div className="sup-row" onClick={() => { const willOpen = !open; setOpsOpen(willOpen ? t.id : null); if (willOpen && t.needs_attention) opsMarkRead(t.id); }}>
+          <span className="sup-row__dot" style={{ background: unread ? '#F5A524' : badge }} />
+          <div className="sup-row__main">
+            <div className="sup-row__subject">{t.ticket_number} · {t.subject}</div>
+            <div className="sup-row__meta">Choice Bank · {t.client_name || '—'} · {(t.messages || []).length} message{(t.messages || []).length === 1 ? '' : 's'}</div>
           </div>
-          {unread && <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 10, fontWeight: 800, background: '#F5A524', color: '#1A1206', textTransform: 'uppercase', letterSpacing: 0.4 }}>New reply</span>}
-          <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: badge + '1f', color: badge }}>{t.status.replace('_', ' ')}</span>
+          <div className="sup-row__right">
+            {unread && <span className="sup-newpill">New reply</span>}
+            <span className="sup-pill" style={{ background: badge + '1f', color: badge }}>{t.status.replace('_', ' ')}</span>
+          </div>
         </div>
         {open && (
           <div style={{ padding: '0 14px 14px' }}>
@@ -1124,17 +1126,19 @@ export default function Admin() {
                 return (
                   <div key={i} style={{ borderLeft: `2px solid ${c}`, paddingLeft: 10 }}>
                     <div style={{ color: c, fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase' }}>{m.from === 'agent' ? (m.name || 'Agent') + (m.to ? ' → ' + m.to : '') : m.from + (m.name ? ' · ' + m.name : '')}</div>
-                    <div style={{ color: '#e5e7eb', fontSize: 12.5 }} dangerouslySetInnerHTML={{ __html: m.body }} />
+                    <div style={{ color: 'var(--text)', fontSize: 12.5, lineHeight: 1.55 }} dangerouslySetInnerHTML={{ __html: m.body }} />
                     {(m.attachments || []).length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                         {m.attachments.map((a, ai) => (
-                          <a key={ai} href={a.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', borderRadius: 6, background: '#0d0f1e', border: '1px solid #232B3A', color: '#60A5FA', fontSize: 11, textDecoration: 'none' }}>
-                            📎 {a.name}{a.size ? ` · ${fmtSize(a.size)}` : ''}
+                          <a key={ai} href={a.url} target="_blank" rel="noreferrer" className="sup-att">
+                            <Paperclip size={12} className="sup-att__ico" />
+                            <span className="sup-att__name">{a.name}</span>
+                            {a.size ? <span className="sup-att__size">{fmtSize(a.size)}</span> : null}
                           </a>
                         ))}
                       </div>
                     )}
-                    <div style={{ color: '#5C6577', fontSize: 10 }}>{m.ts ? fmtDateEAT(m.ts) : ''}</div>
+                    <div style={{ color: 'var(--text-dim)', fontSize: 10, marginTop: 3 }}>{m.ts ? fmtDateEAT(m.ts) : ''}</div>
                   </div>
                 );
               })}
@@ -4202,14 +4206,16 @@ export default function Admin() {
               {/* ── Operations Cases (Choice Bank) ── */}
               <div className="adm-card">
                 <div className="adm-card-header">
-                  <h3>Operations Cases · Choice Bank</h3>
-                  <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
-                    <button onClick={() => { setOpsShowTemplates(v => !v); setOpsShowCreate(false); }} style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #232B3A', background: 'transparent', color: '#9aa4b2', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Templates</button>
-                    <button onClick={() => { setOpsShowCreate(v => !v); setOpsShowTemplates(false); }} style={{ padding: '6px 12px', borderRadius: 8, border: 'none', background: 'linear-gradient(135deg,#FFB53D,#E8871B)', color: '#1A1206', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>+ New case</button>
+                  <h3>Operations · Choice Bank</h3>
+                  <div className="sup-toolbar" style={{ marginLeft: 'auto' }}>
+                    <button className="sup-tbtn" onClick={() => { setOpsShowTemplates(v => !v); setOpsShowCreate(false); }}>Templates</button>
+                    <button className="sup-tbtn sup-tbtn--primary" onClick={() => { setOpsShowCreate(v => !v); setOpsShowTemplates(false); }}>+ New case</button>
                   </div>
                 </div>
                 <div className="sup-body">
-                  <p className="sup-intro" style={{ marginBottom: (opsShowCreate || opsShowTemplates) ? 16 : 0 }}>Raise a case with Choice Bank (Operations@choice-bank.com) for a client — reversal, wrong payment, or funds not credited. The client gets the ticket number by email &amp; SMS, and the case appears under <b>Support Tickets → Open Tickets</b> below, where every reply threads.</p>
+                  {!(opsShowCreate || opsShowTemplates) && (
+                    <p className="sup-intro">Raise a case with Choice Bank for a client — reversal, wrong payment, or funds not credited. The client is notified by email &amp; SMS, and every reply threads under the tickets below.</p>
+                  )}
 
                   {opsShowTemplates && (
                     <div style={{ border: '1px solid #1A2130', borderRadius: 10, padding: 14, marginBottom: 14, background: '#0F1420' }}>
@@ -4492,53 +4498,38 @@ export default function Admin() {
                   <div className="sup-list">
                     {opsForCat.map(renderOpsCase)}
                     {supportTickets.map((ticket) => (
-                      <div
-                        key={ticket.id}
-                        className="sup-ticket"
-                        style={{ overflow: 'hidden' }}
-                      >
+                      <div key={ticket.id} className="sup-ticket" style={{ overflow: 'hidden' }}>
                         <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            padding: '13px 16px',
-                            cursor: 'pointer',
-                            background: expandedTicket === ticket.id ? 'var(--bg)' : 'transparent',
-                          }}
+                          className="sup-row"
+                          style={expandedTicket === ticket.id ? { background: 'color-mix(in srgb, var(--text) 4%, transparent)' } : undefined}
                           onClick={() => setExpandedTicket(expandedTicket === ticket.id ? null : ticket.id)}
                         >
                           <span
-                            style={{
-                              width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                              background: ticket.status === 'escalated' ? '#f59e0b' : ticket.status === 'open' ? '#10b981' : '#6b7280',
-                            }}
+                            className="sup-row__dot"
+                            style={{ background: ticket.status === 'escalated' ? '#f59e0b' : ticket.status === 'open' ? '#10b981' : '#6b7280' }}
                           />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text)' }}>
-                              #{ticket.id} — {ticket.subject || 'No subject'}
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+                          <div className="sup-row__main">
+                            <div className="sup-row__subject">#{ticket.id} — {ticket.subject || 'No subject'}</div>
+                            <div className="sup-row__meta">
                               Trader #{ticket.trader_id} · {fmtDateEAT(ticket.updated_at)}
                               {ticket.escalation_reason && (
-                                <span style={{ color: '#f59e0b', marginLeft: 6 }}>
-                                  ⚡ {ticket.escalation_reason}
-                                </span>
+                                <span style={{ color: '#f59e0b', marginLeft: 6 }}>⚡ {ticket.escalation_reason}</span>
                               )}
                             </div>
                           </div>
-                          <span className={`adm-badge ${ticket.status === 'escalated' ? 'yellow' : ticket.status === 'open' ? 'green' : 'dim'}`}>
-                            {ticket.status}
-                          </span>
-                          {ticketCategory === 'open' && (
-                            <button
-                              className="adm-btn-sm"
-                              onClick={(e) => { e.stopPropagation(); handleCloseTicket(ticket.id); }}
-                              style={{ fontSize: 11, padding: '3px 8px', background: 'rgba(16,185,129,0.15)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)' }}
-                            >
-                              Close
-                            </button>
-                          )}
+                          <div className="sup-row__right">
+                            <span className={`adm-badge ${ticket.status === 'escalated' ? 'yellow' : ticket.status === 'open' ? 'green' : 'dim'}`}>
+                              {ticket.status}
+                            </span>
+                            {ticketCategory === 'open' && (
+                              <button
+                                className="sup-row__x"
+                                onClick={(e) => { e.stopPropagation(); handleCloseTicket(ticket.id); }}
+                              >
+                                Close
+                              </button>
+                            )}
+                          </div>
                         </div>
                         {expandedTicket === ticket.id && (
                           <div style={{ borderTop: '1px solid var(--border)', padding: '12px 14px', background: 'var(--bg)' }}>
@@ -4569,8 +4560,9 @@ export default function Admin() {
                                           {m.attachment_type?.startsWith('image/') ? (
                                             <img src={m.attachment_url} alt={m.attachment_name} style={{ maxWidth: 180, maxHeight: 140, borderRadius: 6, display: 'block' }} />
                                           ) : (
-                                            <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#a5b4fc', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                              <Paperclip size={11} /> {m.attachment_name || 'Attachment'}
+                                            <a href={m.attachment_url} target="_blank" rel="noreferrer" className="sup-att">
+                                              <Paperclip size={12} className="sup-att__ico" />
+                                              <span className="sup-att__name">{m.attachment_name || 'Attachment'}</span>
                                             </a>
                                           )}
                                         </div>
