@@ -2032,6 +2032,12 @@ async function sendSellPaymentInstructions(order, _orderAmount, _isPesaLink) {
   if (sellPayInstructSentOrders.has(_on) || sellSendInProgress.has(_on)) return;
   sellSendInProgress.add(_on);
   try {
+    // MONEY-CRITICAL: pull the LATEST Choice receive-account before we quote it to the buyer.
+    // The account is cached at startup/connect; when a merchant switches which Choice account
+    // receives (personal ↔ SME), the running bot kept quoting the STALE account until a restart
+    // or the next release — so buyers paid the wrong account. Re-fetching here (same pattern as
+    // the TOTP re-fetch before a release) makes a switch apply to the very next order, no restart.
+    await fetchAndApplyCredentials().catch(() => {});
     const _PAYBILL = traderChoicePaybill || '444174';
     const _choiceAccNum = traderChoiceAccountNumber || '';
     const _accName = traderChoiceAccountName || '';
