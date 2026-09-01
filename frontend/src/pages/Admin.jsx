@@ -928,6 +928,8 @@ export default function Admin() {
     try {
       await api.put(`/admin/traders/${t.id}/binance-fee?fee=${fee}`);
       setViewingTrader(v => (v && v.id === t.id ? { ...v, binance_fee_per_usdt: fee } : v));
+      // Re-fetch the P&L so Binance Fees + Net P&L reflect the new fee immediately.
+      await loadTraderPnl(t.id, pnlPeriod);
     } catch (e) {
       alert(e?.response?.data?.detail || 'Could not save the Binance fee.');
     } finally {
