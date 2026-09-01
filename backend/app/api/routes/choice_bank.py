@@ -2175,6 +2175,7 @@ class PaybillInitiate(BaseModel):
     amount: float
     account_number: str = ""   # required for Paybill; blank for Till / Buy Goods
     is_paybill: bool = True
+    payee_name: str = ""       # user-typed name for a Till when Choice can't confirm-of-payee it
 
 
 class PaybillConfirm(BaseModel):
@@ -2224,23 +2225,36 @@ async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_c
     if body.amount > 250000:
         raise HTTPException(status_code=400, detail="M-Pesa payments are limited to KES 250,000 per transaction")
 
-    # HARD BLOCK: confirm the Paybill/Till shortcode resolves to a registered
-    # business (confirmation-of-payee) BEFORE any money moves. M-Pesa doesn't
-    # validate the account number, but this catches a mistyped shortcode — the
-    # common cause of "debited on Choice but never arrived" on bank paybills like
-    # NCBA Loop / Equity. No verified name → no send.
+    # Confirmation-of-payee BEFORE any money moves. Choice's validateAccount resolves
+    # PAYBILL business names but does NOT return names for Buy Goods TILLS. So:
+    #   • Paybill → HARD BLOCK: no verified name, no send. A mistyped paybill is the
+    #     common cause of "debited on Choice but never arrived" (NCBA Loop / Equity etc.).
+    #   • Till    → try to verify; if Choice returns no name (its COP doesn't cover tills),
+    #     fall back to the name the user typed and confirmed on-screen, since we can't insist.
+    _auto_name, _verified = "", False
     try:
         _cop = await choice._post("/account/validateAccount", {"accountId": biz, "accountType": 1, "bankCode": "M-PESA"})
+        _cop_code = _cop.get("code")
+        if _cop_code == "00000":
+            _auto_name = ((_cop.get("data") or {}).get("accountName") or "").strip()
+            _verified = bool(_auto_name)
+        elif _cop_code == "10001" and body.is_paybill:
+            raise HTTPException(status_code=503, detail="The name check is busy right now — please try again in a moment. (Payment not sent.)")
+    except HTTPException:
+        raise
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Couldn't verify the Paybill/Till before sending — payment blocked to protect your funds. ({exc})")
-    _cop_code = _cop.get("code")
-    if _cop_code == "10001":
-        raise HTTPException(status_code=503, detail="The name check is busy right now — please try again in a moment. (Payment not sent.)")
-    if _cop_code != "00000":
-        raise HTTPException(status_code=400, detail="We couldn't verify this Paybill/Till number — double-check it. Payment blocked to protect your funds.")
-    _payee_name = ((_cop.get("data") or {}).get("accountName") or "").strip()
-    if not _payee_name:
-        raise HTTPException(status_code=400, detail="This Paybill/Till number has no registered business name — payment blocked. Verify the number and try again.")
+        if body.is_paybill:
+            raise HTTPException(status_code=502, detail=f"Couldn't verify the Paybill before sending — payment blocked to protect your funds. ({exc})")
+
+    if body.is_paybill:
+        if not _auto_name:
+            raise HTTPException(status_code=400, detail="We couldn't verify this Paybill — double-check the number. Payment blocked to protect your funds.")
+        _payee_name = _auto_name
+    else:
+        # Till / Buy Goods — Choice can't confirm-of-payee a till, so use the user-typed name.
+        _payee_name = _auto_name or (body.payee_name or "").strip()
+        if not _payee_name:
+            raise HTTPException(status_code=409, detail="We couldn't auto-verify this Till. Enter the business name exactly as M-Pesa shows it to confirm and continue.")
 
     try:
         result = await choice.mpesa_business_transfer(
@@ -2266,8 +2280,9 @@ async def paybill_initiate(body: PaybillInitiate, trader: Trader = Depends(get_c
         logger.warning(f"[ChoiceBank] paybill sendOtp failed: {exc}")
 
     _pending_paybill[trader.id] = {"tx_id": tx_id, "amount": body.amount, "biz": biz, "acct": acct, "is_paybill": body.is_paybill}
-    return {"status": "otp_sent", "payee_name": _payee_name,
-            "message": f"Verified: {_payee_name}. Enter the OTP Choice Bank sent to your registered phone to confirm this payment."}
+    _lead = f"Verified: {_payee_name}. " if _verified else f"Sending to {_payee_name} (name not confirmed by M-Pesa — you confirmed it). "
+    return {"status": "otp_sent", "payee_name": _payee_name, "verified": _verified,
+            "message": _lead + "Enter the OTP Choice Bank sent to your registered phone to confirm this payment."}
 
 
 @router.post("/choice/pay/paybill/confirm")

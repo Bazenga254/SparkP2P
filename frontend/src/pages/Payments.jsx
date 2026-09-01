@@ -1240,9 +1240,14 @@ function Paybill({ onDone, onCancel, defaultTill = false, balance = null }) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [payee, setPayee] = useState({ status: 'idle', name: '' });
+  // Till / Buy Goods: Choice can't confirm-of-payee a till, so when the auto-lookup
+  // returns no name the user types + confirms it manually (Paybill stays strict).
+  const [manualName, setManualName] = useState('');
+  const [nameConfirmed, setNameConfirmed] = useState(false);
 
   useEffect(() => {
     const code = biz.trim();
+    setNameConfirmed(false);
     if (!/^\d{5,7}$/.test(code)) { setPayee({ status: 'idle', name: '' }); return; }
     let cancel = false;
     setPayee({ status: 'checking', name: '' });
@@ -1257,13 +1262,19 @@ function Paybill({ onDone, onCancel, defaultTill = false, balance = null }) {
     return () => { cancel = true; clearTimeout(t); };
   }, [biz]);
 
+  // A Till needs either an auto-verified name OR a manually typed + confirmed one.
+  const tillNameOk = payee.status === 'ok' || (manualName.trim().length > 1 && nameConfirmed);
   const validForm = /^\d{5,7}$/.test(biz.trim()) && (!isPaybill || acct.trim().length > 0)
-    && Number(amount) > 0 && (!isPaybill || payee.status === 'ok');
+    && Number(amount) > 0 && (isPaybill ? payee.status === 'ok' : tillNameOk);
 
   const initiate = async () => {
     setError(''); setBusy(true);
     try {
-      const res = await cbPaybillInitiate({ business_number: biz.trim(), amount: Number(amount), account_number: acct.trim(), is_paybill: isPaybill });
+      const res = await cbPaybillInitiate({
+        business_number: biz.trim(), amount: Number(amount), account_number: acct.trim(),
+        is_paybill: isPaybill,
+        payee_name: isPaybill ? '' : (payee.status === 'ok' ? payee.name : manualName.trim()),
+      });
       setInfo(res.data?.message || 'OTP sent to your registered phone.');
       setStep('otp');
     } catch (e) { setError(e.response?.data?.detail || 'Could not start the payment. Please try again.'); }
@@ -1300,8 +1311,8 @@ function Paybill({ onDone, onCancel, defaultTill = false, balance = null }) {
               <div className="px-field">
                 <label>Payment type</label>
                 <div className="px-seg">
-                  <button aria-pressed={isPaybill} onClick={() => setIsPaybill(true)}>Paybill</button>
-                  <button aria-pressed={!isPaybill} onClick={() => setIsPaybill(false)}>Till / Buy Goods</button>
+                  <button aria-pressed={isPaybill} onClick={() => { setIsPaybill(true); setNameConfirmed(false); }}>Paybill</button>
+                  <button aria-pressed={!isPaybill} onClick={() => { setIsPaybill(false); setNameConfirmed(false); }}>Till / Buy Goods</button>
                 </div>
               </div>
               {isPaybill && (
@@ -1318,7 +1329,17 @@ function Paybill({ onDone, onCancel, defaultTill = false, balance = null }) {
                   {payee.status === 'ok' && (
                     <div className="px-verified"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#3FD07A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5 9.5 17 19 7" /></svg> Paying to <b>{payee.name}</b></div>
                   )}
-                  {payee.status === 'fail' && <span className="hint" style={{ color: isPaybill ? '#FF6E5C' : '#E4C58A' }}>{payee.name}{!isPaybill && ' — you can still proceed for Till.'}</span>}
+                  {payee.status === 'fail' && <span className="hint" style={{ color: isPaybill ? '#FF6E5C' : '#E4C58A' }}>{payee.name}{!isPaybill && ' — M-Pesa doesn’t auto-verify Till names here, so confirm it below.'}</span>}
+                  {!isPaybill && /^\d{5,7}$/.test(biz.trim()) && payee.status !== 'ok' && payee.status !== 'checking' && (
+                    <div className="px-till-manual" style={{ marginTop: 10 }}>
+                      <label style={{ fontSize: 12, opacity: 0.85 }}>Business name (as shown in M-Pesa)</label>
+                      <input className="px-in" placeholder="e.g. MEKILI INVESTMENT" value={manualName} onChange={(e) => { setManualName(e.target.value); setNameConfirmed(false); }} />
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8, fontSize: 12.5, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={nameConfirmed} disabled={manualName.trim().length < 2} onChange={(e) => setNameConfirmed(e.target.checked)} style={{ marginTop: 2 }} />
+                        <span>I confirm <b>{manualName.trim() || 'this name'}</b> is the correct Till and I take responsibility for this payment.</span>
+                      </label>
+                    </div>
+                  )}
                 </div>
                 {isPaybill && (
                   <div className="px-field"><label>Account number</label>
@@ -1339,7 +1360,8 @@ function Paybill({ onDone, onCancel, defaultTill = false, balance = null }) {
               <div className="px-rrow"><dt>Type</dt><dd>{isPaybill ? 'Paybill' : 'Till / Buy Goods'}</dd></div>
               <div className="px-rrow"><dt>Business</dt><dd className={biz ? '' : 'empty'}>{biz || 'Add a number'}</dd></div>
               {isPaybill && <div className="px-rrow"><dt>Account</dt><dd className={acct ? '' : 'empty'}>{acct || 'Add account'}</dd></div>}
-              {payee.status === 'ok' && <div className="px-rrow"><dt>Paying</dt><dd>{payee.name}</dd></div>}
+              {payee.status === 'ok' ? <div className="px-rrow"><dt>Paying</dt><dd>{payee.name}</dd></div>
+                : (!isPaybill && manualName.trim() && nameConfirmed) ? <div className="px-rrow"><dt>Paying</dt><dd>{manualName.trim()} <span style={{ opacity: 0.6 }}>(you confirmed)</span></dd></div> : null}
               <div className="px-rrow big"><dt>Amount</dt><dd className={amtNum === 0 ? 'empty' : ''}><span className="u">KES</span>{n2(amtNum)}</dd></div>
               <div className="px-rrow after"><dt>Balance after</dt><dd>{afterBal == null ? '—' : 'KES ' + n2(afterBal)}</dd></div>
             </dl>
