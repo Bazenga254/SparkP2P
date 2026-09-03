@@ -27,6 +27,10 @@ def _diag(trader_id: int, path: str = "") -> bool:
 
 _RESULT_TIMEOUT = 25.0     # seconds the VPS waits for the desktop to execute a job
 _PRESENCE_WINDOW = 70.0    # a desktop counts as "connected" if it polled within this window
+_MAX_QUEUE = 120           # a healthy queue is single digits; beyond this the consumer can't keep
+                           # up, so reject new jobs (caller treats trader as offline) instead of
+                           # piling onto a backlog that makes EVERY call time out — the failure
+                           # that left buy orders "paid but not marked on Binance".
 
 _job_queues: dict[int, asyncio.Queue] = {}   # trader_id -> pending jobs
 _job_futures: dict[str, asyncio.Future] = {}  # job_id -> awaiting result
@@ -50,6 +54,26 @@ def is_connected(trader_id: int) -> bool:
     return (time.time() - _last_poll.get(trader_id, 0)) < _PRESENCE_WINDOW
 
 
+def _drain_dead(q: asyncio.Queue) -> int:
+    """Remove jobs whose waiting future is already gone or done — 'zombies' whose caller has
+    already timed out. Without this a timed-out job stays queued forever, and the backlog only
+    grows until every real call (mark-paid included) times out behind it. Returns how many dropped."""
+    kept, dropped = [], 0
+    while True:
+        try:
+            job = q.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        fut = _job_futures.get(job.get("job_id"))
+        if fut is not None and not fut.done():
+            kept.append(job)
+        else:
+            dropped += 1
+    for job in kept:
+        q.put_nowait(job)
+    return dropped
+
+
 def last_ip(trader_id: int) -> str:
     """The source IP of the trader's relay device (their real connection IP), captured from their
     long-poll. Empty if they've never connected since the backend started."""
@@ -60,10 +84,19 @@ async def execute(trader_id: int, path: str, params: dict, body: dict, headers: 
     """Enqueue a Binance request for the trader's desktop/phone and await its response. `host`
     overrides the default api.binance.com base — e.g. https://c2c.binance.com for cookie-auth chat
     sends. Returns the parsed JSON body. Raises RelayOffline on timeout."""
+    q = _queue(trader_id)
+    # Never pile jobs on a queue nobody is draining, and never let a transient slowdown snowball:
+    # clear zombies, refuse to enqueue for a desktop that isn't polling, and hard-cap the depth.
+    _drain_dead(q)
+    if not is_connected(trader_id):
+        raise RelayOffline(f"trader {trader_id} relay offline (desktop not polling)")
+    if q.qsize() >= _MAX_QUEUE:
+        logger.warning("[RELAY] trader %s backlogged (qsize=%d >= %d) — rejecting new job as offline",
+                       trader_id, q.qsize(), _MAX_QUEUE)
+        raise RelayOffline(f"trader {trader_id} relay backlogged ({q.qsize()} jobs)")
     job_id = uuid.uuid4().hex
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
     _job_futures[job_id] = fut
-    q = _queue(trader_id)
     if _diag(trader_id, path):
         logger.warning("[RELAY-DIAG] ENQUEUE job=%s trader=%s method=%s path=%s qsize=%d connected=%s",
                        job_id[:8], trader_id, method, path, q.qsize(), is_connected(trader_id))
@@ -90,14 +123,26 @@ async def next_job(trader_id: int, wait: float = 25.0, client_ip: str = ""):
     _last_poll[trader_id] = time.time()
     if client_ip:
         _last_ip[trader_id] = client_ip
-    try:
-        job = await asyncio.wait_for(_queue(trader_id).get(), timeout=wait)
-    except asyncio.TimeoutError:
-        return None
-    if job and _diag(trader_id, job.get("path", "")):
-        logger.warning("[RELAY-DIAG] PULLED job=%s trader=%s by IP=%s path=%s",
-                       (job.get("job_id") or "")[:8], trader_id, client_ip, job.get("path"))
-    return job
+    q = _queue(trader_id)
+    deadline = time.time() + wait
+    # Pull the next LIVE job, skipping any zombie whose caller already timed out — these are
+    # drained server-side instantly instead of wasting a desktop round-trip (and a stale Binance
+    # action) on each. This is what lets an existing 3000-deep backlog collapse in one poll.
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return None
+        try:
+            job = await asyncio.wait_for(q.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            return None
+        fut = _job_futures.get(job.get("job_id"))
+        if fut is None or fut.done():
+            continue  # zombie — no one is waiting for it; drop and keep draining
+        if _diag(trader_id, job.get("path", "")):
+            logger.warning("[RELAY-DIAG] PULLED job=%s trader=%s by IP=%s path=%s",
+                           (job.get("job_id") or "")[:8], trader_id, client_ip, job.get("path"))
+        return job
 
 
 def deliver_result(job_id: str, body) -> bool:
