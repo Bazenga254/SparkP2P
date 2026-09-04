@@ -959,68 +959,30 @@ async def result(
         )
         return {"ok": True, "status": order.status.value, "applied": False, "paused": n >= _MAX_IM_ATTEMPTS}
 
-    # UNKNOWN — the bank never confirmed within the 90s window. The PIN was already
-    # submitted, so the money ALMOST ALWAYS went out — we have seen 'ref none'
-    # payments (no reference captured) that still went through. Leaving these
-    # UNMARKED loses the merchant the WHOLE amount when Binance cancels the order,
-    # which is the worse outcome. Per the merchant's directive we now MARK THE ORDER
-    # PAID (so it is not cancelled) and ask them to CONFIRM. We still NEVER retry the
-    # PAYMENT — that is the double-pay risk that once sent KES 150,000 twice (refs
-    # 4904UXLP3499 + 4904OXAL3590); the 'pending' im_payout row (kept below, the guard
-    # /poll checks) AND the PAYMENT_SENT status both stop it being handed out again.
-    _im_attempts_bump(data.order_id)   # belt-and-braces: never re-serve/retry
-    applied = order.status == OrderStatus.PENDING
-    _markpaid_ok = False
-    if applied:
-        order.status = OrderStatus.PAYMENT_SENT
-        if not order.payment_sent_at:
-            order.payment_sent_at = datetime.now(timezone.utc)
-        order.choice_fee = 0   # paid via I&M — never a Choice Bank fee
-        # Bill it like a paid order (it almost always went out); a rare genuine
-        # non-payment is reconciled by the human who confirms the 'pending' row.
-        from app.services.im_billing import record_charge, AlreadyBilled
-        from app.services.im_pricing import ACCOUNT_SPARKP2P
-        try:
-            await record_charge(db, account_type=ACCOUNT_SPARKP2P, order_id=data.order_id,
-                                payout_amount=int(order.fiat_amount or 0), trader_id=trader_id,
-                                bank_ref=data.bank_ref)
-        except AlreadyBilled:
-            pass
-        except Exception as _e:
-            logger.error("im-bot UNSURE: failed to bill order %s: %s", data.order_id, _e)
-        await db.commit()
-        # Mark the order PAID on Binance, server-side — same path as a confirmed PAID.
-        try:
-            from app.api.routes.extension import _sapi_creds
-            from app.services.binance.sapi_client import mark_order_as_paid, relay_trader
-            _tr = await db.get(Trader, trader_id)
-            _ak, _as = _sapi_creds(_tr)
-            relay_trader.set(trader_id)
-            for _attempt in range(3):
-                try:
-                    _mp = await mark_order_as_paid(_ak, _as, data.order_id)
-                    _markpaid_ok = _mp.get("code") == "000000" or _mp.get("success") is True
-                except Exception:
-                    _markpaid_ok = False
-                if _markpaid_ok:
-                    break
-                await asyncio.sleep(1.5)
-        except Exception as _e:
-            logger.error("im-bot UNSURE: mark-paid errored for %s: %s", data.order_id, _e)
-    logger.warning("im-bot result: order %s UNKNOWN (ref=%s) — MARKED PAID per policy (markpaid_ok=%s), human to confirm — detail: %s",
-                   data.order_id, data.bank_ref, _markpaid_ok, data.detail)
+    # UNKNOWN — the dangerous case. Never mark paid; get a human to check the bank.
+    #
+    # AND NEVER RETRY IT. This used to share the FAILED path's 3-attempt cap, which
+    # let an order that had ALREADY entered the PIN be served again 90s later — a
+    # KES 150,000 order went out TWICE that way (refs 4904UXLP3499 + 4904OXAL3590).
+    # The 'pending' payout row written below is what /poll now checks to make sure
+    # this order is never handed out again. A retry here can cost the merchant the
+    # entire amount a second time; waiting for a human costs only time.
+    _im_attempts_bump(data.order_id)
+    logger.error("im-bot result: order %s UNKNOWN (ref=%s) — STOPPED, human check needed — detail: %s",
+                 data.order_id, data.bank_ref, data.detail)
     await _alert(
         trader_id,
-        f"⚠️ CONFIRM NEEDED — buy order …{data.order_id[-8:]} (KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}).\n"
-        f"I&M did not confirm this payment in time, but the PIN was submitted so it almost certainly WENT OUT.\n"
-        f"✅ I have MARKED THE ORDER AS PAID on Binance so it will NOT be cancelled — please CONFIRM and complete the order.\n\n"
-        f"👉 Check your IANDMBANK SMS for KES {int(order.fiat_amount or 0):,}:\n"
-        f"• If it SUCCEEDED → nothing to do; the seller will release the crypto.\n"
-        f"• If there is NO such SMS (it did NOT go out) → PAY IT BY HAND NOW. The order is already marked paid, so the seller may release any moment. Do NOT restart the bot to retry.",
+        f"⚠️ ACTION NEEDED — I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
+        f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}).\n"
+        f"The PIN was submitted, so THE MONEY LIKELY ALREADY WENT OUT.\n\n"
+        f"👉 Check your I&M / IANDMBANK SMS for this exact amount NOW:\n"
+        f"• If it shows the transfer SUCCEEDED → open this order on Binance and "
+        f"MARK IT AS PAID immediately, before the timer cancels it (you keep the crypto).\n"
+        f"• If there is NO such SMS (it did NOT go out) → pay it by hand.\n\n"
+        f"The bot has STOPPED this order and will NOT retry it — do NOT restart the bot to retry, "
+        f"or you risk paying twice.",
     )
-    # Keep the payout row 'pending' — this exact status is what /poll checks to make
-    # sure an UNSURE order is NEVER served again (do not change it). It also flags the
-    # order for human confirmation on the dashboard.
+    # Show it as pending on the dashboard — money may or may not have moved.
     await _record_im_payout(
         db, trader_id, data.order_id, "pending",
         amount=int(order.fiat_amount or 0),
@@ -1029,7 +991,7 @@ async def result(
         detail=data.detail,
         destination=order.seller_payment_destination,
     )
-    return {"ok": True, "status": order.status.value, "applied": applied, "marked_paid_unsure": True, "markpaid_ok": _markpaid_ok}
+    return {"ok": True, "status": order.status.value, "applied": False, "needs_human": True}
 
 
 class PayoutReport(BaseModel):

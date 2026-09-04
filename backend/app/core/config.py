@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     NCBA_STK_USERNAME: str = ""
     NCBA_STK_SECRET_KEY: str = ""
     NCBA_PAYBILL: str = "880100"      # NCBA Till-via-Paybill for SPARK FREELANCE SOLUTIONS
+    NCBA_ACCOUNT_NUMBER: str = "1011775848"  # credited bank account — the "CreditAccount" in the IPN hash
 
     # I&M Bank Payment Gateway
     IM_BANK_API_URL: str = ""  # e.g., https://api.imbank.com/KEPaymentGatewayService/1.0

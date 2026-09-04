@@ -203,9 +203,13 @@ async def inbound_email_webhook(request: Request):
 # it — the Username + Password NCBA embeds, and a SHA-256 Hash over the payload keyed with
 # our shared Secret Key — then record it (de-duplicated on the M-Pesa ref) and answer with
 # the exact {"ResultCode":"0",...} NCBA's spec requires. Wrong creds / bad hash → ResultCode 1.
-def _ncba_expected_hash(secret_key: str, p: dict) -> str:
-    """Reproduce NCBA's hash: SHA-256 of a fixed concatenation, then Base64 of the HEX digest
-    string (not the raw bytes) — matching their Java sample exactly."""
+def _ncba_expected_hash(secret_key: str, p: dict, credit_account: str) -> str:
+    """Reproduce NCBA's hash: SHA-256 of secretKey + TransType + TransID + TransTime +
+    TransAmount + CreditAccount + BillRefNumber + Mobile + Name + "1", then Base64 of the
+    HEX digest string (not the raw bytes) — matching their Java sample.
+
+    CreditAccount is the NCBA BANK ACCOUNT that was credited (e.g. 1011775848), NOT the
+    Paybill short code from the payload — confirmed by reproducing a live NCBA hash."""
     import hashlib as _hl, base64 as _b64
     parts = [
         secret_key,
@@ -213,7 +217,7 @@ def _ncba_expected_hash(secret_key: str, p: dict) -> str:
         str(p.get("TransID") or ""),
         str(p.get("TransTime") or ""),
         str(p.get("TransAmount") or ""),
-        str(p.get("BusinessShortCode") or p.get("AccountNr") or ""),
+        str(credit_account or ""),
         str(p.get("BillRefNumber") or ""),
         str(p.get("Mobile") or p.get("PhoneNr") or ""),
         str(p.get("name") or p.get("CustomerName") or ""),
@@ -250,9 +254,13 @@ async def ncba_ipn(request: Request):
 
     # 2) SHA-256 hash over the payload, keyed with our shared secret
     got = str(payload.get("Hash") or payload.get("HashVal") or payload.get("SecretKey") or "")
-    expected = _ncba_expected_hash(settings.NCBA_IPN_SECRET_KEY, payload)
+    expected = _ncba_expected_hash(settings.NCBA_IPN_SECRET_KEY, payload, settings.NCBA_ACCOUNT_NUMBER)
     if not got or got != expected:
-        logger.warning("[NCBA-IPN] hash mismatch — rejected (TransID=%s)", trans_id)
+        # TEMP DEBUG: dump the exact payload + both hashes so we can align our formula
+        # with NCBA's. Remove once the hash verifies.
+        import json as _dbg
+        logger.warning("[NCBA-IPN] hash mismatch (TransID=%s)\n  PAYLOAD=%s\n  GOT_HASH=%s\n  OUR_HASH=%s",
+                       trans_id, _dbg.dumps(payload, sort_keys=True), got, expected)
         return {"ResultCode": "1", "ResultDesc": "Hash verification failed"}
 
     if not trans_id:
