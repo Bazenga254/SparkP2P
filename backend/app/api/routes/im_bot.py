@@ -972,11 +972,15 @@ async def result(
                  data.order_id, data.bank_ref, data.detail)
     await _alert(
         trader_id,
-        f"⚠️ I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
+        f"⚠️ ACTION NEEDED — I&M Bot is UNSURE whether buy order …{data.order_id[-8:]} was paid "
         f"(KES {int(order.fiat_amount or 0):,}, ref {data.bank_ref or 'none'}).\n"
-        f"The PIN was submitted, so THE MONEY MAY ALREADY HAVE GONE OUT.\n"
-        f"This order has been STOPPED and will NOT be retried — check your I&M "
-        f"statement first. If it did not go out, pay it by hand; do not restart the bot to retry it.",
+        f"The PIN was submitted, so THE MONEY LIKELY ALREADY WENT OUT.\n\n"
+        f"👉 Check your I&M / IANDMBANK SMS for this exact amount NOW:\n"
+        f"• If it shows the transfer SUCCEEDED → open this order on Binance and "
+        f"MARK IT AS PAID immediately, before the timer cancels it (you keep the crypto).\n"
+        f"• If there is NO such SMS (it did NOT go out) → pay it by hand.\n\n"
+        f"The bot has STOPPED this order and will NOT retry it — do NOT restart the bot to retry, "
+        f"or you risk paying twice.",
     )
     # Show it as pending on the dashboard — money may or may not have moved.
     await _record_im_payout(
