@@ -14,16 +14,66 @@ const aiScanner = require('./ai-scanner');
 try { app.disableHardwareAcceleration(); } catch (_) {}
 try { app.commandLine.appendSwitch('disable-gpu-compositing'); } catch (_) {}
 
-// On Linux, Chromium's SUID sandbox helper needs a root-owned setuid binary that a portable
-// AppImage / user-installed .deb can't provide, so the app aborts on launch (setuid_sandbox_host
-// FATAL) unless started with --no-sandbox. Bake the flag in on Linux so the app just runs on a
-// double-click, with no terminal flags — matching the Windows one-click experience. (No effect on
-// Windows/macOS, where the sandbox works normally.)
-// --disable-dev-shm-usage makes Chromium use /tmp instead of /dev/shm for its renderer
-// shared memory. On VMs, containers, and minimal Linux setups /dev/shm is often too small or
-// mis-mounted, which crashes the renderer with a FATAL shared-memory error and leaves a BLANK
-// (black) window even though the app itself is fine. This flag hardens the Linux build against it.
-try { if (process.platform === 'linux') { app.commandLine.appendSwitch('no-sandbox'); app.commandLine.appendSwitch('disable-dev-shm-usage'); } } catch (_) {}
+// True when /dev/shm is usable for Chromium's image buffers: it must be ACCESSIBLE (writable +
+// executable) AND big enough. A size-only check was not enough — on some Debian machines /dev/shm
+// exists with plenty of free space but is mounted noexec or has the wrong permissions, so
+// access(W_OK|X_OK) fails. Chromium then FATALs creating its shared-memory segment
+// ("platform_shared_memory_region_posix … incorrect permissions on /dev/shm") and the renderer
+// dies on launch → a black window. Verify access FIRST; only then fall back to the size check.
+// If access fails, return false so we redirect Chromium's shared memory to /tmp
+// (--disable-dev-shm-usage). If we merely cannot measure the size, keep the normal /dev/shm path
+// (returning true) — wrongly forcing /tmp is what makes images disappear on machines where /dev/shm
+// is fine.
+function _devShmUsable() {
+  const fs = require('fs');
+  // A shared-memory dir is usable only if it is ACCESSIBLE (writable + executable — the exact check
+  // Chromium's access(W_OK|X_OK) makes) AND big enough. If access can be confirmed but the size can't
+  // be measured, assume it's fine (don't wrongly redirect).
+  const usable = (p) => {
+    try { fs.accessSync(p, fs.constants.W_OK | fs.constants.X_OK); }
+    catch (_) { return false; }
+    try { const st = fs.statfsSync(p); return (st.bsize * st.bavail) >= 64 * 1024 * 1024; }
+    catch (_) { return true; }
+  };
+  // Return value drives the flag: true → keep Chromium on its default /dev/shm; false → apply
+  // --disable-dev-shm-usage, which sends shared memory to /tmp.
+  if (usable('/dev/shm')) return true;                   // /dev/shm is healthy → use it
+  // /dev/shm is unusable (the emmanuel@debian case: bad perms / noexec). Redirect to /tmp ONLY if
+  // /tmp is itself usable — blindly redirecting is what blacked out the VM, where /dev/shm was
+  // healthy and /tmp was the broken one. If neither is usable, stay on the default /dev/shm.
+  return usable('/tmp') ? false : true;
+}
+
+// Linux sandbox: turn it ON wherever it can actually work, and only off where it can't.
+// A .deb install DOES get a root-owned setuid chrome-sandbox — dpkg runs electron-builder's
+// postinst as root and chmods it 4755 — so the old blanket --no-sandbox was unnecessary there
+// AND on Ubuntu it left the window blank (renders only with the sandbox on). A portable AppImage
+// genuinely cannot set that SUID bit, so it still needs the flag. Override without a rebuild:
+//   SPARKP2P_SANDBOX=1  force sandbox ON      SPARKP2P_SANDBOX=0  force sandbox OFF
+// --disable-dev-shm-usage is NOT unconditional. It redirects Chromium's shared memory from
+// /dev/shm to /tmp, which rescues VMs/containers with a tiny /dev/shm -- but it BREAKS IMAGE
+// PAINTING when /tmp is itself small or mounted noexec: decoded bitmaps are the largest shared
+// buffers, so images silently fail to allocate while text and CSS still draw. That is the
+// "app renders but images don't" report from Ubuntu. Only apply it when /dev/shm is genuinely
+// too small to use.
+// (No effect on Windows/macOS.)
+try {
+  if (process.platform === 'linux') {
+    const _sbOverride = process.env.SPARKP2P_SANDBOX;
+    const _wantSandbox = (_sbOverride != null && _sbOverride !== '')
+      ? _sbOverride !== '0'
+      : false;   // DEFAULT OFF. Verified Sept 11 2026: the shipped .deb installs
+                 // chrome-sandbox as 755, NOT 4755 -- electron-builder did not set the
+                 // setuid bit and there is no afterInstall script. Enabling the sandbox
+                 // without shipping that chmod makes the app ABORT on launch.
+    if (!_wantSandbox) app.commandLine.appendSwitch('no-sandbox');
+    const _shmOverride = process.env.SPARKP2P_DEV_SHM;
+    const _useDevShm = (_shmOverride != null && _shmOverride !== '')
+      ? _shmOverride !== '0'
+      : _devShmUsable();
+    if (!_useDevShm) app.commandLine.appendSwitch('disable-dev-shm-usage');
+  }
+} catch (_) {}
 
 // Prefer IPv4 for ALL outbound connections (IMAP, fetch, etc.). Many client machines have
 // broken/blocked IPv6, and Node's happy-eyeballs then throws an opaque "AggregateError"
